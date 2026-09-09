@@ -354,7 +354,7 @@ interpretation_event_node(n(_,_,list([Head|Arguments])),
     nth1(Position,Arguments,Descriptor,OtherArguments), !,
     ( descriptor_list_location(Descriptor,Line,Column)
     -> format(string(Message),
-              '~w argument ~d is preserved as recursive list data (descriptor at source line ~d, column ~d), retaining singleton/nested lists and literal unprefixed markers (A-THE-WORD). Other arguments and source bytes are unchanged.',
+              '~w argument ~d is preserved as recursive list data (descriptor at source line ~d, column ~d), retaining singleton/nested lists and normally encoded symbol markers. Other arguments and source bytes are unchanged.',
               [Predicate,Position,Line,Column]),
        Events=[note(Message)|More]
     ; Events=More ),
@@ -368,6 +368,10 @@ interpretation_event_node(n(Line,Column,list([Head|Arguments])),File,Options,
     Warning=warning(File,Line,Column,Message),
     emit_source_warning(Warning,application_head(Value),Options),
     interpretation_event_nodes(Arguments,File,Options,More,Tail).
+interpretation_event_node(n(Line,Column,list([])),File,Options,[Warning|Tail],Tail) :- !,
+    Message="Empty expression outside a declared list-data slot retained as x_TheEmptyList.",
+    Warning=warning(File,Line,Column,Message),
+    emit_source_warning(Warning,empty_expression,Options).
 interpretation_event_node(n(_,_,list(Nodes)),File,Options,Events,Tail) :- !,
     interpretation_event_nodes(Nodes,File,Options,Events,Tail).
 interpretation_event_node(n(_,_,bound(_,_,Formula)),File,Options,Events,Tail) :- !,
@@ -551,6 +555,8 @@ norm(n(L,C,list(Nodes)),metta,File,Bound,S0,S,Dict) :-
                source_error(File,L,C,Message) ))
     ; source_error(File,L,C,'Duplicate MeTTa map key') ).
 norm(n(_,_,list([])),metta,_,_,S,S,metta_expression([])) :- !.
+norm(n(_,_,list([])),_,_,_,S,S,Empty) :- !,
+    semantic_symbol('TheEmptyList',Empty).
 norm(n(L,C,list([Head,Binder,Formula])),Dialect,File,Bound,S0,S,Term) :-
     Dialect\==metta, quantifier_head(Head),
     kb_mappings:binder_nodes(Binder,Binders), !,
