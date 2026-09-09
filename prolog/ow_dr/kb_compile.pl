@@ -330,7 +330,8 @@ source_unchanged(File,Expected) :-
     file_digest(File,Now),
     (Now==Expected->true;throw(error(source_changed_during_compilation(File),_))).
 
-cache_identity(File,Options,Identity) :-
+cache_identity(Input,Options,Identity) :-
+    source_absolute(Input,File),
     file_digest(File,Hash),size_file(File,Size),
     file_name_extension(_,Ext,File),downcase_atom(Ext,Dialect),
     option(features(Features0),Options,[]),sort(Features0,Features),
