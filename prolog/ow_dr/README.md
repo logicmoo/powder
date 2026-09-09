@@ -163,7 +163,10 @@ assertion errors with invented line numbers.
 
 Normalized caches contain `kb_cache_header/1` and `kb_cache_footer/1` with schema,
 converter, source/mapping/options identities, assertion count, normalized digest,
-and header digest. Raw readers validate these records and guarded clause
+and header digest. `normalizedFile` records the full absolute origin path of the
+generated `.kif.pl`, `.krf.pl`, or `.metta.pl` companion in both normalized and
+index headers; it remains unchanged in runtime snapshot copies. Older headers
+without this optional field remain readable. Raw readers validate these records and guarded clause
 structure as data; they do not consult arbitrary directives.
 
 IDs are atoms formed by `a` plus the hexadecimal full Unix-microsecond value.
@@ -275,8 +278,11 @@ There is no implicit Lisp, MeTTa, forward-chaining, microtheory-inheritance, or
 defeasible conflict-resolution interpreter. Declared back-chaining rules execute
 only through the bounded guarded dispatcher.
 
-Imported final assertion IDs currently require an explicit conflict-checked
-import path; the compiler rejects attempts to adopt such IDs automatically.
+`kb_runtime:import_cache(File,Module)` validates a complete generated cache and
+imports its final assertion IDs with conflict checks, retaining existing imports
+on failure. A conflicting ID cannot be hidden merely by claiming the same
+original source path. Original KIF/Cyc ID properties remain inert provenance
+(`xc_id`, etc.); they do not silently override durable occurrence allocation.
 Durable allocator/occurrence state belongs to the dataset and is not a disposable
 cache.
 
@@ -284,13 +290,18 @@ The native Windows editor adapter inherits the current console handles. Visible
 `edit.exe` takeover has not been confirmed through the terminal-canvas tooling;
 no automated result is claimed for that interactive behavior.
 
-The reported long-running batch stack overflow remains an unresolved reproduction
-investigation. The unchanged 251,446-byte
-`human-dev-anat-abstract-merged-SUMO.kif` completed in a fresh process under the
-default 1 GiB stack limit: 4,735 assertions in 2.944 seconds. A copied 58-source
-batch containing the reported selection plus that source completed with zero
-failures; its warm run used approximately 128 MB global stack at completion.
-These observations do not establish a root-cause fix for the earlier process.
+The full-batch investigation reproduced retained validator choicepoints and
+whole-output serialization copies. Successful validation is now deterministic;
+hashing is incremental and newline escaping does not allocate per-character
+linked lists. Serialized payload bytes/digests are unchanged.
+
+The unchanged 14,775,895-byte `FMA-merged-SUMO.kif` completed a cold-companion run
+in 171.4027832 seconds with 240,965 assertions, three warnings, and exit 0 under
+the default 1 GiB Prolog stack limit. Before the determinism fix it failed after
+343.5097813 seconds with 247,510 retained choicepoints. The successful run's
+observed OS peak working set was 2,349,305,856 bytes; process memory is not the
+Prolog stack limit, and this is not a claim that OS peak memory decreased.
+The full 967-source corpus has not yet been demonstrated error-free in one run.
 The application does not raise the stack limit or silently skip failed inputs.
 
 Earlier measured tinyKB timings on this development machine were 3.141 seconds
