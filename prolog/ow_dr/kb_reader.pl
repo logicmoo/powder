@@ -339,9 +339,19 @@ interpretation_event_diagnostics([warning(File,Line,Column,Message)|Events],
                                  [warning(File,Line,Column,Message)|Warnings]) :-
     interpretation_event_diagnostics(Events,Diagnostics,Warnings).
 
-interpretation_events(_,metta,_,_,[]) :- !.
-interpretation_events(Node,_,File,Options,Events) :-
-    interpretation_event_nodes([Node],File,Options,Events,[]).
+interpretation_events(Node,Dialect,File,Options,Events) :-
+    (Dialect==metta->Interpretations=[];
+      interpretation_event_nodes([Node],File,Options,Interpretations,[])),
+    findall(note(Message),exceptional_constant_notice(Node,Message),Notices),
+    append(Interpretations,Notices,Events).
+
+exceptional_constant_notice(Node,Message) :-
+    sub_term(Sub,Node),nonvar(Sub),Sub=n(Line,Column,Value),
+    (Value=sym(Symbol);Value=quoted(Symbol);Value=mapped(Symbol)),
+    semantic_symbol(Symbol,x_TheEmptyList),
+    format(string(Message),
+      'TheEmptyList is preserved as x_TheEmptyList data (source line ~d, column ~d), distinct from NIL and an explicit list.',
+      [Line,Column]).
 
 interpretation_event_nodes([],_,_,Tail,Tail).
 interpretation_event_nodes([Node|Nodes],File,Options,Events,Tail) :-
