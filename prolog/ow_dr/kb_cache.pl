@@ -32,12 +32,17 @@ file_digest(File, Digest) :-
     crypto_file_hash(File, Digest, [algorithm(sha256)]).
 
 terms_digest(Terms, Digest) :-
-    maplist(term_line, Terms, Lines),
-    lines_digest(Lines, Digest).
+    crypto_context_new(Start,[algorithm(sha256),encoding(utf8)]),
+    foldl(hash_term,Terms,Start,End),
+    crypto_context_hash(End,Digest).
+
+hash_term(Term,Before,After) :-
+    term_line(Term,Line),crypto_data_context(Line,Before,After).
 
 lines_digest(Lines, Digest) :-
-    atomic_list_concat(Lines, '', Text),
-    crypto_data_hash(Text, Digest, [algorithm(sha256),encoding(utf8)]).
+    crypto_context_new(Start,[algorithm(sha256),encoding(utf8)]),
+    foldl(crypto_data_context,Lines,Start,End),
+    crypto_context_hash(End,Digest).
 
 safe_variable_names(Term, Names) :-
     term_variables(Term, Vars),
@@ -55,10 +60,16 @@ term_line(Term, Line) :-
                        [quoted(true),character_escapes(true),numbervars(false),
                         variable_names(Names),cycles(false)])),
     % SWI deliberately emits literal newlines in quoted text; cache terms may not.
-    string_codes(Text, Codes),
-    phrase(escaped_lines(Codes), Escaped),
-    string_codes(Single, Escaped),
+    escape_physical_lines(Text,Single),
     string_concat(Single, ".\n", Line).
+
+escape_physical_lines(Text,Single) :-
+    replace_control(Text,"\n","\\n",WithoutLF),
+    replace_control(WithoutLF,"\r","\\r",Single).
+replace_control(Text,Character,Escaped,Result) :-
+    (sub_string(Text,_,1,_,Character)->
+      split_string(Text,Character,"",Parts),atomics_to_string(Parts,Escaped,Result)
+    ;Result=Text).
 
 write_term_text(Term,Options) :-
     nonvar(Term),Term=(Head :- Body),!,
@@ -118,9 +129,8 @@ compound_group(Name, Vars, Group) :- Group =.. [Name|Vars].
 
 write_cache(Path, Header0, Records, Header) :-
     must_be(list, Records), maplist(validate_record, Records),
-    records_terms(Records, Terms),
-    maplist(term_line, Terms, Lines),
-    lines_digest(Lines, Digest),
+    crypto_context_new(Start,[algorithm(sha256),encoding(utf8)]),
+    foldl(hash_record,Records,Start,End),crypto_context_hash(End,Digest),
     length(Records, Count),
     cache_schema(Schema),
     Header = Header0.put(_{schema:Schema,count:Count,normalizedDigest:Digest}),
@@ -132,11 +142,18 @@ write_cache(Path, Header0, Records, Header) :-
         open(Path, write, Stream, [encoding(utf8),newline(posix)]),
         ( write_one_line(Stream, (:- use_module(Helper),kb_tail_loader:load_remaining)),
           write_one_line(Stream, kb_cache_header(Header)),
-          forall(member(Line, Lines), format(Stream, '~s', [Line])),
+          maplist(write_record(Stream),Records),
           write_one_line(Stream, kb_cache_footer(Footer)),
           flush_output(Stream)
         ),
         close(Stream)),!.
+
+hash_record(record(Id,Semantic,Metadata),Before,After) :-
+    guarded_clause(Id,Semantic,Clause),
+    hash_term(Clause,Before,Middle),foldl(hash_term,Metadata,Middle,After).
+write_record(Stream,record(Id,Semantic,Metadata)) :-
+    guarded_clause(Id,Semantic,Clause),
+    write_one_line(Stream,Clause),maplist(write_one_line(Stream),Metadata).
 
 helper_path(Path) :-
     source_file(kb_cache:cache_schema(_), Here),
@@ -163,9 +180,10 @@ read_cache_stream(Stream, Header, Records) :-
     trusted_header(Directive),
     read_line_term(Stream, kb_cache_header(Header), _),
     validate_header(Header),
-    read_payload(Stream, Terms, Lines, Footer),
+    crypto_context_new(Start,[algorithm(sha256),encoding(utf8)]),
+    read_payload(Stream, Terms, Start, End, Footer),
     read_line_to_string(Stream, end_of_file),
-    lines_digest(Lines, Digest),
+    crypto_context_hash(End,Digest),
     Digest == Header.normalizedDigest,
     terms_digest([Header], HeaderDigest),
     Footer == footer{count:Header.count,digest:Digest,headerDigest:HeaderDigest},
@@ -201,12 +219,12 @@ read_line_term(Stream, Term, Line) :-
         ),
         close(In)).
 
-read_payload(Stream, Terms, Lines, Footer) :-
+read_payload(Stream, Terms, Before, After, Footer) :-
     read_line_term(Stream, Term, Line),
     ( nonvar(Term), Term = kb_cache_footer(Footer)
-    -> Terms=[], Lines=[]
-    ; Terms=[Term|Rest], Lines=[Line|More],
-      read_payload(Stream, Rest, More, Footer)
+    -> Terms=[], After=Before
+    ; Terms=[Term|Rest],crypto_data_context(Line,Before,Next),
+      read_payload(Stream, Rest, Next, After, Footer)
     ).
 
 validate_header(Header) :-
@@ -256,6 +274,8 @@ take_metadata([Term|Terms], Id, [Term|More], Rest) :-
     take_metadata(Terms, Id, More, Rest).
 take_metadata(Terms, _, [], Terms).
 
+% Successful validation has no alternatives. Leaving one choicepoint per
+% record pins the whole batch and prevents maplist's tail-call optimization.
 validate_record(record(Id, Semantic, Metadata)) :-
     valid_assertion_id(Id), storable_semantic(Semantic),
     is_list(Metadata),maplist(valid_metadata(Id), Metadata),
@@ -264,7 +284,7 @@ validate_record(record(Id, Semantic, Metadata)) :-
     exactly_one(xc_source_line, Id, Metadata, Line), integer(Line),Line > 0,
     exactly_one(xc_kb_names, Id, Metadata, Names),
     is_list(Names),maplist(string,Names),
-    term_variables(Semantic, Vars), same_length(Vars, Names).
+    term_variables(Semantic, Vars), same_length(Vars, Names), !.
 
 exactly_one(Name, Id, Metadata, Value) :-
     findall(V,(member(T,Metadata),T=..[Name,Id,V]),[Value]).
@@ -283,19 +303,19 @@ valid_semantic(Semantic) :-
     ( Semantic = (Head :- Body)
     -> valid_head(Head), conjunction(Body,Goals), maplist(valid_head,Goals)
     ; valid_head(Semantic)
-    ).
+    ), !.
 
 % Semantic vocabulary checks are advisory. Cache admission checks only the
 % inert clause envelope; nested terms are data, never consulted or called.
 storable_semantic(Semantic) :-
     acyclic_term(Semantic),nonvar(Semantic),
     (Semantic=(Head :- Body)->storable_head(Head),conjunction(Body,_)
-    ;storable_head(Semantic)).
+    ;storable_head(Semantic)), !.
 storable_head(Head) :-
     nonvar(Head),callable(Head),\+is_dict(Head),
     functor(Head,Name,_),
     \+memberchk(Name,[':-','?-',':',',',';',x_cid,x_cid_io]),
-    (encoded_symbol(Name);memberchk(Name,[t,metta_value,metta_exec,metta_expression])).
+    (encoded_symbol(Name);memberchk(Name,[t,metta_value,metta_exec,metta_expression])), !.
 
 normalized_microtheory(Mt) :-
     ground(Mt),acyclic_term(Mt),callable(Mt),\+is_list(Mt),\+is_dict(Mt),
@@ -314,7 +334,7 @@ valid_head(Head) :-
     ; memberchk(Name,[metta_value,metta_exec,metta_expression]),
       Arity == 1
     ),
-    valid_value(Head).
+    valid_value(Head), !.
 
 valid_value(Term) :- var(Term), !.
 valid_value(Term) :- string(Term), !.
@@ -337,7 +357,7 @@ valid_value(Term) :-
     (Name==t -> Args=[Predicate|_],(var(Predicate);compound(Predicate));true),
     (memberchk(Name,[metta_value,metta_exec,metta_expression])->Args=[_];true),
     (Name==metta_expression->Args==[[]];true),
-    maplist(valid_value, Args).
+    maplist(valid_value, Args), !.
 
 format_literal_data(Data) :- is_list(Data),maplist(valid_format_item,Data).
 

@@ -275,6 +275,7 @@ captured_warnings(Options,Warnings) :-
     arg(1,State,Reversed),reverse(Reversed,Warnings).
 
 owned_compile(File,Normal,Index,Options,Start,Abandoned,Result) :-
+    memory_checkpoint(start,File,Options),
     option(compiler_warning_state(WarningState),Options),
     nb_setarg(1,WarningState,[]),set_current_warnings([]),
     (exists_file(File)->true;existence_error(source_sink,File)),
@@ -296,10 +297,13 @@ owned_compile(File,Normal,Index,Options,Start,Abandoned,Result) :-
            diagnostic_handler(kb_compile:reader_diagnostic),
            warning_observer(kb_compile:warning_observer(WarningState))|Options],
           Assertions,Info),
+      memory_checkpoint(parsed,File,Options),
       set_current_warnings(Info.warnings),
       source_unchanged(File,Identity.sourceHash),
       assign_ids(File,Assertions,Options,Ids),
+      memory_checkpoint(ids,File,Options),
       maplist(assertion_record(File,Options),Assertions,Ids,Records),
+      memory_checkpoint(records,File,Options),
       captured_warnings(Options,AllWarnings),
       reader_header(Identity,Info.put(warnings,AllWarnings),Header0),
       progress_phase(indexing,File,0.7),
@@ -312,7 +316,15 @@ owned_compile(File,Normal,Index,Options,Start,Abandoned,Result) :-
     Result=result{status:Status,source:File,normalized:Normal,index:Index,
         count:Header.count,warnings:Header.warnings,lineCount:Header.lineCount,
         sizeBytes:Header.sizeBytes,elapsed:Elapsed},
+    memory_checkpoint(finished,File,Options),
     progress_phase(aggregate,File,1).
+
+memory_checkpoint(Phase,File,Options) :-
+    (option(memory_progress(true),Options)->
+      statistics(globalused,Global),statistics(localused,Local),statistics(trailused,Trail),
+      format(user_error,'MEM ~w global=~d local=~d trail=~d ~w~n',[Phase,Global,Local,Trail,File]),
+      flush_output(user_error)
+    ;true).
 
 source_unchanged(File,Expected) :-
     file_digest(File,Now),

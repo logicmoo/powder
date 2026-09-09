@@ -49,6 +49,34 @@ test(one_line_real_variable_roundtrip,[setup(test_dir(D)),cleanup(clean_dir(D))]
     length(Lines,9),
     assertion(\+sub_string(Raw,_,_,_,"$VAR")).
 
+test(streaming_digest_preserves_exact_line_bytes) :-
+    Terms=[x_text("first\n\nlast\r\n",'\nquoted\r',X,X),
+           x_unicode("\u03bb \U0001f600"),[],x_empty(""),x_slashes("\\n\\r")],
+    maplist(legacy_term_line,Terms,LegacyLines),
+    atomic_list_concat(LegacyLines,'',LegacyText),
+    kb_cache:crypto_data_hash(LegacyText,Expected,[algorithm(sha256),encoding(utf8)]),
+    terms_digest(Terms,Actual),assertion(Actual==Expected),
+    maplist(term_line,Terms,Lines),assertion(Lines==LegacyLines),
+    terms_digest([],Empty),
+    kb_cache:crypto_data_hash("",ExpectedEmpty,[algorithm(sha256),encoding(utf8)]),
+    assertion(Empty==ExpectedEmpty),assertion(var(X)).
+
+test(record_validation_does_not_retain_batch_choicepoints) :-
+    metadata(a123,[],M),Record=record(a123,x_p(x_a),M),
+    call_cleanup(kb_cache:validate_record(Record),Deterministic=true),
+    assertion(Deterministic==true),
+    length(Records,10000),maplist(=(Record),Records),
+    call_cleanup(maplist(kb_cache:validate_record,Records),BatchDeterministic=true),
+    assertion(BatchDeterministic==true).
+
+legacy_term_line(Term,Line) :-
+    safe_variable_names(Term,Names),
+    with_output_to(string(Text),
+      kb_cache:write_term_text(Term,[quoted(true),character_escapes(true),numbervars(false),
+                                  variable_names(Names),cycles(false)])),
+    string_codes(Text,Codes),phrase(kb_cache:escaped_lines(Codes),Escaped),
+    string_codes(Single,Escaped),string_concat(Single,".\n",Line).
+
 test(rule_fixed_groups) :-
     S=(x_grandparent(X,Y):-and(x_parent(X,Z),x_parent(Z,Y))),
     guarded_clause(a123,S,Clause),
