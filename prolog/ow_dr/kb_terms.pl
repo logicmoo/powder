@@ -8,7 +8,7 @@
 
 context_key(Context,Key) :-
     valid_context(Context),
-    (atom(Context)->Key=Context;
+    (atom(Context),\+atom_concat('mt:',_,Context)->Key=Context;
       term_string(Context,Text,[quoted(true),ignore_ops(true),numbervars(false)]),
       atom_string(Encoded,Text),atom_concat('mt:',Encoded,Key)).
 context_from_key(Input,Context) :-

@@ -24,6 +24,11 @@ test(compound_keys_do_not_collide) :-
     assertion(One\==Two),assertion(Three\==Four).
 test(atomic_key_compatibility) :-
     context_key(x_tinyKB,x_tinyKB),context_from_key(x_tinyKB,x_tinyKB).
+test(lisp_atom_does_not_collide_with_compound_key_prefix) :-
+    context_key('mt:Context',Key),context_from_key(Key,RoundTrip),
+    assertion(RoundTrip=='mt:Context'),
+    context_key('CL:IMPORT','CL:IMPORT'),
+    context_from_key('CL:IMPORT','CL:IMPORT').
 test(source_expression_context_input) :-
     context_input("(CommonsenseMicrostoryMtFn ViolentImpact-Harm)",Mt),
     assertion(Mt==x_CommonsenseMicrostoryMtFn('x_ViolentImpact-Harm')).
