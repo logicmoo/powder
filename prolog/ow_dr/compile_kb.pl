@@ -1,7 +1,17 @@
 :- module(compile_kb,[main/1,parse_arguments/3]).
 :- use_module(kb_compile).
 :- use_module(library(main)).
-:- initialization(main,main).
+:- initialization(cli_entry,main).
+
+cli_entry :-
+    source_file(compile_kb:main(_),File),
+    current_prolog_flag(os_argv,[_|Arguments]),
+    (script_argument(Arguments,File)->main;true).
+
+script_argument(['--'|_],_) :- !,fail.
+script_argument([Argument|Rest],File) :-
+    (exists_file(Argument)->same_file(Argument,File)
+    ;script_argument(Rest,File)).
 
 main(Argv) :-
     catch(run_cli(Argv,Code),Error,
