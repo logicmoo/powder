@@ -44,6 +44,14 @@ test(stale_generation_rejected,
     assertion(Error=error(generation_conflict(_,_),_)),
     status(After),assertion(After.generation=:=Before.generation).
 
+test(unload_does_not_require_original_source_to_still_exist,
+     [setup(fixture("(isa A Thing)\n",D,F)),cleanup(cleanup(D))]) :-
+    load_sources([F],any,Before),
+    delete_file(F),
+    unload_source(F,Before.generation,After),
+    assertion(After.files==[]),
+    atom_concat(F,'.pl',Compiled),assertion(exists_file(Compiled)).
+
 test(changed_source_replaces_native_generation,
      [setup(fixture("(in-microtheory TestMt)\n(isa A Thing)\n",D,F)),cleanup(cleanup(D))]) :-
     load_sources([F],any,Before),

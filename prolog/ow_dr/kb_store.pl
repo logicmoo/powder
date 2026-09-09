@@ -151,7 +151,8 @@ cleanup_native(Native) :-
     ( exists_directory(Directory) -> delete_directory(Directory) ; true ).
 
 unload_source(Path, Expected, Status) :-
-    resolve_source(Path, Absolute),
+    atom_string(Input,Path),repo_root(Root),
+    absolute_file_name(Input,Absolute,[relative_to(Root),access(none)]),
     with_mutex(openworld_store, unload_locked(Absolute, Expected, Status)).
 unload_locked(Path, Expected, Status) :-
     generation(Current),
