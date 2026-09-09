@@ -51,7 +51,7 @@ message order/multiplicity and omits empty diagnostic properties. Fatal
 errors still throw; the compiler records errors-[Messages...] and matching
 errors(Message) failure markers, without manufacturing successful assertions.
 At the top of an approved formatting slot, the NIL symbol instead passes
-through ordinary symbol encoding (NIL becomes x_NIL). It never expands to
+through special-symbol encoding (NIL remains NIL). It never expands to
 an empty/default list or counts format placeholders. The string "NIL"
 remains a string; explicit descriptor lists retain their literal contents.
 Elsewhere in KIF/KRF, recoverable numeric/string-headed applications are
@@ -73,6 +73,7 @@ creator and creation_date properties.
 
 :- use_module(library(apply)).
 :- use_module(library(assoc)).
+:- use_module(kb_symbols).
 :- use_module(library(crypto)).
 :- use_module(library(error)).
 :- use_module(library(lists)).
@@ -569,8 +570,8 @@ norm_descriptor(n(_,_,list(Nodes)),File,Bound,S0,S,Values) :- !,
     norm_descriptors(Nodes,File,Bound,S0,S,Values).
 norm_descriptor(n(_,_,var(Name,_)),_,Bound,S0,S,Var) :- !,
     resolve_variable(Name,Bound,S0,S,Var).
-norm_descriptor(n(_,_,sym(A)),_,_,S,S,A) :- !.
-norm_descriptor(n(_,_,quoted(A)),_,_,S,S,A) :- !.
+norm_descriptor(n(_,_,sym(A)),_,_,S,S,Term) :- !,semantic_symbol(A,Term).
+norm_descriptor(n(_,_,quoted(A)),_,_,S,S,Term) :- !,semantic_symbol(A,Term).
 norm_descriptor(n(_,_,num(N)),_,_,S,S,N) :- !.
 norm_descriptor(n(_,_,lexnum(_,N)),_,_,S,S,N) :- !.
 norm_descriptor(n(_,_,str(Text)),_,_,S,S,Text) :- !.
@@ -597,17 +598,16 @@ norm_format_arguments([Arg|Arguments],Position,Dialect,File,Bound,S0,S,[Term|Ter
 nil_format_argument(Node) :-
     node_symbol(Node,Raw),
     semantic_symbol(Raw,Encoded),
-    atom_concat(x_,Name,Encoded),downcase_atom(Name,nil).
+    downcase_atom(Encoded,nil).
 
 semantic_symbol(A,Symbol) :-
-    ( atom_concat('#$',Bare,A) -> atom_concat('x_',Bare,Symbol)
-    ; atom_concat('x_',_,A) -> Symbol=A
-    ; atom_concat('x_',A,Symbol) ).
+    (atom_concat('#$',Bare,A)->encode_symbol(Bare,Symbol);encode_symbol(A,Symbol)).
 
 normalized_application(H,Args,_,_,_,_,Term) :-
     ( var(H); compound(H) ), !, application(t,[H|Args],Term).
 normalized_application(H,Args,_,_,_,_,Term) :-
-    atom(H), sub_atom(H,0,2,_,'x_'), !, application(H,Args,Term).
+    atom(H), encoded_symbol(H), !,
+    (H==':'->application(t,[H|Args],Term);application(H,Args,Term)).
 normalized_application(H,Args,Dialect,_,_,_,Term) :-
     memberchk(Dialect,[kif,krf]),(number(H);string(H)), !,
     application(t,[H|Args],Term).
