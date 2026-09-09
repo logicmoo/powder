@@ -87,6 +87,8 @@ prolog:message(error(generation_conflict(Expected,Current),_)) -->
     ['The active KB changed (expected generation ~w, now ~w). Refresh and retry.'-[Expected,Current]].
 prolog:message(error(conflicting_assertion_id(Id),_)) -->
     ['Assertion ID ~w occurs in more than one selected source.'-[Id]].
+prolog:message(error(implementation_changed_restart_required,_)) -->
+    ['Compiler code changed on disk. Start a fresh compiler invocation or restart the Prolog server; refreshing the browser is not enough.'].
 
 issue_lines([]) --> [].
 issue_lines([Issue|Rest]) -->
