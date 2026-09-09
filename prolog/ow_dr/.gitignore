@@ -1,0 +1,6 @@
+.runtime/
+.logos-state/
+.ow-state/
+*.lnk
+*.tmp
+*.lock
