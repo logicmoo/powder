@@ -69,6 +69,32 @@ test(record_validation_does_not_retain_batch_choicepoints) :-
     call_cleanup(maplist(kb_cache:validate_record,Records),BatchDeterministic=true),
     assertion(BatchDeterministic==true).
 
+test(imported_cache_ids_are_checked_for_conflicts,
+     [setup(test_dir(D)),cleanup(clean_dir(D))]) :-
+    fixture(D,'first.pl',"",First),fixture(D,'second.pl',"",Second),
+    header(First,H1),header(Second,H2),
+    M1=[xc_microtheory(a123,x_TestMt),xc_source_file(a123,First),
+        xc_source_line(a123,1),xc_kb_names(a123,[])],
+    M2=[xc_microtheory(a123,x_TestMt),xc_source_file(a123,Second),
+        xc_source_line(a123,1),xc_kb_names(a123,[])],
+    write_cache(First,H1,[record(a123,x_imported(x_first),M1)],_),
+    write_cache(Second,H2,[record(a123,x_imported(x_second),M2)],_),
+    setup_call_cleanup(kb_runtime:import_cache(First,ow_import_first),
+      (catch(kb_runtime:import_cache(Second,ow_import_second),Error,true),
+       assertion(nonvar(Error)),
+       kb_runtime:query_modules([ow_import_first],x_imported(_),x_TestMt,1,3,
+         [solution(x_TestMt,[x_first],_)]),
+       assertion(\+kb_runtime:module_assertion(ow_import_second,_,_,_))),
+      kb_runtime:native_unload(First)).
+
+test(source_id_properties_remain_provenance,
+     [setup(test_dir(D)),cleanup(clean_dir(D))]) :-
+    fixture(D,'source.krf',"(p a)\n",File),opts(D,Options),
+    A=assertion(x_p(x_a),[],x_TestMt,1,[id-a123],source_id_fixture),
+    assign_ids(File,[A],Options,[Id]),assertion(Id\==a123),
+    kb_compile:assertion_record(File,A,Id,record(Id,x_p(x_a),Metadata)),
+    assertion(memberchk(xc_id(Id,a123),Metadata)).
+
 legacy_term_line(Term,Line) :-
     safe_variable_names(Term,Names),
     with_output_to(string(Text),

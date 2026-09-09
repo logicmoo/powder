@@ -1,5 +1,5 @@
 :- module(kb_runtime,
-          [native_load/2, native_load/3, native_unload/1, valid_guarded_clause/2, install_guard/2,
+          [native_load/2, native_load/3, import_cache/2, native_unload/1, valid_guarded_clause/2, install_guard/2,
            xc_src/2, xc_clause_handle/2, xc_plvars/2, xc_indexed_constant/2,
            xc_notices/2, xc_warnings/2, xc_errors/2,
            metadata/3, module_metadata/4, query/5, query_modules/6,
@@ -55,6 +55,9 @@ install_guard(Module, Guard) :-
 
 native_load(File, Module) :-
     native_load(File,Module,[]).
+import_cache(File,Module) :-
+    kb_cache:read_cache(File,_,_),
+    native_load(File,Module).
 native_load(File, Module, Options) :-
     must_be(atom, Module),
     must_be(list,Options),
@@ -98,9 +101,28 @@ register_native(File, Module) :-
             clause(Module:Head, Guard, Ref),
             guard_semantic(Guard, Id, Head, _),
             clause_property(Ref, source(Absolute))),
-           (assertz(native_handle(Module, Absolute, Id, Ref)),
+           (check_native_identity(Module,Absolute,Id),
+            assertz(native_handle(Module, Absolute, Id, Ref)),
             (native_signature(Module,Absolute,Name,Arity)->true;
              assertz(native_signature(Module,Absolute,Name,Arity))))).
+
+check_native_identity(Module,File,Id) :-
+    (native_handle(OtherModule,OtherFile,Id,OtherRef),
+     \+clause_property(OtherRef,erased),
+     \+same_source_generation(Module,File,OtherModule,OtherFile,Id)->
+       throw(error(conflicting_assertion_id(Id),context(native_load,File-OtherFile)))
+    ;true).
+
+same_source_generation(Module,File,OtherModule,OtherFile,Id) :-
+    Module\==OtherModule,
+    native_original_source(Module,File,Id,Source),
+    native_original_source(OtherModule,OtherFile,Id,Source).
+
+native_original_source(Module,File,Id,Source) :-
+    current_predicate(Module:xc_source_file/2),
+    clause(Module:xc_source_file(Id,Original),true,Ref),
+    clause_property(Ref,source(File)),atom(Original),
+    (current_prolog_flag(windows,true)->downcase_atom(Original,Source);Source=Original), !.
 
 native_unload(File) :-
     absolute_file_name(File, Absolute),

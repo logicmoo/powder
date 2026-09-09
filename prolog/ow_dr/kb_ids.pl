@@ -87,11 +87,8 @@ missing_key(A,Key) :- \+ get_assoc(Key,A,_).
 lookup_id(A,Key,Id) :- get_assoc(Key,A,Id).
 
 occurrence_keys([],A,A,[]).
-occurrence_keys([assertion(_,_,_,_,Props,Key)|As],A0,A,[occurrence(Hash,N)|Ks]) :-
+occurrence_keys([assertion(_,_,_,_,_Props,Key)|As],A0,A,[occurrence(Hash,N)|Ks]) :-
     must_be(ground,Key),
-    ( member(P-_,Props),memberchk(P,[id,assertion_id,cid])
-    -> throw(error(permission_error(import,assertion_id,P),context(assign_ids/4,'Imported IDs require an explicit conflict-checked import')))
-    ; true ),
     terms_digest([Key],Hash),
     (get_assoc(Hash,A0,N0)->N is N0+1;N=1),
     put_assoc(Hash,A0,N,A1),
