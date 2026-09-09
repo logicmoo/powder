@@ -374,10 +374,18 @@ identity_matches(Identity,Header) :-
     forall(member(K-V,Pairs),identity_field_matches(K,V,Header)).
 
 identity_field_matches(normalizedFile,Expected,Header) :- !,
-    (get_dict(normalizedFile,Header,Stored)->Stored==Expected
-    ;atom(Header.source),atom_concat(Header.source,'.pl',Expected)).
+    (get_dict(normalizedFile,Header,Stored)->true
+    ;atom(Header.source),atom_concat(Header.source,'.pl',Stored)),
+    same_absolute_path(Stored,Expected).
+identity_field_matches(source,Expected,Header) :- !,
+    get_dict(source,Header,Stored),same_absolute_path(Stored,Expected).
 identity_field_matches(Key,Expected,Header) :-
     get_dict(Key,Header,Stored),Stored==Expected.
+
+same_absolute_path(A,B) :-
+    atom(A),atom(B),is_absolute_file_name(A),is_absolute_file_name(B),
+    absolute_file_name(A,Canonical,[access(none)]),
+    absolute_file_name(B,Canonical,[access(none)]).
 
 usable_stage(Artifacts,Normal,Identity,Stage,Header,Records) :-
     atom_concat(Normal,'.stage.',Prefix),
