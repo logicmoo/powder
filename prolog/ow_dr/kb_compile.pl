@@ -252,7 +252,8 @@ owned_repair(File,Normal,Index,Options,Start,Abandoned,Result) :-
 
 repair_or_throw(File,Normal,Index,Options,Start,Abandoned,Error,Result) :-
     print_diagnostic(File,Error),
-    (option(edit(true),Options),\+prompts_suppressed
+    (option(edit(true),Options),\+prompts_suppressed,
+     \+ Error=error(resource_error(_),_)
     -> repair_action(File,Error,Options,Action,Paused),
        add_pause(Paused),
        (Action==retry
@@ -487,11 +488,42 @@ failure_result(File,Options,Error,Result) :-
     ;Warnings=[],Cause=Error,
      diagnostic(Options,'ERROR: ~w: ~q~n',[File,Error])),
     term_string(Cause,Message),
+    failure_details(Cause,Detail,ErrorEvents),
+    maplist(warning_event,Warnings,WarningEvents),
+    append(ErrorEvents,WarningEvents,Events),
+    kb_mappings:diagnostic_metadata(Events,Properties,Rows),
     (Error=error(compilation_aborted(_,_),_)->Aborted=true;Aborted=false),
     source_size(File,Size),
     atom_concat(File,'.pl',Normal),atom_concat(File,'.index.pl',Index),
     Result=result{status:failed,source:File,normalized:Normal,index:Index,
-         count:0,warnings:Warnings,lineCount:0,sizeBytes:Size,elapsed:0,error:Message,aborted:Aborted}.
+         count:0,warnings:Warnings,lineCount:0,sizeBytes:Size,elapsed:0,error:Message,
+         errorDetail:Detail,properties:Properties,mapping_rows:Rows,aborted:Aborted},
+    persist_failure(File,Options,Result).
+
+failure_details(error(source_error(_,Line,Column,Message),_),
+                _{kind:source,line:Line,column:Column,message:Message},
+                [diagnostic(errors,Message)]) :- !.
+failure_details(error(resource_error(Resource),_),
+                _{kind:resource_limit,line:null,column:null,message:Message},[]) :- !,
+    format(string(Message),'Compiler/runtime resource limit reached (~w); this is not a source syntax error.',[Resource]).
+failure_details(Error,_{kind:Kind,line:null,column:null,message:Message},[]) :-
+    Kind=compiler,
+    message_to_string(Error,Message).
+warning_event(warning(_,_,_,Message),diagnostic(warnings,Message)).
+
+persist_failure(File,Options,Result) :-
+    state_directory(Options,State),directory_file_path(State,failures,Directory),
+    make_directory_path(Directory),terms_digest([File],Key),
+    atom_concat(Key,'.pl',Name),directory_file_path(Directory,Name,Final),
+    atom_concat(Final,'.lock',LockPath),try_lock(LockPath,Lock),
+    (Lock==busy->diagnostic(Options,'Failure report busy: ~w~n',[Final])
+    ;setup_call_cleanup(true,
+       (stage_path(Final,Stage),terms_digest([Result],Digest),
+        setup_call_cleanup(true,
+          (setup_call_cleanup(open(Stage,write,S,[encoding(utf8),newline(posix)]),
+             (write_one_line(S,kb_source_failure(1,Result,Digest)),flush_output(S)),close(S)),
+           install_stage(Stage,Final)),remove_if_exists(Stage))),
+       release_lock(Lock))).
 
 deferred_result(File,Result) :-
     source_size(File,Size),

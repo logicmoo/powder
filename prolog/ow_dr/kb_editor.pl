@@ -15,8 +15,10 @@ print_diagnostic(File, Error) :-
     format(user_error,'~nERROR: ~w: ',[File]),
     print_message(error,Error),
     diagnostic_location(Error,Line,Column),
-    format(user_error,'Source: ~w:~d:~d~n',[File,Line,Column]),
-    catch(source_excerpt(File,Line),_,true),
+    (integer(Line),integer(Column)->
+      format(user_error,'Source: ~w:~d:~d~n',[File,Line,Column]),
+      catch(source_excerpt(File,Line),ExcerptError,print_message(warning,ExcerptError))
+    ;format(user_error,'File: ~w (no source location; compiler/runtime failure).~n',[File])),
     flush_output(user_error).
 
 diagnostic_location(error(_,context(source(_,L,C),_)),L,C) :- integer(L),integer(C),!.
@@ -24,7 +26,7 @@ diagnostic_location(error(source_error(_,L,C,_),_),L,C) :- integer(L),integer(C)
 diagnostic_location(error(_,source(_,L,C)),L,C) :- integer(L),integer(C),!.
 diagnostic_location(error(_,file(_,L,C,_)),L,C) :- integer(L),integer(C),!.
 diagnostic_location(warning(_,L,C,_),L,C) :- !.
-diagnostic_location(_,1,1).
+diagnostic_location(_,null,null).
 
 source_excerpt(File,Line) :-
     setup_call_cleanup(open(File,read,S,[encoding(iso_latin_1)]),
@@ -65,7 +67,9 @@ prompt_action(File,Error,Options,Action) :-
        prompt_action(File,Error,Options,Action)
     ; Choice==edit
     -> diagnostic_location(Error,Line,Column),
-       catch(launch_editor(File,Line,Column,Options,Outcome),
+       (integer(Line)->EditorLine=Line;EditorLine=1),
+       (integer(Column)->EditorColumn=Column;EditorColumn=1),
+       catch(launch_editor(File,EditorLine,EditorColumn,Options,Outcome),
              E,(print_message(error,E),Outcome=unchanged)),
        (Outcome==changed -> Action=retry
        ; format(user_error,'Editor did not produce a saved change; choose an action again.~n',[]),
