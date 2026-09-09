@@ -24,6 +24,12 @@ test('root and KBs invocations reuse the same companions and occurrence IDs', ()
     assert.match(first.stderr, /generated=1 cache-hit=0/);
     const companions = [`${source}.pl`, `${source}.index.pl`];
     const before = companions.map(path => ({ bytes: readFileSync(path), modified: statSync(path).mtimeMs }));
+    const expectedOrigin = `${source}.pl`.replaceAll('\\', '/').toLowerCase();
+    for (const companion of before) {
+      const origin = companion.bytes.toString('utf8').match(/normalizedFile:'([^']+)'/u);
+      assert.ok(origin, 'Companion origin is persisted in both cache headers');
+      assert.equal(origin[1].toLowerCase(), expectedOrigin);
+    }
     const second = run(join(root, 'KBs'));
     assert.equal(second.status, 0, second.stderr);
     assert.match(second.stderr, /generated=0 cache-hit=1/);

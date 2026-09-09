@@ -313,7 +313,8 @@ owned_compile(File,Normal,Index,Options,Start,Abandoned,Result) :-
     forall(member(Artifact,Abandoned),
            (Artifact==Normal->true;remove_if_exists(Artifact))),
     monotonic_seconds(End),Elapsed is max(0,End-Start),
-    Result=result{status:Status,source:File,normalized:Normal,index:Index,
+    (get_dict(normalizedFile,Header,Origin)->true;Origin=Normal),
+    Result=result{status:Status,source:File,normalized:Origin,index:Index,
         count:Header.count,warnings:Header.warnings,lineCount:Header.lineCount,
         sizeBytes:Header.sizeBytes,elapsed:Elapsed},
     memory_checkpoint(finished,File,Options),
@@ -341,7 +342,9 @@ cache_identity(Input,Options,Identity) :-
     mapping_identity(Dialect,MappingHash),
     converter_version(Converter),
     implementation_hash(ImplementationHash),
+    atom_concat(File,'.pl',NormalizedFile),
     Identity=cache{source:File,sourceHash:Hash,sizeBytes:Size,dialect:Dialect,
+          normalizedFile:NormalizedFile,
          mappingHash:MappingHash,converter:Converter,mtPolicy:filename_v1,
          implementationHash:ImplementationHash,
          options:[encoding(Encoding),features(Features),strict_mappings(Strict),sumo_mappings(Sumo)]}.
@@ -368,7 +371,13 @@ current_cache(Path,Identity,Header,Records) :-
 
 identity_matches(Identity,Header) :-
     dict_pairs(Identity,_,Pairs),
-    forall(member(K-V,Pairs),(get_dict(K,Header,Other),Other==V)).
+    forall(member(K-V,Pairs),identity_field_matches(K,V,Header)).
+
+identity_field_matches(normalizedFile,Expected,Header) :- !,
+    (get_dict(normalizedFile,Header,Stored)->Stored==Expected
+    ;atom(Header.source),atom_concat(Header.source,'.pl',Expected)).
+identity_field_matches(Key,Expected,Header) :-
+    get_dict(Key,Header,Stored),Stored==Expected.
 
 usable_stage(Artifacts,Normal,Identity,Stage,Header,Records) :-
     atom_concat(Normal,'.stage.',Prefix),
