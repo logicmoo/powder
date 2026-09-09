@@ -327,10 +327,10 @@ valid_value(Term) :-
     maplist(valid_pair,Pairs).
 valid_value([H|T]) :- !, valid_value(H), valid_value(T).
 valid_value(Term) :-
-    compound_name_arguments(Term,x_genFormat,[Predicate,Template,Data|Rest]),
+    compound_name_arguments(Term,Functor,Args),list_data_slot(Functor,Position),
+    nth1(Position,Args,Data,OtherArgs),
     format_literal_data(Data),!,
-    valid_value(Predicate),valid_value(Template),
-    maplist(valid_value,Rest).
+    maplist(valid_value,OtherArgs).
 valid_value(Term) :-
     compound_name_arguments(Term, Name, Args),
     (semantic_symbol(Name);memberchk(Name,[t,metta_value,metta_exec,metta_expression])),

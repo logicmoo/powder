@@ -25,6 +25,7 @@ It is a creation-time recorder, not a getter deriving properties from rows.
 */
 
 :- use_module(library(assoc)).
+:- use_module(kb_symbols).
 :- use_module(library(apply)).
 :- use_module(library(crypto)).
 :- use_module(library(error)).
@@ -312,8 +313,7 @@ format_data_slot(n(_,_,Value),Name,Position) :-
     ; Name=Raw ),
     approved_format_slot(Name,Position).
 
-approved_format_slot(genFormat,3).
-approved_format_slot(doAnnounce,2).
+approved_format_slot(Name,Position) :- list_data_slot(Name,Position).
 
 map_format_arguments([Descriptor|Arguments],1,Ctx,F,O,[Descriptor|Mapped],R0,R,W0,W) :- !,
     map_nodes(Arguments,Ctx,F,O,Mapped,R0,R,W0,W).

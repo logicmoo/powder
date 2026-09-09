@@ -14,6 +14,7 @@ No executable directives, native handles or live variables are serialized.
 :- use_module(library(lists)).
 :- use_module(library(pairs)).
 :- use_module(kb_cache).
+:- use_module(kb_symbols).
 
 index_schema(logos_index_v1).
 
@@ -29,11 +30,10 @@ constants(T,L,R) :-
     is_dict(T), !,dict_pairs(T,_,Pairs),pair_constants(Pairs,L,R).
 constants([H|T],L,R) :- !, constants(H,L,M),constants(T,M,R).
 constants(T,L,R) :-
-    compound_name_arguments(T,x_genFormat,[Predicate,Template,Data|Rest]),
+    compound_name_arguments(T,Functor,Args),list_data_slot(Functor,Position),
+    nth1(Position,Args,Data,OtherArgs),
     format_literal_data(Data),!,
-    % genFormat's third slot is literal formatting data, not KB vocabulary.
-    L=[x_genFormat|M],
-    constants(Predicate,M,N),constants(Template,N,O),constants_list(Rest,O,R).
+    L=[Functor|M],constants_list(OtherArgs,M,R).
 constants(T,L,R) :-
     compound_name_arguments(T,Name,Args),
     symbol_constant(Name,L,M), constants_list(Args,M,R).

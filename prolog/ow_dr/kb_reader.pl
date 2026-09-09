@@ -34,10 +34,10 @@ ground dict tag.  These names/tags are structural, not semantic vocabulary.
 KIF/KRF quotation is represented by x_quote/1. Row variables retain their
 original sigils and occupy one variable slot; no sequence expansion occurs.
 
-Only approved KIF/KRF formatting slots (genFormat argument 3 and doAnnounce
-argument 2) are recursively interpreted as formatting data. Their source
+Only approved KIF/KRF formatting slots (genFormat argument 3, doAnnounce
+argument 2 and doEnterState argument 2) are recursively interpreted as formatting data. Their source
 lists remain Prolog lists (including singleton and
-nested lists), and symbols such as A-THE-WORD remain literal, unprefixed
+nested lists), and symbols such as A-THE-WORD remain literal, normally encoded
 atoms. This slot bypasses SUMO mappings. Variables retain normal sharing,
 including an unconstrained ?Args query variable. Other application syntax
 is unchanged; MeTTa retains its separate structural interpretation.
