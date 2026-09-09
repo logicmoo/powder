@@ -1,5 +1,5 @@
 :- module(kb_symbols, [encode_symbol/2, encoded_symbol/1, lisp_symbol/1,
-                      list_data_slot/2]).
+                      list_data_slot/2, list_data_slot/3]).
 :- use_module(library(error)).
 
 encode_symbol(Symbol,Encoded) :-
@@ -18,4 +18,13 @@ lisp_symbol(Symbol) :-
 
 list_data_slot(Symbol,Position) :-
     (atom_concat(x_,Name,Symbol)->true;Name=Symbol),
-    memberchk(Name-Position,[genFormat-3,doAnnounce-2,doEnterState-2]).
+    Name==genFormat,Position=3.
+
+list_data_slot(Symbol,Arguments,Position) :-
+    (list_data_slot(Symbol,Position)->true;
+      (atom_concat(x_,Name,Symbol)->true;Name=Symbol),
+      atom_concat(do,_,Name),Arguments=[First|_],
+      string_argument(First),Position=2).
+
+string_argument(Value) :- string(Value), !.
+string_argument(n(_,_,str(Value))) :- string(Value).

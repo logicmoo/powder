@@ -34,8 +34,9 @@ ground dict tag.  These names/tags are structural, not semantic vocabulary.
 KIF/KRF quotation is represented by x_quote/1. Row variables retain their
 original sigils and occupy one variable slot; no sequence expansion occurs.
 
-Only approved KIF/KRF formatting slots (genFormat argument 3, doAnnounce
-argument 2 and doEnterState argument 2) are recursively interpreted as formatting data. Their source
+Only approved KIF/KRF formatting slots (genFormat argument 3 and argument 2
+of do-prefixed predicates whose first argument is a string) are recursively
+interpreted as formatting data. Their source
 lists remain Prolog lists (including singleton and
 nested lists), and symbols such as A-THE-WORD remain literal, normally encoded
 atoms. This slot bypasses SUMO mappings. Variables retain normal sharing,
@@ -360,7 +361,7 @@ interpretation_event_nodes([Node|Nodes],File,Options,Events,Tail) :-
 
 interpretation_event_node(n(_,_,list([Head|Arguments])),
                           File,Options,Events,Tail) :-
-    format_data_slot(Head,Predicate,Position),
+    format_data_slot(Head,Arguments,Predicate,Position),
     nth1(Position,Arguments,Descriptor,OtherArguments), !,
     ( descriptor_list_location(Descriptor,Line,Column)
     -> format(string(Message),
@@ -547,7 +548,7 @@ norm(n(_,_,bound(Target,Binders,Formula)),Dialect,File,Bound,S0,S,Term) :- !,
     semantic_symbol(Target,Functor),
     nest_binders(Vars,Functor,Body,Term).
 norm(n(L,C,list([Head|Arguments])),Dialect,File,Bound,S0,S,Term) :-
-    memberchk(Dialect,[kif,krf]), format_data_slot(Head,_,Position),
+    memberchk(Dialect,[kif,krf]), format_data_slot(Head,Arguments,_,Position),
     nth1(Position,Arguments,_), !,
     norm(Head,Dialect,File,Bound,S0,S1,H),
     norm_format_arguments(Arguments,Position,Dialect,File,Bound,S1,S,Normalized),

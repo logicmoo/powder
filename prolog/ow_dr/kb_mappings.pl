@@ -6,6 +6,7 @@
             transform_ast/7,
             format_descriptor_head/1,
             format_data_slot/3,
+            format_data_slot/4,
             emit_source_warning/3,
             diagnostic_metadata/3,
             validate_mapping_text/3
@@ -269,7 +270,7 @@ transform_ast(AST,Context,File,Options,Out,Rows,Warnings) :-
 map_node(AST,none,_,_,AST,R,R,W,W) :- !.
 map_node(n(L,C,list([Head|Arguments])),Ctx,F,O,
          n(L,C,list([Head|Mapped])),R0,R,W0,W) :-
-    format_data_slot(Head,_,Position), nth1(Position,Arguments,_), !,
+    format_data_slot(Head,Arguments,_,Position), nth1(Position,Arguments,_), !,
     map_format_arguments(Arguments,Position,Ctx,F,O,Mapped,R0,R,W0,W).
 map_node(n(L,C,sym(A)),Ctx,_,_,n(L,C,mapped(Target)),[Id|R],R,W,W) :-
     selected_rule(Ctx,A,Id,Spec), symbol_target(Spec,Target), !.
@@ -312,6 +313,11 @@ format_data_slot(n(_,_,Value),Name,Position) :-
     ; atom_concat('x_',Name,Raw) -> true
     ; Name=Raw ),
     approved_format_slot(Name,Position).
+
+format_data_slot(n(_,_,Value),Arguments,Name,Position) :-
+    (Value=sym(Raw);Value=quoted(Raw);Value=mapped(Raw)),
+    (atom_concat('#$',Name,Raw)->true;atom_concat(x_,Name,Raw)->true;Name=Raw),
+    list_data_slot(Name,Arguments,Position).
 
 approved_format_slot(Name,Position) :- list_data_slot(Name,Position).
 

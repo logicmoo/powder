@@ -30,7 +30,7 @@ constants(T,L,R) :-
     is_dict(T), !,dict_pairs(T,_,Pairs),pair_constants(Pairs,L,R).
 constants([H|T],L,R) :- !, constants(H,L,M),constants(T,M,R).
 constants(T,L,R) :-
-    compound_name_arguments(T,Functor,Args),list_data_slot(Functor,Position),
+    compound_name_arguments(T,Functor,Args),list_data_slot(Functor,Args,Position),
     nth1(Position,Args,Data,OtherArgs),
     format_literal_data(Data),!,
     L=[Functor|M],constants_list(OtherArgs,M,R).
