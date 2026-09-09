@@ -101,22 +101,29 @@ register_native(File, Module) :-
             clause(Module:Head, Guard, Ref),
             guard_semantic(Guard, Id, Head, _),
             clause_property(Ref, source(Absolute))),
-           (check_native_identity(Module,Absolute,Id),
+           (check_native_identity(Module,Absolute,Id,Ref),
             assertz(native_handle(Module, Absolute, Id, Ref)),
             (native_signature(Module,Absolute,Name,Arity)->true;
              assertz(native_signature(Module,Absolute,Name,Arity))))).
 
-check_native_identity(Module,File,Id) :-
+check_native_identity(Module,File,Id,Ref) :-
     (native_handle(OtherModule,OtherFile,Id,OtherRef),
      \+clause_property(OtherRef,erased),
-     \+same_source_generation(Module,File,OtherModule,OtherFile,Id)->
+     \+same_source_generation(Module,File,OtherModule,OtherFile,Id,Ref,OtherRef)->
        throw(error(conflicting_assertion_id(Id),context(native_load,File-OtherFile)))
     ;true).
 
-same_source_generation(Module,File,OtherModule,OtherFile,Id) :-
+same_source_generation(Module,File,OtherModule,OtherFile,Id,Ref,OtherRef) :-
     Module\==OtherModule,
     native_original_source(Module,File,Id,Source),
-    native_original_source(OtherModule,OtherFile,Id,Source).
+    native_original_source(OtherModule,OtherFile,Id,Source),
+    (capturing_load(Key),native_load_options(Key,Options),memberchk(generation_snapshot(true),Options)->true
+    ;native_semantic(Ref,Id,Semantic),native_semantic(OtherRef,Id,Other),
+     Semantic =@= Other).
+
+native_semantic(Ref,Id,Semantic) :-
+    clause(Head,Guard,Ref),strip_module(Head,_,Actual),
+    guard_semantic(Guard,Id,Actual,Semantic).
 
 native_original_source(Module,File,Id,Source) :-
     current_predicate(Module:xc_source_file/2),

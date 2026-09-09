@@ -89,7 +89,7 @@ stage_source(prepared(Source,Info,Records), entry(Source,Info,Module,Native,Reco
       catch((copy_file(Info.normalized,Native),
              crypto_file_hash(Native,ActualHash,[algorithm(sha256)]),
              (ActualHash==Info.outputHash->true;throw(error(snapshot_mismatch(Source),_))),
-             kb_runtime:native_load(Native,Module,[diagnostics(false)])),
+             kb_runtime:native_load(Native,Module,[diagnostics(false),generation_snapshot(true)])),
             E, (cleanup_native(Native), throw(E)))
     ).
 
