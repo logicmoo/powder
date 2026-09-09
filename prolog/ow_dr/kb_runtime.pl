@@ -1,15 +1,28 @@
 :- module(kb_runtime,
-          [native_load/2, native_unload/1, valid_guarded_clause/2, install_guard/2,
+          [native_load/2, native_load/3, native_unload/1, valid_guarded_clause/2, install_guard/2,
            xc_src/2, xc_clause_handle/2, xc_plvars/2, xc_indexed_constant/2,
+           xc_notices/2, xc_warnings/2, xc_errors/2,
            metadata/3, module_metadata/4, query/5, query_modules/6,
            fact_guard/3, rule_guard/5, dispatch/2, module_assertion/4,
-           native_modules/1, register_native/2]).
+           native_modules/1, register_native/2, cache_warnings/1]).
 :- use_module(library(error)).
 :- use_module(library(lists)).
 :- use_module(library(time)).
 :- use_module(library(solution_sequences)).
+:- use_module(library(option)).
+:- use_module(library(assoc)).
+:- use_module(kb_index, []).
+:- use_module(kb_symbols).
 :- dynamic native_file/2.
 :- dynamic native_handle/4.
+:- dynamic native_signature/4.
+:- thread_local capturing_load/1, native_load_error/2.
+:- thread_local native_load_options/2.
+:- multifile user:message_hook/3.
+
+user:message_hook(Term,error,_) :-
+    kb_runtime:capturing_load(Key),
+    assertz(kb_runtime:native_load_error(Key,Term)),fail.
 
 valid_guarded_clause(Head, Guard) :-
     must_be(callable, Head), functor(Head, Name, _),
@@ -27,7 +40,9 @@ group(Name, Term) :- nonvar(Term), functor(Term, Name, _).
 
 install_guard(Module, Guard) :-
     functor(Guard, Name, Arity),
-    ( current_predicate(Module:Name/Arity) -> true
+    functor(Probe,Name,Arity),
+    ( current_predicate(Module:Name/Arity),
+      predicate_property(Module:Probe,implementation_module(Module)) -> true
     ; functor(Head, Name, Arity),
       ( Name == x_cid ->
           Head =.. [x_cid, Id|Slots],
@@ -39,30 +54,64 @@ install_guard(Module, Guard) :-
     ).
 
 native_load(File, Module) :-
+    native_load(File,Module,[]).
+native_load(File, Module, Options) :-
     must_be(atom, Module),
-    load_files(Module:File, [if(true), silent(true), module(Module)]),
-    register_native(File, Module).
+    must_be(list,Options),
+    flag(ow_native_load,Key,Key+1),
+    setup_call_cleanup(
+      (asserta(capturing_load(Key),Capture),asserta(native_load_options(Key,Options),OptionRef)),
+      catch(((load_files(Module:File,[if(true),silent(true),module(Module)]) -> true
+             ; throw(error(native_load_failed(File),_))),
+             findall(E,native_load_error(Key,E),Errors),
+             (Errors=[]->true;throw(error(native_compilation(File,Errors),_)))),
+            Error,(native_unload(File),throw(Error))),
+      (erase(Capture),erase(OptionRef),retractall(native_load_error(Key,_)))),
+    absolute_file_name(File,Absolute),
+    (native_file(Absolute,Module)->true;register_native(File,Module)).
+
+cache_warnings(Header) :-
+    (is_dict(Header),get_dict(warnings,Header,Warnings)->true;Warnings=[]),
+    (capturing_load(Key),native_load_options(Key,Options)->true;Options=[]),
+    option(diagnostics(Show),Options,true),
+    (Show==false->true;empty_assoc(Counts),foldl(cached_warning,Warnings,Counts,_)).
+cached_warning(warning(File,Line,Column,Message),Before,After) :-
+    ground(warning(File,Line,Column,Message)),
+    atom(File),integer(Line),integer(Column),atomic(Message), !,
+    (get_assoc(Message,Before,N0)->true;N0=0),N is N0+1,
+    put_assoc(Message,Before,N,After),
+    (N=<5->format(user_error,'WARNING ~w:~d:~d: ~w~n',[File,Line,Column,Message])
+    ;N=:=6->format(user_error,'WARNING ~w: additional identical warnings suppressed.~n',[File])
+    ;true),
+    flush_output(user_error).
+cached_warning(Warning,_,_) :- throw(error(domain_error(cache_warning,Warning),_)).
 
 register_native(File, Module) :-
     absolute_file_name(File, Absolute),
     retractall(native_file(Absolute, Module)),
     assertz(native_file(Absolute, Module)),
     retractall(native_handle(Module, Absolute, _, _)),
+    retractall(native_signature(Module, Absolute, _, _)),
     forall((current_predicate(Module:Name/Arity), semantic_functor(Name),
             functor(Head, Name, Arity),
             \+ predicate_property(Module:Head, imported_from(_)),
             clause(Module:Head, Guard, Ref),
             guard_semantic(Guard, Id, Head, _),
             clause_property(Ref, source(Absolute))),
-           assertz(native_handle(Module, Absolute, Id, Ref))).
+           (assertz(native_handle(Module, Absolute, Id, Ref)),
+            (native_signature(Module,Absolute,Name,Arity)->true;
+             assertz(native_signature(Module,Absolute,Name,Arity))))).
 
 native_unload(File) :-
     absolute_file_name(File, Absolute),
+    (current_predicate(kb_tail_loader:release_source/2)->
+      kb_tail_loader:release_source(Absolute,_);true),
     unload_file(Absolute), retractall(native_file(Absolute, _)),
-    retractall(native_handle(_, Absolute, _, _)).
+    retractall(native_handle(_, Absolute, _, _)),
+    retractall(native_signature(_,Absolute,_,_)).
 
 native_modules(Modules) :-
-    findall(M, (native_file(_, M), module_metadata(M, microtheory, _, _)), Ms),
+    findall(M, (native_file(_, M), once(module_metadata(M, microtheory, _, _))), Ms),
     sort(Ms, Modules).
 
 module_metadata(Module, Property, Id, Value) :-
@@ -73,16 +122,20 @@ module_metadata(Module, Property, Id, Value) :-
 metadata(Id, Property, Value) :-
     native_modules(Modules), member(M, Modules),
     module_metadata(M, Property, Id, Value).
+xc_notices(Id,Messages) :- metadata(Id,notices,Messages).
+xc_warnings(Id,Messages) :- metadata(Id,warnings,Messages).
+xc_errors(Id,Messages) :- metadata(Id,errors,Messages).
 
 module_assertion(Module, Id, Semantic, Ref) :-
     native_handle(Module, _, Id, Ref),
     \+ clause_property(Ref, erased),
     clause(Head, Guard, Ref),
-    guard_semantic(Guard, Id, Head, Semantic).
+    strip_module(Head, _, Actual),
+    guard_semantic(Guard, Id, Actual, Semantic).
 
 semantic_functor(Name) :-
-    ( atom_concat(x_, Rest, Name), Rest \== cid, Rest \== cid_io
-    ; memberchk(Name, [t, metta_value, metta_execute])
+    ( encoded_symbol(Name),\+memberchk(Name,[x_cid,x_cid_io,':',':-','?-'])
+    ; memberchk(Name, [t, metta_value, metta_exec, metta_expression])
     ).
 
 guard_semantic(Guard, Id, Head, Semantic) :-
@@ -127,7 +180,7 @@ query_modules(Modules, Goal, MT, Limit, Seconds, Solutions) :-
     findall(Context, (member(M, Modules), module_metadata(M, microtheory, _, Context)), MTs0),
     sort(MTs0, MTs),
     ( var(MT) -> Contexts = MTs
-    ; must_be(atom, MT), Contexts = [MT]
+    ; must_be(ground, MT), Contexts = [MT]
     ),
     capture_context(Previous),
     setup_call_cleanup(
@@ -135,7 +188,7 @@ query_modules(Modules, Goal, MT, Limit, Seconds, Solutions) :-
         call_with_time_limit(Seconds,
           findnsols(Limit, solution(Context, Variables, Proof),
             ( member(Context, Contexts),
-              nb_setval(logos_query, context(Modules, Context, [])),
+              nb_setval(logos_query, context(Modules, Context, [], [])),
               dispatch(Modules, Goal),
               nb_getval(logos_query, State), arg(3, State, Reversed),
               reverse(Reversed, Proof)
@@ -157,8 +210,10 @@ rule_guard(Module, Id, Body, Inputs, Locals) :-
     Inputs =.. [vs|HeadSlots], Locals =.. [vs|LocalSlots],
     append(HeadSlots, LocalSlots, Slots),
     bound_count(Slots, Before),
+    arg(4,State,Active),setarg(4,State,[Id|Active]),
     arg(1, State, Modules),
     dispatch(Modules, Body),
+    setarg(4,State,Active),
     bound_count(Slots, After),
     proof_step(State, step(Id, rule, Slots, Before, After)).
 
@@ -189,12 +244,19 @@ dispatch(Modules, Goal) :-
 dispatch(Modules, Goal) :-
     must_be(callable, Goal), functor(Goal, Name, Arity),
     semantic_functor(Name), !,
-    findall(M, (member(M, Modules), current_predicate(M:Name/Arity),
-                predicate_property(M:Goal, defined),
-                \+ predicate_property(M:Goal, imported_from(_))), Owners),
+    findall(M, (member(M, Modules),once(native_signature(M,_,Name,Arity))), Owners),
     ( Owners == [] ->
         throw(error(existence_error(kb_predicate, Name/Arity), _))
-    ; member(Owner, Owners), call(Owner:Goal)
+    ; member(Owner, Owners),
+      clause(Owner:Goal,Guard,Ref),
+      native_handle(Owner,_,Id,Ref),
+      invoke_guard(Owner,Id,Guard)
     ).
 dispatch(_, Goal) :-
     throw(error(domain_error(executable_kb_goal,Goal),_)).
+
+invoke_guard(Module,Id,_:Guard) :- !,invoke_guard(Module,Id,Guard).
+invoke_guard(Module,Id,Guard) :-
+    (Guard=..[x_cid,Id|Slots] -> fact_guard(Module,Id,Slots)
+    ; Guard=x_cid_io(Id,Body,Inputs,Locals) -> rule_guard(Module,Id,Body,Inputs,Locals)
+    ; throw(error(domain_error(registered_kb_guard,Guard),_))).
