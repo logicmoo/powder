@@ -1,0 +1,58 @@
+<!doctype html>
+<!--
+THESIS: A research workbench puts linked assertions and their evidence before decoration.
+OWN-WORLD: Cool paper, ink, cobalt links, square-edged records and readable system type.
+STORY: Inspect the active generation, follow symbols into context, and verify their source.
+FIRST VIEWPORT: A compact navigation rail frames search, live statistics and ranked vocabulary.
+FORM: The requested Cyc-style browser, with a shared expression canvas across every route.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Browse local knowledge bases, inspect assertion provenance, and query microtheory-scoped facts and rules.">
+  <title>OpenWorld Defeasible Reasoner</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Application navigation">
+      <a class="brand" href="#/overview" aria-label="OpenWorld Defeasible Reasoner overview">
+        <span class="brand-mark" aria-hidden="true">λ</span>
+        <span class="brand-title">OpenWorld <span class="brand-subtitle">Defeasible Reasoner</span></span>
+      </a>
+      <nav id="navigation" aria-label="Main">
+        <a href="#/overview" data-route="overview">Overview</a>
+        <a href="#/search" data-route="search">Term search</a>
+        <a href="#/predicates" data-route="predicates">Predicates</a>
+        <a href="#/microtheories" data-route="microtheories">Microtheories</a>
+        <a href="#/query" data-route="query">Query console</a>
+        <a href="#/sources" data-route="sources">KB Sources</a>
+        <a href="#/mappings" data-route="mappings">SUMO → CycL</a>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="local-indicator">Local knowledge workspace</span>
+        <span id="live-state" class="muted">Connecting to server…</span>
+      </div>
+    </aside>
+    <div class="workspace">
+      <header class="workspace-header">
+        <span id="generation-state" aria-live="polite">Loading active generation…</span>
+        <a href="#/sources" id="loaded-count">Loaded sources</a>
+      </header>
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <main id="content" tabindex="-1" aria-busy="true">
+        <div class="loading" role="status">Opening your knowledge workspace…</div>
+      </main>
+      <footer class="workspace-footer">
+        <span>OpenWorld Defeasible Reasoner · SWI-Prolog</span>
+        <span>Sources stay on this machine. MeTTa is data, never executed.</span>
+      </footer>
+    </div>
+  </div>
+  <noscript>This browser requires JavaScript. The offline compiler can still be used from the command line.</noscript>
+</body>
+</html>
