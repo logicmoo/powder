@@ -49,16 +49,18 @@ convert_owned(File,Options,QLF,Metadata,StageSource,Result) :-
     (Status.state==current,\+memberchk(force(true),Options)->
       Result=_{source:File,qlf:QLF,status:cache_hit,count:Status.count}
     ;(source_file_property(StageSource,module(_))->permission_error(compile,loaded_qlf_staging,StageSource);true),
-     read_input(File,Header,Records),file_digest(File,SourceHash),
+     file_digest(File,SourceHash),read_input(File,Header,Records),
      uuid(Token),atomic_list_concat([powder_qlf,Token],'_',StageModule),
      stage_path(StageSource,Temporary),
      setup_call_cleanup(true,
        (write_staging(Temporary,StageModule,File,Header,Records),
         install_stage(Temporary,StageSource)),remove_if_exists(Temporary)),
      file_name_extension(Base,pl,StageSource),file_name_extension(Base,qlf,Generated),
-     catch((compile_stage(StageSource),
-            validate_staging(StageModule,Records),
-            file_digest(File,SourceHash),
+     setup_call_cleanup(true,
+       (compile_stage(StageSource),
+            (validate_staging(StageModule,Records)->true;
+             throw(error(qlf_staging_mismatch(File),_))),
+            unchanged_input(File,SourceHash),
             file_digest(Generated,BinaryHash),file_digest(StageSource,StageHash),
             abi(ABI),builder_identity(Builder),length(Records,Count),qlf_schema(Schema),
             Meta=qlf_cache{schema:Schema,origin:File,sourceHash:SourceHash,
@@ -72,8 +74,11 @@ convert_owned(File,Options,QLF,Metadata,StageSource,Result) :-
                install_stage(Generated,QLF),install_stage(MetaStage,Metadata)),
               remove_if_exists(MetaStage)),
             Result=_{source:File,qlf:QLF,status:generated,count:Count}),
-           Error,(remove_if_exists(Generated),unload_file(StageSource),throw(Error))),
-     unload_file(StageSource)).
+       (remove_if_exists(Generated),unload_file(StageSource)))).
+
+unchanged_input(File,Expected) :-
+    file_digest(File,Actual),
+    (Actual==Expected->true;throw(error(qlf_input_changed(File),_))).
 
 require_owned_outputs(File,QLF,Metadata,StageSource) :-
     (exists_file(Metadata)->
@@ -90,7 +95,8 @@ require_owned_outputs(File,QLF,Metadata,StageSource) :-
 
 compile_stage(Source) :-
     setup_call_cleanup(asserta(building,Ref),
-      (qcompile(Source,[silent(true)]),findall(E,build_error(E),Errors),
+      ((qcompile(Source,[silent(true)])->true;throw(error(qlf_compilation_failed(Source),_))),
+       findall(E,build_error(E),Errors),
        (Errors=[]->true;throw(error(qlf_compilation_errors(Source,Errors),_)))),
       (erase(Ref),retractall(build_error(_)))).
 

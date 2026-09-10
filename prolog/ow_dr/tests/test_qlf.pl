@@ -38,6 +38,22 @@ test(changed_input_bypasses_old_qlf,
     setup_call_cleanup(open(F,append,S),format(S,'% changed input~n',[]),close(S)),
     prebuilt_status(F,Status),assertion(Status.state==stale).
 
+test(changed_snapshot_is_an_explicit_error,
+     [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D)),
+      throws(error(qlf_input_changed(_),_))]) :-
+    file_digest(F,Expected),
+    setup_call_cleanup(open(F,append,S),format(S,'% replacement~n',[]),close(S)),
+    kb_qlf:unchanged_input(F,Expected).
+
+test(installation_failure_releases_loaded_staging,
+     [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D))]) :-
+    atom_concat(F,'.qlf',Output),make_directory(Output),
+    catch(convert_companion(F,[],_),Error,true),assertion(nonvar(Error)),
+    atom_concat(Output,'-stage.pl',Stage),
+    assertion(\+source_file_property(Stage,module(_))),
+    atom_concat(Output,'-stage.qlf',Generated),assertion(\+exists_file(Generated)),
+    assertion(exists_directory(Output)).
+
 test(refuses_unknown_output,
      [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D)),
       throws(error(permission_error(replace,unowned_qlf,_),_))]) :-
@@ -72,4 +88,30 @@ test(native_pl_fallback_stays_dynamic_and_multifile,
     assertion(Format.format==pl),
     predicate_property(qlf_fallback:x_p(_),dynamic),
     predicate_property(qlf_fallback:x_p(_),multifile).
+
+test(rule_body_variables_groups_and_mt_isolation_survive_qlf,
+     [setup(fixture(D,F)),cleanup((native_unload(F),delete_directory_and_contents(D)))]) :-
+    read_cache(F,Header,_),
+    metadata(a710,x_A,M1),metadata(a711,x_A,M2),metadata(a713,x_B,M3),
+    RuleMetadata=[xc_microtheory(a712,x_A),xc_source_file(a712,'sample.krf'),
+                  xc_source_line(a712,3),xc_kb_names(a712,["?X","?Y","?Z"])],
+    write_cache(F,Header,
+      [record(a710,x_parent(x_a,x_b),M1),record(a711,x_parent(x_b,x_c),M2),
+       record(a712,(x_grandparent(X,Y):-and(x_parent(X,Z),x_parent(Z,Y))),RuleMetadata),
+       record(a713,x_parent(x_b,x_d),M3)],_),
+    convert_companion(F,[],_),file_digest(F,Hash),
+    setup_call_cleanup(load_prebuilt(F,Hash,Staging,Records),
+      (member(native_record(a712,Semantic,RuleMetadata,_),Records),
+       Semantic=(x_grandparent(A,B):-and(x_parent(C,D0),x_parent(E,G))),
+       assertion(A==C),assertion(B==G),assertion(D0==E),
+       term_variables(Semantic,Vars),assertion(length(Vars,3)),
+       guarded_clause(a712,Semantic,(_:-Guard)),
+       Guard=x_cid_io(a712,_,Inputs,Locals),
+       assertion(Inputs==vs(A,B)),assertion(Locals==vs(D0))),
+      release_staging(Staging)),
+    native_load(F,qlf_rule),
+    query_modules([qlf_rule],x_grandparent(_,_),x_A,10,2,Solutions),
+    assertion(Solutions=[solution(x_A,[x_a,x_c],_)]),
+    predicate_property(qlf_rule:x_grandparent(_,_),dynamic),
+    predicate_property(qlf_rule:x_grandparent(_,_),multifile).
 :- end_tests(dynamic_qlf).
