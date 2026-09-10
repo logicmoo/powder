@@ -81,6 +81,9 @@ opens an editor without `--edit`. Successful caches are retained after another
 source fails. Exit codes are 0 for success, 1 for source failures, 2 for
 usage/setup failures, and 3 for busy/deferred inputs without source failures.
 Diagnostics and progress go to stderr; `--no-progress` does not suppress errors.
+Cache hits retain stored warning counts and metadata without replaying warnings
+or rerunning source mapping/semantic-shape analysis. The offline compiler still
+validates cache integrity/freshness and may rebuild a missing semantic index.
 
 Repair mode asks before launching an editor. Enter edits and retries, `s` skips
 one source, `S` disables further repair prompts for that invocation, and `q` or
@@ -110,17 +113,31 @@ artifacts are not conversion inputs. All records, duplicates, real IDs,
 microtheories, variable sharing and metadata are retained: no offline interning,
 deduplication or renumbering occurs.
 
-For `example.krf.pl`, outputs are `example.krf.pl.qlf`, its
-`.qlf.meta.pl` identity manifest, and `.qlf-stage.pl` controlled staging source.
+For `example.krf.pl`, outputs are `example.krf.qlf`,
+`example.krf.qlf.meta.pl`, and `example.krf.qlf-stage.pl`. The final `.pl`
+extension is replaced, never appended to. The same naming applies to KIF and
+MeTTa companions. Existing legacy `.pl.qlf` artifacts remain a read-only loading
+fallback when no canonical QLF exists; they are not renamed or regenerated
+implicitly.
 Every staging KB predicate and metadata predicate is declared **dynamic and
 multifile** before clauses are installed; live shared form predicates also
 retain both flags. No `compile_predicates/1` is used. Runtime form sharing
 remains a separate later operation.
 
-Normal native, startup and loader-pool loads prefer a matching **prebuilt** QLF
-and admit its records through the same form/MT/property interner as PL input.
-They never build QLFs. Missing/stale caches fall back to the selected PL
-snapshot; actual loading errors remain errors. Per-source status reports
+Normal native, startup and loader-pool loads use **compiled artifacts only**:
+first a compatible existing QLF, then the PL companion if QLF is unavailable or
+fails artifact admission. They never read/map the original source, reanalyze row
+types, or build normalized, index or QLF caches. A missing companion is an
+explicit error that preserves the previous generation. Runtime builder entry
+points throw `runtime_cache_build(...)` rather than compiling implicitly.
+Stored warnings remain available in metadata/status but are never reprinted.
+
+Runtime admission validates artifact schema, SWI ABI, counts and checksums; these
+are integrity checks, not semantic analysis. It does not invalidate QLFs for
+source edits, changed compiler/mapping code or missing staging/PL source text.
+QLF is the preferred stored snapshot even if the PL is newer: explicitly run the
+offline compiler and QLF converter to publish updated data. Actual native-load
+errors remain errors. Per-source status reports
 `nativeLoad.format` (`qlf` or `pl`). `native_load/3` accepts
 `prebuilt_qlf(false)` to explicitly use PL. Owned, reference-counted staging
 leases keep older generation readers independent; source removal releases only
@@ -388,8 +405,10 @@ All names in this paragraph are relative to `/swish/powder/api/`.
 Loads, unloads, KB queries and full-Prolog queries return **HTTP 202** with
 `{accepted:true,jobId,pool,state:"queued"}`. Read `GET tasks/detail?id=...` until
 the task reaches `succeeded`, `failed` or `cancelled`; only then consume its
-`result` or `error`. The browser does this automatically and does not reset a
-source draft on acceptance or failure. `GET tasks` returns the pool overview
+`result` or `error`. **Queue Selected for Loading** releases Sources controls as
+soon as the job is accepted. Tracking continues after navigation, with a link
+to Tasks; publication updates the active manifest without discarding later draft
+edits. Acceptance or failure never resets the draft. `GET tasks` returns the pool overview
 and task lists. `POST tasks/cancel` accepts `{id:...}` and requires the local
 capability header; full-Prolog side effects completed before cancellation are
 not undone. `GET server/settings` reads next-start configuration;
@@ -429,9 +448,9 @@ Settings > **Reload changed files** reloads changed, already loaded application
 modules directly under `prolog/ow_dr`, using SWI's module loader and recorded
 dependencies. It excludes KB sources, generated companions, runtime snapshots,
 tests, external modules and include-only KB headers; it never invokes broad
-`make/0`. Application-code reload is excluded while loader or inference operations are
-active, rather than serializing all those operations behind one global lock.
-Active generations,
+`make/0`. Application-code reload proceeds alongside loader and inference work,
+without a busy/retry denial or waiting for the store lock. Only simultaneous
+application-code reload requests serialize with one another. Active generations,
 native assertion handles, browser drafts and saved settings are retained.
 The button sends no filenames or executable goals. Reload failures are reported
 with affected files; already applied code changes cannot be automatically rolled
@@ -460,8 +479,10 @@ All managed source replacement/unload, startup-source loads, and public native
 cache import/loading use the loader service. Independent source preparations
 can overlap, but loader publication follows accepted FIFO intent. Accepted
 source selections are complete manifests; later queued selections publish after
-earlier ones. Source and allocator locks still apply; a busy or failed source
-produces a visible failed task. Inference uses immutable generation leases, so
+earlier ones. Offline source compiler claims do not block loading existing
+artifacts. Missing/invalid artifacts produce a visible failed task without
+triggering compilation. Allocator locks still protect newly needed runtime
+identities. Inference uses immutable generation leases, so
 an existing query can finish against its old native clauses while a new
 generation is published. Retired snapshots are removed after their readers
 finish. Arbitrary Prolog I/O remains explicitly user-operated Prolog, not an

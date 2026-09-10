@@ -4,7 +4,7 @@
             reader_diagnostic/1,warning_observer/2
           ]).
 
-/** <module> Shared offline/runtime source compilation.
+/** <module> Explicit offline source compilation.
 
 Options: force(true), state_dir(Directory), strict_mappings(true),
 features(List), encoding(utf8), sumo_mappings(Boolean), diagnostics(false),
@@ -30,6 +30,7 @@ on-disk hashes. Durable occurrence ledgers are independent of this fingerprint.
 :- use_module(kb_index).
 :- use_module(kb_editor).
 :- use_module(kb_reader).
+:- use_module(kb_load_policy).
 :- use_module(kb_paths, [repo_root/1,app_dir/1]).
 
 :- thread_local batch_state/1.
@@ -201,6 +202,7 @@ discover_queue([Path|Paths],S0,S,Files,Tail) :-
      )).
 
 compile_source(Input,Options,Result) :-
+    require_offline(kb_compile:compile_source/3),
     WarningState=compiler_warnings([]),
     with_path_cache(compile_source_cached(Input,
          [compiler_warning_state(WarningState)|Options],Result)).
@@ -285,13 +287,13 @@ owned_compile(File,Normal,Index,Options,Start,Abandoned,Result) :-
     ( \+option(force(true),Options),
       current_cache(Normal,Identity,Header,Records)
     -> ensure_index(Index,Header,Records),
-       report_cached_warnings(Header.warnings,Options),
+       set_current_warnings(Header.warnings),
        Status=cache_hit
     ; option(recovery(normal),Options),
       \+option(force(true),Options),
       usable_stage(Abandoned,Normal,Identity,Stage,Header,Records)
     -> ensure_index(Index,Header,Records),install_stage(Stage,Normal),
-       report_cached_warnings(Header.warnings,Options),
+       set_current_warnings(Header.warnings),
        Status=generated
     ; kb_reader:read_source(File,
           [progress_callback(kb_compile:reader_progress(File)),
@@ -333,6 +335,7 @@ source_unchanged(File,Expected) :-
     (Now==Expected->true;throw(error(source_changed_during_compilation(File),_))).
 
 cache_identity(Input,Options,Identity) :-
+    require_offline(kb_compile:cache_identity/3),
     source_absolute(Input,File),
     file_digest(File,Hash),size_file(File,Size),
     file_name_extension(_,Ext,File),downcase_atom(Ext,Dialect),
@@ -399,6 +402,7 @@ assertion_record(File,assertion(Semantic,Names,Mt,Line,Props,_),Id,
 
 assertion_record(File,Options,assertion(Semantic,Names,Mt,Line,Props,_),Id,
                  record(Id,Semantic,Metadata)) :-
+    require_offline(kb_compile:assertion_record/5),
     Base=[xc_microtheory(Id,Mt),xc_source_file(Id,File),
           xc_source_line(Id,Line),xc_kb_names(Id,Names)],
     maplist(property_terms(Id),Props,Lists),append(Lists,Extra),
@@ -439,6 +443,7 @@ property_name(Property,Name) :-
      atom_concat(xc_,Canonical,Name)).
 
 generate_pair(Normal,Index,Header0,Records,Header) :-
+    require_offline(kb_compile:generate_pair/5),
     stage_path(Normal,Stage),stage_path(Index,IndexStage),
     setup_call_cleanup(true,
         ( write_cache(Stage,Header0,Records,Header),
@@ -456,6 +461,7 @@ install_pair(Stage,Normal,IndexStage,Index) :-
     install_stage(Stage,Normal).
 
 ensure_index(Index,Header,Records) :-
+    require_offline(kb_compile:ensure_index/3),
     (exists_file(Index),catch(read_index(Index,IH,_),_,fail),
      IH.sourceHash==Header.sourceHash,IH.normalizedDigest==Header.normalizedDigest
     ->true
@@ -464,23 +470,12 @@ ensure_index(Index,Header,Records) :-
         (write_index(Stage,Header,Records,_),read_index(Stage,_,_),
          install_stage(Stage,Index)),remove_if_exists(Stage))).
 
-report_cached_warnings(Warnings,Options) :-
-    empty_assoc(A0),foldl(cached_warning(Options),Warnings,A0,_).
-
-cached_warning(Options,warning(File,Line,Column,Message),A0,A) :-
-    Key=File-Message,(get_assoc(Key,A0,N0)->N is N0+1;N=1),
-    put_assoc(Key,A0,N,A),
-    (N=<10
-    ->diagnostic(Options,'WARNING: ~w:~d:~d: ~w~n',[File,Line,Column,Message])
-    ;N=:=11
-    ->diagnostic(Options,'WARNING: further identical warnings suppressed for ~w (all retained in cache).~n',[File])
-    ;true).
-
 diagnostic(Options,Format,Args) :-
     (option(diagnostics(false),Options)->true
     ;clear_progress,format(user_error,Format,Args),flush_output(user_error)).
 
 compile_sources(Paths,Options,Summary) :-
+    require_offline(kb_compile:compile_sources/3),
     with_path_cache(
        (implementation_hash(_),
         (option(preserve_order(true),Options)->ordered_sources(Paths,Files);discover_sources(Paths,Files)),
@@ -698,6 +693,7 @@ uuid_token(Token) :-
     forall(member(C,Codes),(C==0'-;between(0'0,0'9,C);between(0'a,0'f,C))).
 
 recover_sources(Paths,Options,Summary) :-
+    require_offline(kb_compile:recover_sources/3),
     with_path_cache(
        (implementation_hash(_),recover_sources_cached(Paths,Options,Summary))).
 

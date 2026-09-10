@@ -11,6 +11,7 @@
 :- use_module(kb_reader, []).
 :- use_module(kb_terms).
 :- use_module(kb_activity).
+:- use_module(kb_load_policy).
 :- use_module(kb_forms, []).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
@@ -44,29 +45,27 @@ load_sources(Paths, Expected, Status) :-
     ;with_application(load_sources_locked(Paths,Expected,[],Status))).
 
 load_sources_worker(Paths,Id,Status) :-
-    prepare_sources(Paths,[progress_observer(kb_jobs:loader_progress(Id))],Prepared,Start),
-    kb_jobs:wait_loader_turn(Id),kb_jobs:mark_publishing(Id),
-    install_generation(Prepared,any,Start,Status).
+    with_runtime_load(
+      (prepare_sources(Paths,[],Prepared,Start),
+       kb_jobs:wait_loader_turn(Id),kb_jobs:mark_publishing(Id),
+       install_generation(Prepared,any,Start,Status))).
 
 load_sources_locked(Paths, Expected, Options, Status) :-
-    prepare_sources(Paths,Options,Prepared,Start),
-    install_generation(Prepared,Expected,Start,Status).
+    with_runtime_load(
+      (prepare_sources(Paths,Options,Prepared,Start),
+       install_generation(Prepared,Expected,Start,Status))).
 
-prepare_sources(Paths,Options,Prepared,Start) :-
+prepare_sources(Paths,_Options,Prepared,Start) :-
     statistics(walltime,[Start,_]),
     must_be(list, Paths),
     maplist(kb_paths:resolve_source, Paths, Absolute),
-    kb_compile:compile_sources(Absolute, [progress(none),preserve_order(true)|Options], Summary),
-    ( Summary.failures =:= 0, Summary.busy =:= 0 -> true
-    ; throw(error(compile_incomplete(Summary), _))
-    ),
-    maplist(prepare_source, Summary.results, Prepared).
+    kb_compile:with_path_cache(kb_compile:ordered_sources(Absolute,Files)),
+    maplist(prepare_source,Files,Prepared).
 
-prepare_source(Info, prepared(Source, WithHash, Records)) :-
-    absolute_file_name(Info.source,Source,[access(read)]),
-    kb_cache:read_cache(Info.normalized, _, Records),
-    crypto_file_hash(Info.normalized,Hash,[algorithm(sha256)]),
-    WithHash=Info.put(outputHash,Hash).
+prepare_source(Input,prepared(Source,Selection)) :-
+    absolute_file_name(Input,Source,[access(read)]),
+    atom_concat(Source,'.pl',Normal),
+    kb_runtime:select_compiled(Normal,Selection).
 
 install_generation(Prepared, Expected, Start, Status) :-
     with_mutex(openworld_store,
@@ -84,32 +83,37 @@ install_generation(Prepared, Expected, Start, Status) :-
     !.
 
 stage_sources(Prepared, Staged) :-
-    stage_sources(Prepared, [], Staged).
-stage_sources([], Acc, Staged) :- reverse(Acc, Staged).
-stage_sources([P|Ps], Acc, Staged) :-
+    length(Prepared,Total),stage_sources(Prepared,[],0,Total,Staged).
+stage_sources([], Acc, _, _, Staged) :- reverse(Acc, Staged).
+stage_sources([P|Ps], Acc, Done, Total, Staged) :-
+    P=prepared(Source,_),loading_progress(Source,Done,Total),
     catch((stage_source(P, Entry)->true;throw(error(source_stage_failed,_))),
           E, (cleanup_staged(Acc), throw(E))),
-    stage_sources(Ps, [Entry|Acc], Staged).
+    Next is Done+1,stage_sources(Ps,[Entry|Acc],Next,Total,Staged).
 
-stage_source(prepared(Source,Info,Records), entry(Source,LoadedInfo,Module,Native,Records,Reuse)) :-
+loading_progress(Source,Done,Total) :-
+    (current_predicate(kb_jobs:current_job_id/1),kb_jobs:current_job_id(Id)->
+      kb_jobs:loader_progress(Id,_{phase:loading,currentPath:Source,completedFiles:Done,totalFiles:Total})
+    ;true).
+
+stage_source(prepared(Source,Selection), entry(Source,LoadedInfo,Module,Native,Records,Reuse)) :-
     ( source_info(Source,Old), source_module(Source,Module,Native),
-      Old.outputHash == Info.outputHash ->
+      Old.outputHash == Selection.outputHash ->
         Reuse = true,
-        (get_dict(nativeLoad,Old,PreviousFormat)->true;
-         PreviousFormat=_{format:pl,reason:"Loaded before prebuilt QLF support."}),
-        LoadedInfo=Info.put(nativeLoad,PreviousFormat)
+        LoadedInfo=Old,
+        kb_runtime:native_records(Native,Module,Records)
     ; Reuse = false,
       uuid(Uuid), atom_concat(ow_source_, Uuid, Module),
       app_dir(App), directory_file_path(App,'.runtime',Root),
       directory_file_path(Root,Uuid,Directory), make_directory_path(Directory),
-      file_base_name(Info.normalized,Base), directory_file_path(Directory,Base,Native),
-      catch((copy_file(Info.normalized,Native),
-             crypto_file_hash(Native,ActualHash,[algorithm(sha256)]),
-             (ActualHash==Info.outputHash->true;throw(error(snapshot_mismatch(Source),_))),
-             kb_runtime:native_load(Native,Module,[diagnostics(false),generation_snapshot(true),
-                                                  qlf_origin(Info.normalized)]),
+      file_base_name(Selection.origin,Base), directory_file_path(Directory,Base,Native),
+      catch((kb_runtime:native_load_snapshot(Selection,Native,Module,Header,Records),
              kb_runtime:native_load_format(Native,Format),
-             LoadedInfo=Info.put(nativeLoad,Format)),
+             atom_concat(Source,'.index.pl',Index),
+             LoadedInfo=result{source:Source,normalized:Selection.origin,index:Index,
+               outputHash:Selection.outputHash,nativeLoad:Format,status:cache_hit,
+               count:Header.count,warnings:Header.warnings,lineCount:Header.lineCount,
+               sizeBytes:Header.sizeBytes,elapsed:0}),
             E, (cleanup_native(Native), throw(E)))
     ).
 
@@ -295,7 +299,7 @@ status(Status) :-
     generation(G),
     findall(F,(source_info(Path,Info),public_path(Path,Public),
       F=_{path:Public,count:Info.count,lineCount:Info.lineCount,sizeBytes:Info.sizeBytes,
-          cache:Info.status,compileSeconds:Info.elapsed}),Files),
+          cache:Info.status,compileSeconds:Info.elapsed,nativeLoad:Info.nativeLoad}),Files),
     current_counts(Counts),
     findall(W,(source_info(_,I),member(Warning,I.warnings),json_value(Warning,W)),Warnings),
     findall(Text,(assertion(_,D),member(M,D.notices),diagnostic_text(D,M,Text)),Notices),

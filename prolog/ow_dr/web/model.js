@@ -109,6 +109,17 @@ export class SourceSelection {
     this.roots.forEach(count);
   }
 
+  updateActive(active, generation, preserveDraft = this.dirty) {
+    if (generation < this.generation) return;
+    const draft = preserveDraft ? new Set(this.selected) : null;
+    this.reset(active, generation);
+    if (draft) {
+      for (const path of this.files) {
+        if (this.selected.has(path) !== draft.has(path)) this.setSelected(path, draft.has(path));
+      }
+    }
+  }
+
   state(path) {
     const record = this.records.get(canonicalPath(path));
     if (!record) return { checked: false, indeterminate: false, disabled: true, selected: 0, total: 0 };

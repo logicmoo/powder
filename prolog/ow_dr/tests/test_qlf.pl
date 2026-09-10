@@ -18,6 +18,28 @@ fixture(Directory,Input) :-
 metadata(Id,Mt,[xc_microtheory(Id,Mt),xc_source_file(Id,'sample.krf'),
                 xc_source_line(Id,1),xc_kb_names(Id,[])]).
 
+test(qlf_replaces_pl_extension_for_every_source_dialect,
+     [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D))]) :-
+    forall(member(Dialect,[kif,krf,metta]),
+      (atomic_list_concat([sample,Dialect,pl],'.',Input),
+       atomic_list_concat([sample,Dialect,qlf],'.',Output),
+       kb_qlf:paths(Input,Output,_,_))),
+    convert_companion(F,[],Result),
+    directory_file_path(D,'sample.krf.qlf',Expected),
+    assertion(same_file(Result.qlf,Expected)),
+    atom_concat(F,'.qlf',Legacy),assertion(\+exists_file(Legacy)).
+
+test(legacy_qlf_remains_readable_but_canonical_takes_precedence,
+     [setup(fixture(D,F)),cleanup((native_unload(F),delete_directory_and_contents(D)))]) :-
+    convert_companion(F,[],_),
+    kb_qlf:paths(F,QLF,Metadata,_),
+    atom_concat(F,'.qlf',Legacy),atom_concat(Legacy,'.meta.pl',LegacyMetadata),
+    rename_file(QLF,Legacy),rename_file(Metadata,LegacyMetadata),
+    native_load(F,legacy_qlf),native_load_format(F,Format),assertion(Format.format==qlf),
+    native_unload(F),copy_file(Legacy,QLF),copy_file(LegacyMetadata,Metadata),
+    runtime_prebuilt_status(F,Status),assertion(same_file(Status.qlf,QLF)),
+    assertion(exists_file(Legacy)),assertion(exists_file(LegacyMetadata)).
+
 test(offline_roundtrip_preserves_duplicates_ids_and_mutability,
      [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D))]) :-
     file_digest(F,Before),
@@ -47,7 +69,7 @@ test(changed_snapshot_is_an_explicit_error,
 
 test(installation_failure_releases_loaded_staging,
      [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D))]) :-
-    atom_concat(F,'.qlf',Output),make_directory(Output),
+    kb_qlf:paths(F,Output,_,_),make_directory(Output),
     catch(convert_companion(F,[],_),Error,true),assertion(nonvar(Error)),
     atom_concat(Output,'-stage.pl',Stage),
     assertion(\+source_file_property(Stage,module(_))),
@@ -57,7 +79,7 @@ test(installation_failure_releases_loaded_staging,
 test(refuses_unknown_output,
      [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D)),
       throws(error(permission_error(replace,unowned_qlf,_),_))]) :-
-    atom_concat(F,'.qlf',Output),
+    kb_qlf:paths(F,Output,_,_),
     setup_call_cleanup(open(Output,write,S),format(S,'user file~n',[]),close(S)),
     convert_companion(F,[],_).
 
@@ -88,6 +110,30 @@ test(native_pl_fallback_stays_dynamic_and_multifile,
     assertion(Format.format==pl),
     predicate_property(qlf_fallback:x_p(_),dynamic),
     predicate_property(qlf_fallback:x_p(_),multifile).
+
+test(cache_import_prefers_qlf_without_a_readable_pl_companion,
+     [setup(fixture(D,F)),cleanup((native_unload(F),delete_directory_and_contents(D)))]) :-
+    convert_companion(F,[],_),delete_file(F),
+    kb_runtime:import_cache(F,qlf_import),
+    native_load_format(F,Format),assertion(Format.format==qlf),
+    query_modules([qlf_import],x_p(x_a),x_A,1,2,[_]).
+
+test(runtime_qlf_admission_is_independent_of_builder_identity,
+     [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D))]) :-
+    convert_companion(F,[],_),
+    setup_call_cleanup(
+      (retract(kb_qlf:loaded_builder_identity(Original)),assertz(kb_qlf:loaded_builder_identity(changed))),
+      (prebuilt_status(F,Offline),assertion(Offline.state==stale),
+       runtime_prebuilt_status(F,Runtime),assertion(Runtime.state==current)),
+      (retractall(kb_qlf:loaded_builder_identity(_)),assertz(kb_qlf:loaded_builder_identity(Original)))).
+
+test(invalid_qlf_falls_back_to_pl_without_rebuilding,
+     [setup(fixture(D,F)),cleanup((native_unload(F),delete_directory_and_contents(D)))]) :-
+    convert_companion(F,[],_),kb_qlf:paths(F,QLF,_,_),
+    setup_call_cleanup(open(QLF,append,S,[type(binary)]),put_byte(S,0),close(S)),
+    file_digest(QLF,Before),native_load(F,invalid_qlf_fallback),
+    native_load_format(F,Format),assertion(Format.format==pl),
+    file_digest(QLF,Before).
 
 test(rule_body_variables_groups_and_mt_isolation_survive_qlf,
      [setup(fixture(D,F)),cleanup((native_unload(F),delete_directory_and_contents(D)))]) :-

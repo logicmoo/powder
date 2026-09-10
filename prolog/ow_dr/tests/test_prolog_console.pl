@@ -58,6 +58,7 @@ console_fixture(Directory,Source) :-
     directory_file_path(Directory,'questions.krf',Source),
     setup_call_cleanup(open(Source,write,Stream),
       format(Stream,'(in-microtheory (TestMtFn Test))~n(p A)~n(test_Qs "T1" "Which item?" (and (p ?X) (p ?X)))~n',[]),close(Stream)),
+    kb_compile:compile_source(Source,[state_dir(Directory),progress(none)],_),
     load_sources([Source],any,_).
 cleanup_console_fixture(Directory,Source) :-
     generation(G),unload_source(Source,G,_),delete_directory_and_contents(Directory).

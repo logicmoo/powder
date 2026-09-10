@@ -128,7 +128,6 @@ api_error(Error) :-
     ;message_to_string(Error,Message),Payload=_{code:Code,message:Message}),
     reply_json_dict(_{error:Payload},[status(Status)]).
 error_response(error(generation_conflict(_,_),_),409,generation_conflict) :- !.
-error_response(error(application_reload_busy,_),409,reload_busy) :- !.
 error_response(error(server_settings_conflict,_),409,settings_conflict) :- !.
 error_response(error(server_settings_busy,_),409,settings_busy) :- !.
 error_response(error(task_queue_full(_),_),429,queue_full) :- !.

@@ -19,8 +19,13 @@ test('real browser exercises the API contract, source transactions, rendering an
   let generation = 1;
   let active = ['KBs/alpha/a.kif', 'KBs/tinyKB.kif'];
   let failNextLoad = false;
+  let rejectNextLoad = false;
+  let failStatusRefresh = false;
   let failContextList = false;
   let failCodeReload = false;
+  let holdLoaderJobs = false;
+  let holdCodeReload = false;
+  let failNextLoaderPoll = false;
   let extraCatalogNodes = [];
   let failCanonicalDiscovery = false;
   let compilerDiagnostics = {};
@@ -122,12 +127,14 @@ test('real browser exercises the API contract, source transactions, rendering an
         };
         const mountedPath = url.pathname.startsWith(APP_BASE) ? `/${url.pathname.slice(APP_BASE.length)}` : null;
         switch (mountedPath) {
-          case '/api/status': return json(status());
+          case '/api/status': return failStatusRefresh
+            ? json({ error: { code: 'status_failed', message: 'Status refresh unavailable' } }, 503) : json(status());
           case '/api/kb/catalog': {
             const canonical = url.searchParams.get('canonical') === 'true';
             if (canonical && failCanonicalDiscovery) return json({ error: { code: 'discovery_failed', message: 'Discovery unavailable' } }, 500);
             const nodes = [
             { type: 'directory', path: 'KBs/alpha', name: 'alpha', children: [file('KBs/alpha/a.kif'), file('KBs/alpha/b.krf'), file('KBs/alpha/c.metta')] },
+            { type: 'directory', path: 'KBs/empty', name: 'empty', children: [] },
             file('KBs/tinyKB.kif'),
             ...extraCatalogNodes,
             ];
@@ -173,8 +180,15 @@ test('real browser exercises the API contract, source transactions, rendering an
           case '/api/tasks/detail': {
             const job = jobs.get(url.searchParams.get('id'));
             if (!job) return json({ error: { code: 'not_found', message: 'No task' } }, 404);
-            if (job.state === 'queued') { job.state = 'running'; job.startedAt = Date.now() / 1000; job.progress = { phase: 'running' }; }
-            else if (job.state === 'running') {
+            if (job.pool === 'loader' && failNextLoaderPoll) {
+              failNextLoaderPoll = false;
+              return json({ error: { code: 'temporary_failure', message: 'Task polling temporarily unavailable' } }, 503);
+            }
+            if (job.state === 'queued') {
+              job.state = 'running'; job.startedAt = Date.now() / 1000;
+              job.progress = job.pool === 'loader' ? { phase: 'loading', currentPath: job.files[0] } : { phase: 'running' };
+            }
+            else if (job.state === 'running' && !(holdLoaderJobs && job.pool === 'loader')) {
               Object.assign(job, job.work()); job.work = null;
               job.state = job.error || ['exception', 'timeout'].includes(job.result?.status) ? 'failed' : 'succeeded';
               job.finishedAt = Date.now() / 1000; job.cancelable = false;
@@ -200,6 +214,7 @@ test('real browser exercises the API contract, source transactions, rendering an
           }
           case '/api/app/reload':
             await new Promise(resolve => setTimeout(resolve, 40));
+            while (holdCodeReload) await new Promise(resolve => setTimeout(resolve, 20));
             if (failCodeReload) return json({ error: { code: 'application_reload_failed',
               message: 'Some application code changed; reload failed and cannot be rolled back.',
               issues: [{ source: 'prolog/ow_dr/kb_example.pl', status: 'failed', message: 'Syntax error' }] } }, 500);
@@ -213,6 +228,10 @@ test('real browser exercises the API contract, source transactions, rendering an
             })) } })), 202);
           }
           case '/api/kb/load':
+            if (rejectNextLoad) {
+              const error = rejectNextLoad; rejectNextLoad = false;
+              return json({ error }, 409);
+            }
             if (failNextLoad) {
               const error = typeof failNextLoad === 'object' ? failNextLoad : { code: 'compile_failed', message: 'Fixture compile failure' };
               failNextLoad = false;
@@ -340,9 +359,70 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelector("#notice .compile-issue-heading .badge").textContent'), 'Busy');
     assert.equal(generation, 1);
     assert.equal(await evaluate(`${directory}.indeterminate`), true);
-    await evaluate('document.querySelector(".source-actions .button").click()');
+    for (const rejected of [false, true]) {
+      const error = { code: 'stale_generation', message: rejected ? 'Submission generation conflict' : 'Publication generation conflict' };
+      if (rejected) rejectNextLoad = error;
+      else failNextLoad = error;
+      failStatusRefresh = true;
+      await evaluate('document.querySelector(".source-actions .button").click()');
+      await wait(`document.querySelector("#notice .failure-summary")?.textContent === ${JSON.stringify(error.message)} && document.querySelector("#notice .status-refresh-error") !== null`);
+      assert.ok(await evaluate('document.querySelector("#notice .status-refresh-error").textContent.includes("Status refresh unavailable")'));
+      assert.ok(await evaluate('document.querySelector("#notice .status-refresh-error").textContent.includes("last confirmed status")'));
+      assert.equal(await evaluate('document.querySelector("#generation-state").textContent.startsWith("Generation 1")'), true);
+      assert.equal(await evaluate('document.querySelector(\'input[aria-label="Select KBs/alpha/b.krf"]\').checked'), true);
+      assert.equal(await evaluate('document.querySelector(".source-actions .button").disabled'), false);
+      assert.equal(generation, 1);
+      failStatusRefresh = false;
+    }
+    holdLoaderJobs = true;
+    failNextLoaderPoll = true;
+    const loadsBeforeQueue = apiRequests('kb/load').length;
+    assert.equal(await evaluate('document.querySelector(".source-actions .button").textContent'), 'Queue Selected for Loading');
+    await evaluate('const queue = document.querySelector(".source-actions .button"); queue.click(); queue.click()');
+    await wait('document.querySelector("#notice").textContent.includes("tracking is reconnecting")');
+    await wait('!document.querySelector(".source-actions .button").disabled');
+    const queuedTask = [...jobs.values()].at(-1);
+    assert.equal(apiRequests('kb/load').length, loadsBeforeQueue + 1);
+    assert.equal(generation, 1, 'Acceptance must not publish a generation');
+    assert.equal(await evaluate('document.querySelector("#loaded-count").textContent'), '2 loaded sources');
+    assert.equal(await evaluate('document.querySelectorAll(".loaded-files .unload-button").length'), 2);
+    assert.ok(await evaluate('document.querySelector(".draft-count").textContent.includes("unsaved selection")'));
+    assert.equal(await evaluate('document.querySelector(\'input[aria-label="Select all supported files in KBs/empty"]\').disabled'), true);
+    await wait('document.querySelector("#notice").textContent.includes("loading — KBs/alpha/a.kif")');
+    await evaluate('document.querySelector(\'input[aria-label="Select KBs/alpha/c.metta"]\').click()');
+    await evaluate('document.querySelector("#notice a").click()');
+    await wait(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"]') !== null`);
+    assert.ok(await evaluate(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"]').textContent.includes("Load sources")`));
+    assert.ok(await evaluate(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"]').textContent.includes("KBs/alpha/b.krf")`));
+    assert.ok(await evaluate(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"]').textContent.includes("loading — KBs/alpha/a.kif")`));
+    queuedTask.progress = { phase: 'loading', source: 'KBs/alpha/b.krf' };
+    await wait('document.querySelector("#notice").textContent.includes("loading — KBs/alpha/b.krf")');
+    await wait(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"]').textContent.includes("loading — KBs/alpha/b.krf")`);
+    assert.equal(await evaluate('document.querySelector(".application-reload button").disabled'), false);
+    holdCodeReload = true;
+    await evaluate('const reload = document.querySelector(".application-reload button"); reload.click(); reload.click()');
+    await wait('document.querySelector(".reload-feedback").textContent.includes("Reloading changed")');
+    await route('#/sources');
+    assert.equal(await evaluate('document.querySelector(".source-actions .button").disabled'), false, 'Code reload must not lock source controls');
+    assert.equal(await evaluate('document.querySelector(\'input[aria-label="Select KBs/alpha/c.metta"]\').checked'), true);
+    assert.equal(apiRequests('tasks/cancel').length, 0, 'Navigation must not cancel source jobs');
+    assert.equal(apiRequests('app/reload').length, 1, 'Only the reload button itself is guarded against double submission');
+    assert.equal(generation, 1);
+    holdCodeReload = false;
+    await route('#/settings');
+    await wait('!document.querySelector(".application-reload button").disabled');
+    assert.ok(['queued', 'running'].includes(queuedTask.state), 'Application reload completes while the source job is still pending');
+    holdLoaderJobs = false;
     await wait('document.querySelector("#generation-state").textContent.startsWith("Generation 2") && document.querySelector("main").getAttribute("aria-busy") === "false"');
     assert.equal(active.length, 3);
+    await wait(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"][data-state="succeeded"]') !== null`);
+    assert.equal(await evaluate('document.querySelector("h1").textContent'), 'Settings', 'Publication must not interrupt the settings page');
+    await route('#/sources');
+    assert.equal(await evaluate('document.querySelectorAll(".loaded-files .unload-button").length'), 3);
+    assert.equal(await evaluate('document.querySelector(\'input[aria-label="Select KBs/alpha/c.metta"]\').checked'), true);
+    assert.ok(await evaluate('document.querySelector(".draft-count").textContent.includes("unsaved selection")'), 'Post-acceptance edits remain a draft');
+    assert.ok(await evaluate('document.querySelector(".draft-note").textContent.startsWith("Selection generation 2.")'));
+    await evaluate('document.querySelector(".source-actions .secondary").click()');
     assert.equal(await evaluate('document.querySelector("#notice .compile-issue")'), null);
     await route('#/query?mt=x_A');
     await evaluate(`document.querySelector('textarea').value = '(isa ?X Dog)'; document.querySelector('.query-form').requestSubmit()`);
@@ -447,7 +527,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.deepEqual(serverConfig.pools, Object.fromEntries(['loader', 'inference', 'http'].map(pool => [pool, { start: 5, max: 10, spare: 2 }])));
     extraCatalogNodes = [{ type: 'directory', path: 'KBs/unseen', children: [
       ...Array.from({ length: 405 }, (_, i) => file(`KBs/unseen/${i}.krf`)),
-      file('KBs/unseen/generated.krf.pl'), file('KBs/unseen/generated.krf.pl.qlf'),
+      file('KBs/unseen/generated.krf.pl'), file('KBs/unseen/generated.krf.qlf'), file('KBs/unseen/generated.krf.pl.qlf'),
       file('KBs/unseen/generated.krf.inventory.json'),
     ] }];
     await evaluate(`(() => {
@@ -496,9 +576,10 @@ test('real browser exercises the API contract, source transactions, rendering an
     await evaluate('document.querySelector(".source-tree input:not(:disabled)").click()');
     await route('#/settings');
     const beforeReload = { generation, active: [...active] };
+    const reloadRequestsBefore = apiRequests('app/reload').length;
     await evaluate('const button = document.querySelector(".application-reload button"); button.click(); button.click()');
     await wait('document.querySelector(".reload-feedback").textContent.includes("Reloaded 1")');
-    assert.equal(apiRequests('app/reload').length, 1);
+    assert.equal(apiRequests('app/reload').length, reloadRequestsBefore + 1);
     assert.deepEqual(apiRequests('app/reload')[0].body, {});
     assert.equal(generation, beforeReload.generation);
     assert.deepEqual(active, beforeReload.active);

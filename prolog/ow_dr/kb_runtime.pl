@@ -7,25 +7,29 @@
            native_modules/1, register_native/2, cache_warnings/1,
            shared_fact_guard/2, shared_rule_guard/4, same_form/2,
            xc_form_handle/2, xc_same_form/2, xc_source_id/2,
-           assertion_contributions/3, activate_native/1, native_load_format/2]).
+           assertion_contributions/3, activate_native/1, native_load_format/2,
+           select_compiled/2, native_load_snapshot/5, native_records/3, native_header/2]).
 :- use_module(library(error)).
 :- use_module(library(lists)).
 :- use_module(library(time)).
 :- use_module(library(solution_sequences)).
 :- use_module(library(option)).
-:- use_module(library(assoc)).
+:- use_module(library(filesex)).
 :- use_module(kb_index, []).
 :- use_module(kb_symbols).
 :- use_module(kb_limits).
 :- use_module(kb_forms, []).
 :- use_module(kb_qlf, []).
+:- use_module(kb_load_policy).
 :- dynamic native_file/2.
 :- dynamic native_handle/4.
 :- dynamic native_signature/4.
 :- dynamic staged_file/1.
 :- dynamic native_qlf/3, native_format/2.
+:- dynamic native_header/2.
 :- thread_local capturing_load/1, native_load_error/2.
 :- thread_local native_load_options/2.
+:- thread_local loaded_header/2.
 :- multifile user:message_hook/3.
 
 user:message_hook(Term,error,_) :-
@@ -68,8 +72,10 @@ import_cache(File,Module) :-
       kb_jobs:submit_native(import_cache(File,Module),Job),kb_jobs:await_result(Job.jobId,_)
     ;import_cache_direct(File,Module)).
 import_cache_direct(File,Module) :-
-    kb_cache:read_cache(File,_,_),
-    native_load(File,Module).
+    with_runtime_load(
+      (select_compiled(File,Selection),
+       (Selection.format==pl->kb_cache:read_cache(File,_,_);true),
+       native_load(File,Module,[compiled_selection(Selection)]))).
 native_load(File, Module, Options) :-
     (current_predicate(kb_jobs:pools_started/0),kb_jobs:pools_started,\+kb_jobs:in_loader->
       kb_jobs:submit_native(native_load(File,Module,Options),Job),kb_jobs:await_result(Job.jobId,_)
@@ -80,31 +86,71 @@ native_load_direct(File, Module, Options) :-
     flag(ow_native_load,Key,Key+1),
     setup_call_cleanup(
       (asserta(capturing_load(Key),Capture),asserta(native_load_options(Key,Options),OptionRef)),
-      load_selected(File,Module,Options,Key),
-      (erase(Capture),erase(OptionRef),retractall(native_load_error(Key,_)))).
+      with_runtime_load(load_selected(File,Module,Options,Key)),
+      (erase(Capture),erase(OptionRef),retractall(native_load_error(Key,_)),
+       retractall(loaded_header(Key,_)))).
+
+select_compiled(Origin,Selection) :-
+    absolute_file_name(Origin,Absolute,[access(none)]),
+    kb_qlf:runtime_prebuilt_status(Absolute,Status),
+    select_compiled_format(Absolute,Status,Selection).
+
+select_compiled_format(Origin,Status,Selection) :-
+    (Status.state==current->
+      Selection=_{format:qlf,origin:Origin,qlfStatus:Status,outputHash:Status.metadata.binaryHash}
+    ;exists_file(Origin)->
+      kb_cache:file_digest(Origin,Hash),
+      Selection=_{format:pl,origin:Origin,qlfStatus:Status,outputHash:Hash}
+    ;throw(error(existence_error(compiled_kb,Origin),
+                context(native_load,'No usable QLF or PL companion. Run compile_kb.pl explicitly first.')))).
+
+native_load_snapshot(Selection,File,Module,Header,Records) :-
+    with_runtime_load(
+      ((Selection.format==pl->
+         copy_file(Selection.origin,File),kb_cache:file_digest(File,Actual),
+         (Actual==Selection.outputHash->true;throw(error(snapshot_mismatch(Selection.origin),_))),
+         kb_cache:read_cache(File,Header,Records)
+       ;true),
+       native_load(File,Module,[compiled_selection(Selection),generation_snapshot(true)]),
+       (Selection.format==qlf->native_header(File,Header),native_records(File,Module,Records);true))).
+
+native_records(File,Module,Records) :-
+    findall(record(Occurrence,Semantic,Metadata),
+      (kb_forms:contribution(Module,File,Occurrence,Id,Metadata,_),
+       kb_forms:form_record(Id,Semantic,_,_)),Records).
 
 load_selected(File,Module,Options,Key) :-
     absolute_file_name(File,Absolute),
-    option(qlf_origin(OriginInput),Options,Absolute),
-    absolute_file_name(OriginInput,Origin),
-    option(prebuilt_qlf(UseQLF),Options,true),
-    kb_cache:file_digest(Absolute,Hash),
-    kb_qlf:prebuilt_status(Origin,QLFStatus),
-    (UseQLF==true,QLFStatus.state==current,QLFStatus.metadata.sourceHash==Hash->
-      (kb_qlf:load_prebuilt(Origin,Hash,Staging,Records)->true;
+    (option(compiled_selection(Selection),Options)->true;
+      native_selection(Absolute,Options,Selection)),
+    Origin=Selection.origin,QLFStatus=Selection.qlfStatus,
+    (Selection.format==qlf->
+      (kb_qlf:load_prebuilt_status(QLFStatus,Staging,Header,Records)->true;
        throw(error(prebuilt_qlf_load_failed(Origin),_))),
       catch((check_load_errors(Key,File),
-            call(Staging:qlf_origin(Origin,Header)),cache_warnings(Header),
-            register_native_records(Absolute,Module,Records)),
+           cache_warnings(Header),
+           register_native_records(Absolute,Module,Records)),
         Error,(kb_qlf:release_staging(Staging),throw(Error))),
       release_native_qlf(Absolute,Module),
       assertz(native_qlf(Absolute,Module,Staging)),
-      Format=_{format:qlf,origin:Origin,construction:offline}
+      Format=_{format:qlf,origin:Origin,construction:offline,outputHash:Selection.outputHash}
     ;native_load_pl(File,Module,Key),
      release_native_qlf(Absolute,Module),
-     Format=_{format:pl,origin:Origin,qlfState:QLFStatus.state,
-              reason:"No enabled current prebuilt QLF matched this companion snapshot."}),
-    retractall(native_format(Absolute,_)),assertz(native_format(Absolute,Format)).
+     Format=_{format:pl,origin:Origin,qlfState:QLFStatus.state,outputHash:Selection.outputHash,
+              reason:"No enabled compatible prebuilt QLF was available."}),
+    retractall(native_format(Absolute,_)),assertz(native_format(Absolute,Format)),
+    retractall(native_header(Absolute,_)),
+    (loaded_header(Key,StoredHeader)->assertz(native_header(Absolute,StoredHeader));true).
+
+native_selection(File,Options,Selection) :-
+    option(qlf_origin(OriginInput),Options,File),
+    absolute_file_name(OriginInput,Origin,[access(none)]),
+    option(prebuilt_qlf(UseQLF),Options,true),
+    (UseQLF==true->kb_qlf:runtime_prebuilt_status(Origin,Status);Status=_{state:disabled}),
+    (Status.state==current,File\==Origin,exists_file(File),
+     kb_cache:file_digest(File,Hash),Hash\==Status.metadata.sourceHash->
+      QLFStatus=_{state:stale};QLFStatus=Status),
+    select_compiled_format(Origin,QLFStatus,Selection).
 
 native_load_format(File,Format) :-
     absolute_file_name(File,Absolute,[access(none)]),native_format(Absolute,Format).
@@ -126,19 +172,14 @@ release_native_qlf(File,Module) :-
 
 cache_warnings(Header) :-
     (is_dict(Header),get_dict(warnings,Header,Warnings)->true;Warnings=[]),
-    (capturing_load(Key),native_load_options(Key,Options)->true;Options=[]),
-    option(diagnostics(Show),Options,true),
-    (Show==false->true;empty_assoc(Counts),foldl(cached_warning,Warnings,Counts,_)).
-cached_warning(warning(File,Line,Column,Message),Before,After) :-
-    ground(warning(File,Line,Column,Message)),
-    atom(File),integer(Line),integer(Column),atomic(Message), !,
-    (get_assoc(Message,Before,N0)->true;N0=0),N is N0+1,
-    put_assoc(Message,Before,N,After),
-    (N=<5->format(user_error,'WARNING ~w:~d:~d: ~w~n',[File,Line,Column,Message])
-    ;N=:=6->format(user_error,'WARNING ~w: additional identical warnings suppressed.~n',[File])
-    ;true),
-    flush_output(user_error).
-cached_warning(Warning,_,_) :- throw(error(domain_error(cache_warning,Warning),_)).
+    must_be(list,Warnings),maplist(stored_warning,Warnings),
+    (capturing_load(Key)->retractall(loaded_header(Key,_)),assertz(loaded_header(Key,Header))
+    ;prolog_load_context(source,File)->
+      retractall(native_header(File,_)),assertz(native_header(File,Header))
+    ;true).
+stored_warning(Warning) :-
+    (ground(Warning),kb_cache:valid_warning(Warning)->true;
+      throw(error(domain_error(cache_warning,Warning),_))).
 
 register_native(File, Module) :-
     absolute_file_name(File, Absolute),
@@ -189,7 +230,7 @@ native_unload(File) :-
     unload_file(Absolute), retractall(native_file(Absolute, _)),
     retractall(native_handle(_, Absolute, _, _)),
     retractall(native_signature(_,Absolute,_,_)),retractall(staged_file(Absolute)),
-    retractall(native_format(Absolute,_)).
+    retractall(native_format(Absolute,_)),retractall(native_header(Absolute,_)).
 
 native_modules(Modules) :-
     (nb_current(logos_query,context(Selected,_,_,_))->Modules=Selected

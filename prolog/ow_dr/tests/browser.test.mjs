@@ -81,6 +81,51 @@ test('failed load has no implicit reset; successful replacement can unload the l
   assert.equal(model.dirty, false);
 });
 
+test('publication confirms a queued draft without discarding later source edits', () => {
+  const model = new SourceSelection(nodes, ['KBs/tinyKB.kif'], 4);
+  model.setSelected('KBs/alpha/a.kif', true);
+  const submitted = model.selectedFiles();
+  assert.deepEqual([...model.active], ['KBs/tinyKB.kif']);
+  assert.equal(model.generation, 4);
+  model.setSelected('KBs/alpha/b.krf', true);
+  model.updateActive(submitted, 5, true);
+  assert.deepEqual([...model.active], submitted);
+  assert.deepEqual(model.selectedFiles(), ['KBs/alpha/a.kif', 'KBs/alpha/b.krf', 'KBs/tinyKB.kif']);
+  assert.equal(model.state('KBs/alpha').selected, 2);
+  assert.equal(model.generation, 5);
+  assert.ok(model.dirty);
+  model.updateActive(model.selectedFiles(), 6, true);
+  assert.equal(model.dirty, false);
+  model.updateActive([], 5, true);
+  assert.equal(model.generation, 6);
+  assert.equal(model.active.size, 3);
+});
+
+test('resetting a draft during a queued load survives publication even when previously clean', () => {
+  const model = new SourceSelection(nodes, ['KBs/tinyKB.kif'], 4);
+  model.setSelected('KBs/alpha/a.kif', true);
+  const submitted = model.selectedFiles();
+  model.reset(['KBs/tinyKB.kif'], 4);
+  assert.equal(model.dirty, false);
+  model.updateActive(submitted, 5, true);
+  assert.deepEqual(model.selectedFiles(), ['KBs/tinyKB.kif']);
+  assert.deepEqual([...model.active], submitted);
+  assert.equal(model.state('KBs/alpha').selected, 0);
+  assert.ok(model.dirty);
+});
+
+test('unload publication updates a clean selection and preserves an independent dirty draft', () => {
+  const model = new SourceSelection(nodes, ['KBs/tinyKB.kif'], 4);
+  model.updateActive([], 5);
+  assert.deepEqual(model.selectedFiles(), []);
+  assert.equal(model.dirty, false);
+  model.setSelected('KBs/alpha/a.kif', true);
+  model.updateActive(['KBs/tinyKB.kif'], 6);
+  assert.deepEqual(model.selectedFiles(), ['KBs/alpha/a.kif']);
+  assert.deepEqual([...model.active], ['KBs/tinyKB.kif']);
+  assert.equal(model.state('KBs/alpha').indeterminate, true);
+});
+
 test('empty directories are disabled and catalog construction rejects false ancestry', () => {
   const model = new SourceSelection([...nodes, { type: 'directory', path: 'KBs/other', children: [file('KBs/escape.kif')] }]);
   assert.equal(model.state('KBs/empty').disabled, true);
@@ -104,7 +149,7 @@ test('startup Select All uses complete discovery and canonical identities withou
     { canonicalPath: `C:/repo/KBs/all/${index}.krf` }));
   const catalog = { canonicalRoot: 'C:/repo', pathCaseSensitive: false, nodes: [
     { type: 'directory', path: 'KBs/all', children: [...files,
-      file('KBs/all/derived.krf.pl'), file('KBs/all/derived.krf.pl.qlf'), file('KBs/all/derived.krf.inventory.json')] },
+      file('KBs/all/derived.krf.pl'), file('KBs/all/derived.krf.qlf'), file('KBs/all/derived.krf.pl.qlf'), file('KBs/all/derived.krf.inventory.json')] },
   ] };
   const existing = ['c:\\REPO\\kbs\\all\\0.krf', 'KBs/all/./0.krf', 'D:/other/KBs/all/0.krf'];
   const selected = mergeStartupSources(existing, catalog);

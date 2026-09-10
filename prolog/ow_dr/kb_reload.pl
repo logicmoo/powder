@@ -28,11 +28,7 @@ changed_file(File) :-
     ;source_file_property(File,modified(Loaded)),time_file(File,Now),Now=\=Loaded).
 
 reload_changed_files(Report) :-
-    (mutex_trylock(openworld_code_reload)->
-      setup_call_cleanup(true,
-        with_exclusive_reload(with_mutex(openworld_store,reload_locked(Report))),
-        mutex_unlock(openworld_code_reload))
-    ;throw(error(application_reload_busy,_))).
+    with_exclusive_reload(reload_locked(Report)).
 
 reload_locked(Report) :-
     setup_call_cleanup(asserta(reloading,Ref),

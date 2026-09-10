@@ -11,7 +11,8 @@ const number = value => new Intl.NumberFormat().format(Number(value) || 0);
 const state = {
   status: null, catalog: null, selection: null, expanded: new Set(['KBs']),
   knownSources: new Set(), knownMappings: null, contexts: new Map(),
-  mutation: false, routeController: null, queryController: null, view: 0,
+  mutation: false, codeReloading: false, sourceTasks: new Map(), refreshSources: null,
+  routeController: null, queryController: null, view: 0,
   settings: { ...DEFAULT_SETTINGS },
   query: { query: '', mt: '', limit: DEFAULT_SETTINGS.queryLimit, timeout: 3 },
   refreshQuestions: null,
@@ -65,7 +66,7 @@ async function localAdmin(path, body) {
   return api(path, {}, { method: 'POST', body, headers: { 'X-Powder-Local-Token': token } });
 }
 
-async function awaitTask(accepted, { signal, onUpdate } = {}) {
+async function awaitTask(accepted, { signal, onUpdate, onPollError } = {}) {
   if (!accepted?.accepted) return accepted;
   const id = accepted.jobId;
   const abort = () => { localAdmin('tasks/cancel', { id }).catch(error => showNotice(`Cancellation could not be confirmed: ${error.message}`, true)); };
@@ -73,7 +74,14 @@ async function awaitTask(accepted, { signal, onUpdate } = {}) {
   signal?.addEventListener('abort', abort, { once: true });
   try {
     for (;;) {
-      const task = await api('tasks/detail', { id }, { signal });
+      let task;
+      try { task = await api('tasks/detail', { id }, { signal }); }
+      catch (error) {
+        if (!onPollError || (error.code !== 'connection_failed' && !(error.status >= 500))) throw error;
+        onPollError(error);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
       onUpdate?.(task);
       if (task.state === 'succeeded') return task.result;
       if (['failed', 'cancelled'].includes(task.state)) {
@@ -92,6 +100,7 @@ async function awaitTask(accepted, { signal, onUpdate } = {}) {
 
 function showNotice(message, isError = false) {
   const target = $('#notice');
+  delete target.dataset.taskId;
   target.replaceChildren(element('div', { className: 'notice-content' }, message),
     button('Dismiss', () => { target.hidden = true; }, 'text-button'));
   target.className = `notice${isError ? ' error-notice' : ''}`;
@@ -333,15 +342,20 @@ function searchForm(routeName, q = '', placeholder = 'Name, symbol, or fragment'
 }
 
 function setStatus(status) {
-  if (state.status && status.generation < state.status.generation) return;
+  if (state.status && status.generation < state.status.generation) return false;
   if (state.status && status.generation !== state.status.generation) state.contexts.clear();
   state.status = status;
+  if (state.selection && status.generation > state.selection.generation) {
+    const preserveDraft = state.selection.dirty || [...state.sourceTasks.values()].some(task => task.path === 'kb/load');
+    state.selection.updateActive((status.files ?? []).map(file => file.path), status.generation, preserveDraft);
+  }
   for (const file of status.files ?? []) {
     const path = canonicalPath(file.path);
     if (path) state.knownSources.add(path);
   }
   $('#generation-state').textContent = `Generation ${status.generation} · ${number(status.counts?.assertions)} assertions`;
   $('#loaded-count').textContent = `${number(status.files?.length)} loaded ${status.files?.length === 1 ? 'source' : 'sources'}`;
+  return true;
 }
 
 function rememberCatalog(catalog) {
@@ -608,29 +622,83 @@ async function sourcePage(route, signal) {
 
 function setMutation(value) {
   state.mutation = value;
-  for (const control of document.querySelectorAll('[data-mutation]')) control.disabled = value;
+  for (const control of document.querySelectorAll('[data-mutation]')) {
+    control.disabled = value || control.dataset.mutationDisabled === 'true';
+  }
+}
+
+async function refreshPublishedView() {
+  if (state.refreshSources) state.refreshSources();
+  else if (state.refreshQuestions) await state.refreshQuestions();
+  else if (parseRoute(location.hash).name !== 'settings') await renderRoute();
+}
+
+function sourceTaskNotice(id, message, isError = false) {
+  showNotice(element('div', {}, message, element('p', {}, `Loader task ${id}. `,
+    link('View task in Tasks', 'settings', { task: id }))), isError);
+  $('#notice').dataset.taskId = id;
+}
+
+async function sourceUpdateError(error, id) {
+  let refreshError;
+  if (error.status === 409 || error.code === 'stale_generation') {
+    try { setStatus(await api('status')); await refreshPublishedView(); }
+    catch (failure) { refreshError = failure; }
+  }
+  const details = requestErrorDetails(error, { preserveSelection: true });
+  if (refreshError) {
+    details.append(element('p', { className: 'status-refresh-error' },
+      `Refreshing the active KB after this failure also failed: ${apiErrorSummary(refreshError)} The last confirmed status is shown. Reopen KB Sources to refresh it before submitting another change.`));
+  }
+  if (id) sourceTaskNotice(id, details, error.code !== 'busy');
+  else showNotice(details, error.code !== 'busy');
+  if (error.code === 'busy') $('#notice').className = 'notice busy-notice';
+}
+
+async function trackSourceTask(accepted, path, successMessage) {
+  const id = accepted.jobId;
+  state.sourceTasks.set(id, { path });
+  const updateNotice = message => {
+    if ($('#notice').dataset.taskId === id && !$('#notice').hidden) sourceTaskNotice(id, message);
+  };
+  try {
+    const status = await awaitTask(accepted, {
+      onUpdate: task => {
+        if (!['queued', 'running'].includes(task.state)) return;
+        const progress = task.progress ?? {};
+        const source = progress.currentPath || progress.source;
+        updateNotice(`Loader task ${task.state}: ${progress.phase ?? task.label}${source ? ` — ${source}` : ''}. The previous KB remains active until publication succeeds. You can keep editing your draft or leave this page.`);
+      },
+      onPollError: () => updateNotice('Task tracking is reconnecting. The accepted job is still tracked in Tasks; do not resubmit it.'),
+    });
+    const current = setStatus(status);
+    sourceTaskNotice(id, current ? successMessage
+      : `Published generation ${status.generation}. Generation ${state.status.generation} is now active.`);
+    if (current) await refreshPublishedView();
+  } catch (error) {
+    await sourceUpdateError(error, id);
+  } finally {
+    state.sourceTasks.delete(id);
+  }
 }
 
 async function mutateSource(path, body, successMessage) {
   if (state.mutation) return false;
   setMutation(true);
-  showNotice('Updating the active knowledge base. The previous generation remains available until this succeeds.');
+  showNotice('Submitting the source request. The active KB and your draft stay unchanged until publication succeeds.');
   try {
     const accepted = await api(path, {}, { method: 'POST', body });
-    const status = await awaitTask(accepted, { onUpdate: task => {
-      const progress = task.progress ?? {};
-      showNotice(`Loader task ${task.state}: ${progress.phase ?? task.label}${progress.source ? ` — ${progress.source}` : ''}. The previous KB remains active until publication succeeds.`);
-    } });
-    setStatus(status);
-    if (state.selection) state.selection.reset((status.files ?? []).map(file => file.path), status.generation);
-    showNotice(successMessage);
+    if (accepted?.accepted) {
+      sourceTaskNotice(accepted.jobId, 'Source request queued. The active KB and your draft are unchanged until publication. You can keep editing or leave this page.');
+      void trackSourceTask(accepted, path, successMessage);
+    } else {
+      setStatus(accepted);
+      showNotice(successMessage);
+      await refreshPublishedView();
+    }
     return true;
   } catch (error) {
-    if (error.status === 409) {
-      try { setStatus(await api('status')); } catch { /* Keep the last confirmed generation if refresh also fails. */ }
-    }
-    showNotice(requestErrorDetails(error, { preserveSelection: true }), error.code !== 'busy');
-    if (error.code === 'busy') $('#notice').className = 'notice busy-notice';
+    await sourceUpdateError(error);
     return false;
   } finally {
     setMutation(false);
@@ -639,9 +707,8 @@ async function mutateSource(path, body, successMessage) {
 
 async function unloadSource(file) {
   if (state.mutation) return;
-  const success = await mutateSource('kb/unload', { path: file.path, generation: state.status.generation },
+  await mutateSource('kb/unload', { path: file.path, generation: state.status.generation },
     `Unloaded ${file.path} from memory. Source files and caches are unchanged.`);
-  if (success) await renderRoute();
 }
 
 async function sourcesPage(_route, signal) {
@@ -651,7 +718,7 @@ async function sourcesPage(_route, signal) {
   setStatus(status);
   rememberCatalog(catalog);
   if (!state.selection || !state.selection.dirty) {
-    state.selection = new SourceSelection(catalog.nodes, catalog.active, catalog.generation);
+    state.selection = new SourceSelection(catalog.nodes, (state.status.files ?? []).map(file => file.path), state.status.generation);
   } else {
     const previous = state.selection;
     const updated = new SourceSelection(catalog.nodes, [...previous.active], previous.generation);
@@ -667,7 +734,7 @@ async function sourcesPage(_route, signal) {
   const statusNote = element('p', { className: 'muted draft-note' });
   const updateDraft = () => {
     draftCount.textContent = `${number(model.selected.size)} of ${number(model.files.length)} files selected${model.dirty ? ' · unsaved selection' : ''}`;
-    statusNote.textContent = `Selection generation ${model.generation}. ${model.dirty ? 'Load applies this exact file list; unselected descendants stay excluded.' : 'Select files to replace the active source set. Loading zero files is allowed.'}`;
+    statusNote.textContent = `Selection generation ${model.generation}. Queue submits this exact file list; unselected descendants stay excluded. Changes remain a draft until the task publishes. Loading zero files is allowed.`;
   };
   const updateControls = paths => {
     for (const path of paths) {
@@ -677,6 +744,7 @@ async function sourcesPage(_route, signal) {
         checkbox.checked = value.checked;
         checkbox.indeterminate = value.indeterminate;
         checkbox.disabled = state.mutation || value.disabled;
+        checkbox.dataset.mutationDisabled = String(value.disabled);
         checkbox.setAttribute('aria-checked', value.indeterminate ? 'mixed' : String(value.checked));
       }
       if (counts.has(path)) counts.get(path).textContent = `${number(value.selected)}/${number(value.total)}`;
@@ -724,12 +792,11 @@ async function sourcesPage(_route, signal) {
   };
   const tree = element('ul', { className: 'source-tree', 'aria-label': 'Supported original sources under KBs' }, model.roots.map(buildNode));
   updateControls(model.records.keys());
-  const load = button('Load selected sources', async () => {
-    const successful = await mutateSource('kb/load',
+  const load = button('Queue Selected for Loading', async () => {
+    await mutateSource('kb/load',
       { files: model.selectedFiles(), generation: model.generation },
       'The selected sources are now active.');
-    if (successful) await renderRoute();
-    else updateControls(model.records.keys());
+    updateControls(model.records.keys());
   });
   load.dataset.mutation = '';
   load.disabled = state.mutation;
@@ -739,13 +806,20 @@ async function sourcesPage(_route, signal) {
   }, 'button secondary');
   reset.dataset.mutation = '';
   reset.disabled = state.mutation;
+  const loaded = element('div', {}, loadedFiles(state.status.files));
+  state.refreshSources = () => {
+    if (signal.aborted) return;
+    updateControls(model.records.keys());
+    loaded.replaceChildren(loadedFiles(state.status.files));
+  };
   return element('div', {},
     heading('KB Sources', 'Choose original sources from the repository’s KBs directory. Loading and unloading never deletes files.'),
     element('section', { className: 'source-selection' }, element('h2', {}, 'Source selection'),
       element('div', { className: 'source-actions' }, load, reset, draftCount), statusNote,
+      element('p', { className: 'muted' }, 'Accepted requests continue in the background. ', link('Track or cancel them in Tasks', 'settings')),
       model.files.length ? tree : empty('No supported sources found', 'Place the original KIF, KRF, or MeTTa corpus under KBs. Generated companions are intentionally hidden.')),
     element('section', { className: 'loaded-section' }, element('h2', {}, 'Currently loaded'),
-      loadedFiles(state.status.files)));
+      loaded));
 }
 
 function selectField(label, name, value, options, onChange) {
@@ -1220,6 +1294,8 @@ function serverSettingsPanel(signal) {
 function tasksPanel(signal) {
   const panel = element('section', { className: 'tasks-panel' }, element('h2', {}, 'Tasks and worker pools'));
   const content = element('div', { role: 'status' }, 'Loading requested tasks…');
+  const requestedTask = parseRoute(location.hash).params.get('task');
+  let focusedTask = false;
   let timer;
   const stamp = value => value === null || value === undefined ? '—' : new Date(value * 1000).toLocaleString();
   const refresh = async () => {
@@ -1245,17 +1321,22 @@ function tasksPanel(signal) {
           const tasks = (data.tasks ?? []).filter(task => task.pool === pool.pool);
           section.append(element('h4', {}, 'Requested tasks'),
             tasks.length ? element('ul', { className: 'requested-tasks' }, tasks.map(task => {
+              const source = task.progress?.currentPath || task.progress?.source;
               const item = element('li', { 'data-task-id': task.id, 'data-state': task.state },
                 element('strong', {}, `${task.label}: ${task.state}`),
                 element('code', {}, task.id),
                 element('p', { className: 'muted' }, `Requested ${stamp(task.createdAt)} · started ${stamp(task.startedAt)} · finished ${stamp(task.finishedAt)}`),
-                element('p', {}, `${task.progress?.phase ?? ''}${task.progress?.source ? ` — ${task.progress.source}` : ''}`),
+                element('p', {}, `${task.progress?.phase ?? ''}${source ? ` — ${source}` : ''}`),
                 task.progress?.totalFiles ? element('p', {}, `${task.progress.completedFiles ?? 0}/${task.progress.totalFiles} files`) : null,
                 task.files?.length ? element('details', {}, element('summary', {}, `${task.files.length} selected files/paths`),
                   element('pre', { className: 'prolog-output' }, task.files.join('\n'))) : null,
                 task.error ? requestErrorDetails(new APIError(task.error.message, 'task_failed', 422, task.error)) : null,
                 task.resultCount !== undefined && element('p', {}, `${task.resultCount} solutions returned`),
                 task.resultGeneration !== undefined && element('p', {}, `Published generation ${task.resultGeneration}`));
+              if (task.id === requestedTask) {
+                item.setAttribute('tabindex', '-1');
+                item.setAttribute('aria-current', 'true');
+              }
               if (task.cancelable && ['queued', 'running'].includes(task.state)) {
                 item.append(button('Cancel task', async event => {
                   event.currentTarget.disabled = true;
@@ -1271,6 +1352,14 @@ function tasksPanel(signal) {
       content.replaceChildren(pools,
         ...(data.serviceErrors ?? []).map(error => element('p', { role: 'alert' }, `${error.pool}: ${error.message}`)),
         element('p', { className: 'muted' }, `All active/queued tasks and the latest ${data.completedHistoryLimit} completed tasks are retained. ${data.persistence}`));
+      if (!focusedTask && requestedTask) {
+        const selected = [...content.querySelectorAll('[data-task-id]')].find(item => item.dataset.taskId === requestedTask);
+        if (selected) {
+          selected.focus({ preventScroll: true });
+          selected.scrollIntoView({ block: 'nearest' });
+          focusedTask = true;
+        }
+      }
     } catch (error) {
       if (error.name !== 'AbortError') content.replaceChildren(errorPanel(error, refresh));
     } finally {
@@ -1286,8 +1375,8 @@ function tasksPanel(signal) {
 function applicationReloadControls() {
   const feedback = element('div', { className: 'reload-feedback', 'aria-live': 'polite' });
   const reload = button('Reload changed files', async () => {
-    if (state.mutation) return;
-    setMutation(true);
+    if (state.codeReloading) return;
+    setCodeReloading(true);
     feedback.setAttribute('role', 'status');
     feedback.replaceChildren(element('p', {}, 'Reloading changed Prolog application code…'));
     try {
@@ -1299,15 +1388,20 @@ function applicationReloadControls() {
       feedback.setAttribute('role', 'alert');
       feedback.replaceChildren(requestErrorDetails(error));
     } finally {
-      setMutation(false);
+      setCodeReloading(false);
     }
   });
-  reload.dataset.mutation = '';
-  reload.disabled = state.mutation;
+  reload.dataset.codeReload = '';
+  reload.disabled = state.codeReloading;
   return element('section', { className: 'application-reload' }, element('h2', {}, 'Prolog application code'),
-    element('p', {}, 'Reload only changed, already loaded application modules. This does not recompile KBs, reload source data, or reset settings and draft selections.'),
+    element('p', {}, 'Reload only changed, already loaded application modules, including while source tasks are running. This does not recompile KBs, reload source data, or reset settings and draft selections.'),
     element('p', { className: 'muted' }, 'If code reload fails, some modules may already have changed; SWI-Prolog cannot roll those changes back automatically.'),
     reload, feedback);
+}
+
+function setCodeReloading(value) {
+  state.codeReloading = value;
+  for (const control of document.querySelectorAll('[data-code-reload]')) control.disabled = value;
 }
 
 const pages = {
@@ -1323,6 +1417,7 @@ async function renderRoute() {
   state.queryController?.abort();
   state.queryController = null;
   state.refreshQuestions = null;
+  state.refreshSources = null;
   const controller = new AbortController();
   state.routeController = controller;
   const route = parseRoute(location.hash, state.settings);
@@ -1376,12 +1471,9 @@ function startLiveReload() {
         return;
       }
       {
-        const route = parseRoute(location.hash).name;
         const status = await api('status', {}, { signal: requestController.signal });
         if (status.generation !== state.status?.generation || status.startup?.state !== state.status?.startup?.state) {
-          setStatus(status);
-          if (state.refreshQuestions) await state.refreshQuestions();
-          else if (route !== 'settings') await renderRoute();
+          if (setStatus(status)) await refreshPublishedView();
         }
       }
       target.textContent = 'Interface live refresh enabled';

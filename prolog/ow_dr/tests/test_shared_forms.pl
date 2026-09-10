@@ -12,7 +12,8 @@ fixture(Directory,A,B,C) :-
     source(Directory,'c.krf',"(in-microtheory (MtFn B))\n(:DIRECTION :DEFAULT :KIF (p A))\n(v ?P ?Q)\n",C).
 source(D,Name,Text,File) :-
     directory_file_path(D,Name,File),
-    setup_call_cleanup(open(File,write,S),format(S,'~s',[Text]),close(S)).
+    setup_call_cleanup(open(File,write,S),format(S,'~s',[Text]),close(S)),
+    kb_compile:compile_source(File,[state_dir(D),progress(none)],_).
 cleanup(D) :-
     findall(P,source_info(P,_),Paths),
     forall(member(P,Paths),(generation(G),unload_source(P,G,_))),

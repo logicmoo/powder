@@ -16,6 +16,7 @@ reload_fixture(fixture(AppFile,Module,External,ExternalModule,Directory,Source))
     load_files(External,[imports([])]),
     directory_file_path(Directory,'source.krf',Source),
     setup_call_cleanup(open(Source,write,S),format(S,'(p A)~n',[]),close(S)),
+    kb_compile:compile_source(Source,[state_dir(Directory),progress(none)],_),
     load_sources([Source],any,_),remember_loaded_code.
 
 write_module(File,Module,Value) :-
@@ -72,13 +73,32 @@ test(no_request_can_supply_a_reload_target) :-
       (assertion(\+sub_atom(File,_,_,_,'/.runtime/')),
        assertion(\+sub_atom(File,_,_,_,'/KBs/')))).
 
-test(concurrent_reload_is_explicitly_busy) :-
+test(concurrent_reload_waits_for_other_reload_without_denial) :-
     thread_self(Main),
     setup_call_cleanup(thread_create(
       with_mutex(openworld_code_reload,
         (thread_send_message(Main,reload_locked),thread_get_message(release))),Worker,[]),
       (thread_get_message(reload_locked),
-       catch(reload_changed_files(_),Error,true),
-       assertion(Error=error(application_reload_busy,_))),
-      (thread_send_message(Worker,release),thread_join(Worker,true))).
+       setup_call_cleanup(thread_create(
+         (reload_changed_files(Report),thread_send_message(Main,reloaded(Report))),Reloader,[]),
+         (assertion(\+thread_get_message(Main,reloaded(_),[timeout(0.05)])),
+          thread_send_message(Worker,release),thread_get_message(Main,reloaded(_),[timeout(3)])),
+         thread_join(Reloader,true))),
+      (thread_property(Worker,status(running))->thread_send_message(Worker,release),thread_join(Worker,true)
+      ;thread_join(Worker,true))).
+
+test(reload_runs_while_application_work_holds_store_lock,
+     [setup(reload_fixture(F)),cleanup(cleanup_fixture(F))]) :-
+    F=fixture(AppFile,Module,_,_,_,_),write_module(AppFile,Module,concurrent),
+    thread_self(Main),
+    setup_call_cleanup(thread_create(
+      kb_activity:with_application(with_mutex(openworld_store,
+        (thread_send_message(Main,application_active),thread_get_message(release)))),Worker,[]),
+      (thread_get_message(application_active),
+       setup_call_cleanup(thread_create(
+         (reload_changed_files(Report),thread_send_message(Main,concurrent_reload(Report))),Reloader,[]),
+         (thread_get_message(Main,concurrent_reload(Report),[timeout(3)]),
+          assertion(Report.count=:=1),call(Module:value(concurrent))),
+         (thread_send_message(Worker,release),thread_join(Reloader,true)))),
+      thread_join(Worker,true)).
 :- end_tests(application_reload).

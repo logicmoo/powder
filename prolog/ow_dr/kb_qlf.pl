@@ -1,7 +1,9 @@
 :- module(kb_qlf, [convert_companion/3, discover_companions/2, load_prebuilt/4,
-                   release_staging/1, prebuilt_status/2]).
+                   release_staging/1, prebuilt_status/2, runtime_prebuilt_status/2,
+                   load_prebuilt_status/4]).
 :- use_module(kb_cache).
 :- use_module(kb_compile, []).
+:- use_module(kb_load_policy).
 :- use_module(library(error)).
 :- use_module(library(filesex)).
 :- use_module(library(lists)).
@@ -21,7 +23,8 @@ companion_path(Input,File) :-
     (file_name_extension(Source,pl,File),file_name_extension(_,Dialect,Source),
      memberchk(Dialect,[krf,kif,metta])->true;domain_error(compiled_kb_companion,Input)).
 paths(File,QLF,Metadata,StageSource) :-
-    atom_concat(File,'.qlf',QLF),atom_concat(QLF,'.meta.pl',Metadata),
+    (file_name_extension(Base,pl,File)->true;Base=File),
+    file_name_extension(Base,qlf,QLF),atom_concat(QLF,'.meta.pl',Metadata),
     atom_concat(QLF,'-stage.pl',StageSource).
 abi(abi(Version,Arch,Bits)) :-
     current_prolog_flag(version_data,Version),current_prolog_flag(arch,Arch),
@@ -34,6 +37,7 @@ initialize_builder_hash :-
     retractall(loaded_builder_identity(_)),assertz(loaded_builder_identity(Hash)).
 
 convert_companion(Input,Options,Result) :-
+    require_offline(kb_qlf:convert_companion/3),
     statistics(walltime,[Start,_]),
     companion_path(Input,File),paths(File,QLF,Metadata,StageSource),
     atom_concat(QLF,'.lock',LockFile),try_lock(LockFile,Lock),
@@ -94,6 +98,7 @@ require_owned_outputs(File,QLF,Metadata,StageSource) :-
     ;true).
 
 compile_stage(Source) :-
+    require_offline(kb_qlf:compile_stage/1),
     setup_call_cleanup(asserta(building,Ref),
       ((qcompile(Source,[silent(true)])->true;throw(error(qlf_compilation_failed(Source),_))),
        findall(E,build_error(E),Errors),
@@ -164,19 +169,63 @@ valid_identity(File,QLF,Meta) :-
     Meta.origin==File,file_digest(File,Meta.sourceHash),
     file_digest(QLF,Meta.binaryHash),file_digest(Meta.stageSource,Meta.stageHash).
 
+% Runtime admission checks the artifact, not the compiler or original source.
+% Offline freshness remains stricter in prebuilt_status/2.
+runtime_prebuilt_status(Input,Status) :-
+    absolute_file_name(Input,File,[access(none)]),runtime_paths(File,QLF,Metadata),
+    (exists_file(QLF),exists_file(Metadata)->
+      catch((read_metadata(Metadata,Meta),valid_runtime_identity(File,QLF,Meta)->
+        Status=_{state:current,qlf:QLF,metadata:Meta,count:Meta.count}
+      ;Status=_{state:stale,qlf:QLF,reason:"Unsupported or invalid prebuilt QLF artifact."}),
+        Error,(message_to_string(Error,Message),Status=_{state:stale,qlf:QLF,reason:Message}))
+    ;Status=_{state:absent,qlf:QLF}).
+
+runtime_paths(File,QLF,Metadata) :-
+    paths(File,Canonical,CanonicalMetadata,_),
+    (exists_file(Canonical);exists_file(CanonicalMetadata)),!,
+    QLF=Canonical,Metadata=CanonicalMetadata.
+runtime_paths(File,QLF,Metadata) :-
+    atom_concat(File,'.qlf',Legacy),atom_concat(Legacy,'.meta.pl',LegacyMetadata),
+    exists_file(Legacy),exists_file(LegacyMetadata),!,
+    QLF=Legacy,Metadata=LegacyMetadata.
+runtime_paths(File,QLF,Metadata) :- paths(File,QLF,Metadata,_).
+
+valid_runtime_identity(File,QLF,Meta) :-
+    qlf_schema(Meta.schema),abi(Meta.abi),Meta.origin==File,
+    atom(Meta.stageModule),atom_concat(powder_qlf_,_,Meta.stageModule),
+    integer(Meta.count),Meta.count>=0,
+    kb_cache:sha256_atom(Meta.sourceHash),kb_cache:sha256_atom(Meta.normalizedDigest),
+    kb_cache:sha256_atom(Meta.binaryHash),file_digest(QLF,Meta.binaryHash).
+
 load_prebuilt(Origin,ExpectedHash,StageModule,Records) :-
     prebuilt_status(Origin,Status),Status.state==current,
     Status.metadata.sourceHash==ExpectedHash,
+    load_prebuilt_status(Status,StageModule,_,Records).
+
+load_prebuilt_status(Status,StageModule,Header,Records) :-
+    with_runtime_load(load_prebuilt_status_locked(Status,StageModule,Header,Records)).
+
+load_prebuilt_status_locked(Status,StageModule,Header,Records) :-
     StageModule=Status.metadata.stageModule,
     with_mutex(powder_qlf_staging,
       (staging_users(StageModule,Status.metadata.binaryHash,Users)->
-        staging_records(StageModule,Records),length(Records,Status.count),
+        loaded_records(Status,StageModule,Header,Records),
         retract(staging_users(StageModule,Status.metadata.binaryHash,Users)),
         Next is Users+1,assertz(staging_users(StageModule,Status.metadata.binaryHash,Next))
-      ;catch((load_files(Status.qlf,[imports([]),silent(true),if(true),register(false)]),
-              staging_records(StageModule,Records),length(Records,Status.count),
-              assertz(staging_users(StageModule,Status.metadata.binaryHash,1))),
-             Error,(clear_staging(StageModule),throw(Error))))).
+      ;(staging_users(StageModule,_,_)->throw(error(conflicting_qlf_module(StageModule),_));true),
+       catch(((load_files(Status.qlf,[imports([]),silent(true),if(true),register(false)]),
+              file_digest(Status.qlf,Status.metadata.binaryHash),
+              loaded_records(Status,StageModule,Header,Records))->true;
+                throw(error(invalid_prebuilt_qlf(Status.qlf),_))),
+              Error,(clear_staging(StageModule),throw(Error))),
+       assertz(staging_users(StageModule,Status.metadata.binaryHash,1)))).
+
+loaded_records(Status,StageModule,Header,Records) :-
+    call(StageModule:qlf_origin(Status.metadata.origin,Header)),
+    kb_cache:validate_header(Header),
+    Header.normalizedDigest==Status.metadata.normalizedDigest,
+    Header.count=:=Status.count,
+    staging_records(StageModule,Records),length(Records,Status.count).
 
 staging_records(Module,Records) :-
     findall(Line-native_record(Id,Semantic,Metadata,Ref),

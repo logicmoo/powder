@@ -11,6 +11,8 @@
 :- use_module(library(readutil)).
 :- use_module(library(process)).
 :- use_module(library(uuid)).
+:- use_module(library(memfile)).
+:- use_module(library(prolog_wrap)).
 
 test_dir(Dir) :-
     source_file(plunit_logos_compiler:test_dir(_),Here),
@@ -337,6 +339,40 @@ test(failed_source_retains_all_warning_counts,
     length(Failed.warnings,12),
     forall(member(warning(_,_,_,Message),Failed.warnings),
            assertion(\+sub_string(Message,_,_,_,"suppressed"))).
+
+test(cache_hit_never_reanalyzes_shapes_or_replays_stored_warnings,
+     [setup(test_dir(D)),cleanup(clean_dir(D))]) :-
+    fixture(D,'shapes.krf',"(p (4 a))\n",F),opts(D,Options),
+    compile_source(F,Options,Cold),assertion(Cold.warnings\=[]),
+    file_digest(Cold.normalized,NormalHash),file_digest(Cold.index,IndexHash),
+    select(diagnostics(false),Options,VisibleOptions),
+    setup_call_cleanup(
+      (wrap_predicate(kb_reader:read_source(_,_,_,_),cache_hit_probe,_,
+          throw(error(cache_hit_entered_reader,_))),
+       wrap_predicate(kb_cache:valid_semantic(_),cache_hit_probe,_,
+          throw(error(cache_hit_entered_semantic_analysis,_))),
+       wrap_predicate(kb_compile:generate_pair(_,_,_,_,_),cache_hit_probe,_,
+          throw(error(cache_hit_entered_cache_builder,_))),
+       wrap_predicate(kb_index:build_index(_,_,_),cache_hit_probe,_,
+          throw(error(cache_hit_entered_index_builder,_)))),
+      (capture_stderr(compile_sources([F],VisibleOptions,Warm),Text),
+       assertion(Text==""),assertion(Warm.cacheHits=:=1),
+       assertion(Warm.generated=:=0),assertion(Warm.failures=:=0),
+       length(Cold.warnings,Count),assertion(Warm.warnings=:=Count),
+       Warm.results=[Result],assertion(Result.warnings==Cold.warnings),
+       file_digest(Cold.normalized,NormalHash),file_digest(Cold.index,IndexHash)),
+      (unwrap_predicate(kb_reader:read_source(_,_,_,_),cache_hit_probe),
+       unwrap_predicate(kb_cache:valid_semantic(_),cache_hit_probe),
+       unwrap_predicate(kb_compile:generate_pair(_,_,_,_,_),cache_hit_probe),
+       unwrap_predicate(kb_index:build_index(_,_,_),cache_hit_probe))).
+
+capture_stderr(Goal,Text) :-
+    current_input(In),current_output(Out),stream_pair(user_error,_,Err),
+    setup_call_cleanup(new_memory_file(Memory),
+      (setup_call_cleanup(open_memory_file(Memory,write,Capture,[encoding(utf8)]),
+        setup_call_cleanup(set_prolog_IO(In,Out,Capture),once(Goal),set_prolog_IO(In,Out,Err)),
+        close(Capture)),memory_file_to_string(Memory,Text)),
+      free_memory_file(Memory)).
 
 test(metadata_nil_and_unknown_properties,[setup(test_dir(D)),cleanup(clean_dir(D))]) :-
     Text="(:DIRECTION :FORWARD :CREATOR NIL :CREATION-DATE NIL :MICROTHEORY BaseKB :Custom-Property (literal nil \"\") :KIF (p))\n",

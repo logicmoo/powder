@@ -74,6 +74,7 @@ creator and creation_date properties.
 
 :- use_module(library(apply)).
 :- use_module(library(assoc)).
+:- use_module(kb_load_policy).
 :- use_module(kb_symbols).
 :- use_module(library(crypto)).
 :- use_module(library(error)).
@@ -85,6 +86,7 @@ creator and creation_date properties.
 :- dynamic source_case_cache/3.
 
 read_source(File,Options,Assertions,Info) :-
+    require_offline(kb_reader:read_source/4),
     must_be(atom,File), must_be(list,Options),
     source_dialect(File,Dialect),
     source_encoding(Dialect,Options,Encoding),

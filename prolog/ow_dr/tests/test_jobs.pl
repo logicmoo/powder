@@ -25,7 +25,8 @@ cleanup(Directory,Previous) :-
 source(Directory,Name,Value,File) :-
     directory_file_path(Directory,Name,File),
     setup_call_cleanup(open(File,write,S),
-      format(S,'(in-microtheory M)~n(p ~w)~n',[Value]),close(S)).
+      format(S,'(in-microtheory M)~n(p ~w)~n',[Value]),close(S)),
+    kb_compile:compile_source(File,[state_dir(Directory),progress(none)],_).
 
 test(settings_are_durable_ordered_and_next_start_only,
      [setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-

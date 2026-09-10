@@ -13,7 +13,7 @@ fixture(Root,OldApp,OldEnv) :-
     directory_file_path(Root,'KBs/nested',Nested),make_directory_path(Nested),
     directory_file_path(Root,'settings.json',Settings),setenv('POWDER_SERVER_SETTINGS',Settings),
     retractall(kb_paths:app_directory(_)),assertz(kb_paths:app_directory(App)),
-    forall(member(Name,['a.krf','b.kif','c.metta','a.krf.pl','a.krf.pl.qlf','a.krf.index.pl','a.krf.inventory.json']),
+    forall(member(Name,['a.krf','b.kif','c.metta','a.krf.pl','a.krf.qlf','a.krf.pl.qlf','a.krf.index.pl','a.krf.inventory.json']),
       (directory_file_path(Nested,Name,File),setup_call_cleanup(open(File,write,S),true,close(S)))).
 cleanup(Root,OldApp,OldEnv) :-
     retractall(kb_paths:app_directory(_)),assertz(kb_paths:app_directory(OldApp)),
