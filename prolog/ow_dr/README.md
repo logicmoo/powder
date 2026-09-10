@@ -15,7 +15,7 @@ Set-Location C:\snet\PeTTa\repos\openworld_dr
 swipl .\prolog\ow_dr\compile_kb.pl -- KBs
 swipl .\prolog\ow_dr\compile_kb.pl -- KBs\tinyKB.kif
 
-# Start the browser with exactly KBs\tinyKB.kif.
+# Start the browser with saved sources, or all KB sources when unset.
 swipl .\prolog\ow_dr\app.pl
 
 # Select different sources or a different local port.
@@ -33,7 +33,9 @@ Settings > **Next server startup** stores an ordered list of `.kif`, `.krf`, and
 `.metta` files on the server. Paths are saved as canonical absolute paths and
 duplicates are removed without reordering the remaining entries. Enable the
 saved list and leave it empty to start with no KB. With no enabled saved list,
-the original default `KBs\tinyKB.kif` is retained. Explicit CLI sources override
+all original `.kif`, `.krf`, and `.metta` files under the repository KB root are
+selected, without a page-size limit. Companions, QLFs and JSON are not independent
+sources. Explicit CLI sources override
 the saved list. Saving settings does not load anything immediately, restart the
 server, or affect browser source-selection drafts.
 

@@ -1,6 +1,7 @@
 :- module(kb_config, [server_settings/1, save_server_settings/3, startup_selection/3, settings_file/1]).
 :- use_module(kb_limits).
 :- use_module(kb_paths).
+:- use_module(kb_compile, [discover_sources/2]).
 :- use_module(kb_cache, [file_digest/2,try_lock/2,release_lock/1,stage_path/2,install_stage/2,remove_if_exists/1]).
 :- use_module(library(http/json)).
 :- use_module(library(filesex)).
@@ -15,8 +16,11 @@ server_settings(Settings) :-
     settings_file(File),
     (exists_file(File)->
       setup_call_cleanup(open(File,read,S,[encoding(utf8)]),json_read_dict(S,Saved),close(S)),
-      validate_settings(Saved,Config),file_digest(File,Revision)
-    ;server_defaults(Config),Revision=none),
+      validate_settings(Saved,Stored),file_digest(File,Revision)
+    ;server_defaults(Stored),Revision=none),
+    (Stored.startupConfigured==false->
+      default_startup_sources(Files),Config=Stored.put(startupFiles,Files)
+    ;Config=Stored),
     findall(_{path:Path,message:"Source is missing; startup will report a failed load."},
       (member(Path,Config.startupFiles),\+exists_file(Path)),Issues),
     Settings=Config.put(_{revision:Revision,issues:Issues}).
@@ -68,4 +72,7 @@ pool_setting(Pools,Name,Name-Profile) :-
 startup_selection(Explicit,Settings,Sources) :-
     (Explicit\=[]->Sources=Explicit
     ;Settings.startupConfigured==true->Sources=Settings.startupFiles
-    ;default_source(Source),Sources=[Source]).
+    ;default_startup_sources(Sources)).
+
+default_startup_sources(Sources) :-
+    kb_root(Root),discover_sources([Root],Files),maplist(canonical_source,Files,Sources).
