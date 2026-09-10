@@ -187,7 +187,7 @@ index headers; it remains unchanged in runtime snapshot copies. Older headers
 without this optional field remain readable. Raw readers validate these records and guarded clause
 structure as data; they do not consult arbitrary directives.
 
-IDs are atoms formed by `a` plus the hexadecimal full Unix-microsecond value.
+Offline occurrence IDs are atoms formed by `a` plus the hexadecimal full Unix-microsecond value.
 Native locks protect the durable allocator and occurrence assignments.
 `--state-dir=PATH` selects the durable state directory; it must not be pruned
 with disposable `.pl` or index caches. Keep occurrence state with its source
@@ -209,7 +209,9 @@ immediate include frame; it does not reopen the parent or select a stream by
 matching filenames.
 
 `kb_runtime:xc_src/2` returns fresh semantic clauses,
-`xc_clause_handle/2` returns native references, and `xc_plvars/2` computes
+`xc_clause_handle/2` returns a native source-record reference with the original
+generated-file/line properties, `xc_form_handle/2` returns the shared executable
+clause reference, and `xc_plvars/2` computes
 deterministic ground Prolog-safe names. Native handles are never serialized.
 `xc_indexed_constant/2` derives distinct semantic constants, including nested
 heads, without indexing metadata or context-only MT references.
@@ -225,6 +227,30 @@ Legacy files are **not** accepted as fresh, validated modern caches; recompile
 their original sources to migrate.
 
 ## Queries and active generations
+
+Runtime loading interns variant-equivalent forms independently of microtheory.
+There is **one dynamically asserted executable clause per form**, and **one
+primary assertion number per (form, microtheory)**. Repeated source occurrences
+within that MT join their contributions into the existing number. Another MT
+retains a different number and separate properties, linked by
+`kb_runtime:xc_same_form/2` and the API's `sameForm` links. Ordinary unification
+or subsumption is never used for form identity.
+
+Each source contribution retains its own occurrence ID, source/line, original
+variable names, MT and properties. The API exposes these together in
+`contributions`; `aliases` and `xc_source_id/2` retain original IDs. Joined
+properties never cross MT records. Query proof steps include only supporting
+contributions from that query's selected generation and MT.
+
+Existence checks, dynamic assertion, MT identity selection and contribution
+updates are atomic across loader workers. Unloading a source removes only its
+contributions. Its MT number survives while any remaining source supports it;
+the shared executable clause survives while any MT supports it. Generation
+leases also retain the old contributions for already-running queries.
+Status distinguishes primary `assertions`, shared `forms`, and source
+`occurrences`. Original source files and offline companions are not rewritten
+to impose runtime deduplication. Restart once before loading existing snapshots
+under this new runtime representation.
 
 The browser's **Run query** action accepts S-expressions, a microtheory (or all contexts),
 a result limit, and a timeout. Results include bindings and successful proof

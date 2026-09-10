@@ -160,6 +160,9 @@ function propertyList(properties, { context } = {}) {
       const rows = splitMappingRows(Array.isArray(property.value) ? property.value : []);
       value = element('span', {}, `${number(rows.ids.length)} mapping IDs · ${number(rows.markers.length)} diagnostic markers${rows.other.length ? ` · ${number(rows.other.length)} other annotations` : ''}`);
     } else if (property.name === 'microtheory' && context) value = mtLink(context.mt, context.mtExpression);
+    else if (context?.contributions?.length > 1 && ['source_file', 'source_line', 'kb_names'].includes(property.name)) {
+      value = element('span', { className: 'muted' }, 'See the associated source contributions below.');
+    }
     else value = property.value?.type ? renderExpression(property.value) : element('pre', {}, displayProperty(property.value));
     list.append(element('dt', {}, property.name),
       element('dd', {}, value));
@@ -249,6 +252,15 @@ function assertionCard(assertion, term) {
   const card = element('article', { className: 'assertion-card' },
     roles.length > 0 && element('div', { className: 'role-labels' }, roles.map(role => element('span', {}, labels[role]))),
     renderExpression(assertion.expression), diagnosticsPanel(assertion), footer);
+  if (assertion.sameForm?.length) card.append(element('div', { className: 'same-form-links' },
+    'Same form in other microtheories: ',
+    assertion.sameForm.flatMap((id, index) => [index ? ', ' : '', link(id, 'assertion', { id })])));
+  if (assertion.contributions?.length) card.append(element('details', { className: 'source-contributions' },
+    element('summary', {}, `${number(assertion.contributions.length)} source ${assertion.contributions.length === 1 ? 'contribution' : 'contributions'}`),
+    assertion.contributions.map(item => element('section', {},
+      element('p', {}, sourceLink(item.source, item.line), ' · ', element('code', {}, item.sourceId)),
+      element('p', {}, mtLink(item.mt, item.mtExpression)),
+      propertyList(item.properties)))));
   if (mapping.other.length) {
     card.append(element('details', { className: 'assertion-properties' },
       element('summary', {}, 'Other mapping annotations'),
@@ -770,7 +782,10 @@ function queryResults(data) {
           link(step.id, 'assertion', { id: step.id }, 'assertion-id'),
           Number.isFinite(step.before) && Number.isFinite(step.after)
             ? element('span', { className: 'muted' }, `Bound slots ${step.before} → ${step.after}`) : null),
-        renderExpression(step.expression))))));
+        renderExpression(step.expression),
+        step.contributions?.length ? element('details', {}, element('summary', {}, 'Supporting source contributions'),
+          step.contributions.map(item => element('div', {}, sourceLink(item.source,item.line),
+            ' · ',element('code',{},item.sourceId),propertyList(item.properties)))) : null)))));
     results.append(body);
   });
   return results;

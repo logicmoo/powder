@@ -206,7 +206,7 @@ action(microtheories,_,Reply) :-
 action(assertion,Request,Reply) :-
     http_parameters(Request,[id(Id,[atom])]),
     with_mutex(openworld_store,
-      (kb_store:assertion(Id,Reply)->true;throw(error(existence_error(assertion,Id),_)))).
+      (kb_store:lookup_assertion(Id,Reply)->true;throw(error(existence_error(assertion,Id),_)))).
 action(catalog,_,Reply) :- catalog(Reply).
 action(load,Request,Reply) :-
     body(Request,Body),must_be(list,Body.files),must_be(integer,Body.generation),

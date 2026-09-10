@@ -2,7 +2,7 @@
                     assertion/2, assertions/1, terms/1, predicates/1,
                     generation/1, source_info/2, query_text/5,
                     term_assertions/2, mt_assertions/2, term_exists/1, microtheories/1,
-                    load_sources_worker/3, unload_source_worker/2, with_generation/1]).
+                    load_sources_worker/3, unload_source_worker/2, with_generation/1, lookup_assertion/2]).
 :- use_module(kb_paths).
 :- use_module(kb_runtime, []).
 :- use_module(kb_compile, []).
@@ -11,6 +11,7 @@
 :- use_module(kb_reader, []).
 :- use_module(kb_terms).
 :- use_module(kb_activity).
+:- use_module(kb_forms, []).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
 :- use_module(library(lists)).
@@ -59,21 +60,13 @@ prepare_sources(Paths,Options,Prepared,Start) :-
     ( Summary.failures =:= 0, Summary.busy =:= 0 -> true
     ; throw(error(compile_incomplete(Summary), _))
     ),
-    maplist(prepare_source, Summary.results, Prepared),
-    validate_unique_ids(Prepared).
+    maplist(prepare_source, Summary.results, Prepared).
 
 prepare_source(Info, prepared(Source, WithHash, Records)) :-
     absolute_file_name(Info.source,Source,[access(read)]),
     kb_cache:read_cache(Info.normalized, _, Records),
     crypto_file_hash(Info.normalized,Hash,[algorithm(sha256)]),
     WithHash=Info.put(outputHash,Hash).
-
-validate_unique_ids(Prepared) :-
-    findall(Id, (member(prepared(_,_,Records),Prepared), member(record(Id,_,_),Records)), Ids),
-    msort(Ids, Sorted),
-    ( append(_, [Id,Id|_], Sorted) ->
-        throw(error(conflicting_assertion_id(Id), _))
-    ; true).
 
 install_generation(Prepared, Expected, Start, Status) :-
     with_mutex(openworld_store,
@@ -127,11 +120,14 @@ commit_generation(Staged, Current) :-
 
 activate_source(entry(Source,Info,Module,Native,Records,_)) :-
     assertz(source_info(Source,Info)), assertz(source_module(Source,Module,Native)),
+    kb_runtime:activate_native(Native),
     maplist(activate_record(Source,Module), Records).
-activate_record(Source, Module, record(Id,Semantic,Metadata)) :-
-    memberchk(xc_microtheory(Id,Mt), Metadata),
-    memberchk(xc_source_line(Id,Line), Metadata),
-    memberchk(xc_kb_names(Id,Names), Metadata),
+activate_record(Source, Module, record(Occurrence,Semantic,Original)) :-
+    once(kb_forms:contribution(Module,_,Occurrence,Id,_,Ref)),
+    memberchk(xc_microtheory(Occurrence,Mt), Original),
+    memberchk(xc_source_line(Occurrence,Line), Original),
+    memberchk(xc_kb_names(Occurrence,Names), Original),
+    maplist(primary_metadata(Id),Original,Metadata),
     context_key(Mt,MtKey),term_ast(Mt,[],MtExpression),
     (memberchk(xc_mapping_rows(Id,Mapping),Metadata) -> true ; Mapping=[]),
     mapping_rows_json(Mapping,MappingJSON),
@@ -143,12 +139,34 @@ activate_record(Source, Module, record(Id,Semantic,Metadata)) :-
     kb_index:semantic_constants(Semantic,Constants),
     signature(Semantic,Predicate),
     public_path(Source,Public),
-    assertz(assertion(Id, _{id:Id,expression:AST,mt:MtKey,mtExpression:MtExpression,source:Public,
+    metadata_json(Original,OriginalProperties),
+    clause_property(Ref,file(Generated)),clause_property(Ref,line_count(NativeLine)),
+    Contribution=_{sourceId:Occurrence,source:Public,line:Line,mt:MtKey,mtExpression:MtExpression,
+                  names:Names,properties:OriginalProperties,module:Module,
+                  generatedFile:Generated,generatedLine:NativeLine},
+    Data=_{id:Id,expression:AST,mt:MtKey,mtExpression:MtExpression,source:Public,
             line:Line,names:Names,properties:Properties,mappingRows:MappingJSON,
             notices:Notices,warnings:Warnings,errors:Errors,
-            predicate:Predicate,module:Module,constants:Constants})),
-    forall(member(C,Constants),assertz(constant_locator(C,Id))),
-    assertz(mt_locator(Mt,Id)).
+            predicate:Predicate,module:Module,constants:Constants,
+            aliases:[Occurrence],contributions:[Contribution],sameForm:[]},
+    (retract(assertion(Id,Existing))->join_assertion(Existing,Data,Joined),assertz(assertion(Id,Joined))
+    ;assertz(assertion(Id,Data)),
+     forall(member(C,Constants),assertz(constant_locator(C,Id))),assertz(mt_locator(Mt,Id))).
+
+primary_metadata(Id,Term,Primary) :- Term=..[Name,_,Value],Primary=..[Name,Id,Value].
+join_assertion(Existing,Incoming,Joined) :-
+    foldl(join_data_field(Incoming),[properties,mappingRows,notices,warnings,errors,aliases,contributions],Existing,Joined).
+join_data_field(Incoming,Key,Before,After) :-
+    get_dict(Key,Before,A),get_dict(Key,Incoming,B),append(A,B,All),list_to_set(All,Values),
+    After=Before.put(Key,Values).
+
+refresh_assertions :-
+    retractall(assertion(_,_)),retractall(constant_locator(_,_)),retractall(mt_locator(_,_)),
+    forall((source_module(Source,Module,Native),
+            kb_forms:contribution(Module,Native,Occurrence,Id,Metadata,_),
+            kb_forms:form_record(Id,Semantic,_,_)),
+      activate_record(Source,Module,record(Occurrence,Semantic,Metadata))),
+    rebuild_rankings.
 
 record_messages(Metadata,Id,Property,Messages) :-
     atom_concat(xc_,Property,Name),Fact=..[Name,Id,Values],
@@ -188,10 +206,7 @@ unload_locked(Path, Expected, Status) :-
     ; throw(error(existence_error(active_source,Path),_)) ),
     transaction((
         retractall(source_module(Path,_,_)),retractall(source_info(Path,_)),
-        public_path(Path,Public),
-        forall((assertion(Id,Data),Data.source==Public),
-          (retractall(assertion(Id,_)),retractall(constant_locator(_,Id)),retractall(mt_locator(_,Id)))),
-        rebuild_rankings,retractall(generation(_)),
+        refresh_assertions,retractall(generation(_)),
         Next is Current+1,assertz(generation(Next))
     )),
     retire_native(Native), status(Status).
@@ -217,6 +232,9 @@ release_native(File) :-
     ;retract(retired_native(File))->cleanup_native(File);true).
 
 active_modules(Modules) :- findall(M,source_module(_,M,_),Modules).
+lookup_assertion(Id,Data) :-
+    (assertion(Id,Data)->true;
+      active_modules(Modules),kb_forms:resolve_id(Modules,Id,Primary),assertion(Primary,Data)).
 assertions(Items) :-
     ordered_assertions(Ids),maplist(assertion,Ids,Items).
 term_assertions(Term,Items) :-
@@ -234,6 +252,10 @@ microtheory_item(Mt-Count,_{mt:Key,mtExpression:Expression,count:Count}) :-
     context_key(Mt,Key),term_ast(Mt,[],Expression).
 
 rebuild_rankings :-
+    active_modules(Modules),
+    forall(assertion(Id,Data),
+      (findall(Other,kb_forms:same_form(Modules,Id,Other),Related0),sort(Related0,Related),
+       retract(assertion(Id,Data)),assertz(assertion(Id,Data.put(sameForm,Related))))),
     findall(C,(assertion(_,Data),member(C,Data.constants)),Constants),
     msort(Constants,Sorted), clumped(Sorted,Counts),
     retractall(term_count(_,_)),forall(member(C-N,Counts),assertz(term_count(C,N))),
@@ -254,7 +276,10 @@ rebuild_rankings :-
     maplist(microtheory_item,MtCounts,Contexts),length(Contexts,MtCount),
     retractall(microtheory_catalog(_)),assertz(microtheory_catalog(Contexts)),
     retractall(current_counts(_)),
-    assertz(current_counts(_{assertions:Count,terms:TermCount,predicates:PredicateCount,microtheories:MtCount})).
+    kb_forms:form_count(Modules,FormCount),
+    findall(N,(assertion(_,Data),length(Data.contributions,N)),ContributionCounts),sum_list(ContributionCounts,Occurrences),
+    assertz(current_counts(_{assertions:Count,forms:FormCount,occurrences:Occurrences,
+                            terms:TermCount,predicates:PredicateCount,microtheories:MtCount})).
 
 status(Status) :-
     generation(G),
@@ -288,11 +313,20 @@ solution_json(Names,Modules,solution(Mt,Variables,Steps),
     maplist(step_json(Modules),Steps,Proof).
 binding_json(Name,Value,_{name:Name,value:AST}) :- term_ast(Value,[Name],AST).
 step_json(Modules,step(Id,Kind,Slots,Before,After),JSON) :-
-    member(Module,Modules),kb_runtime:module_assertion(Module,Id,Semantic,_),!,
-    kb_runtime:module_metadata(Module,kb_names,Id,Names),
-    kb_runtime:module_metadata(Module,microtheory,Id,Mt),
+    kb_forms:form_record(Id,Semantic,Mt,_),
+    kb_runtime:assertion_contributions(Modules,Id,Contributions),
+    Contributions=[contribution(_,_,Occurrence,Metadata,_)|_],
+    memberchk(xc_kb_names(Occurrence,Names),Metadata),
+    maplist(proof_contribution,Contributions,Evidence),
     context_key(Mt,MtKey),term_ast(Mt,[],MtExpression),
     maplist(binding_json,Names,Slots,Bindings),
     bound_semantic_ast(Semantic,Names,Slots,Expression),
     JSON=_{id:Id,kind:Kind,expression:Expression,mt:MtKey,mtExpression:MtExpression,
-           before:Before,after:After,bindings:Bindings}.
+           before:Before,after:After,bindings:Bindings,contributions:Evidence}.
+proof_contribution(contribution(_,_,Occurrence,Metadata,_),Evidence) :-
+    memberchk(xc_source_file(Occurrence,Source),Metadata),
+    memberchk(xc_source_line(Occurrence,Line),Metadata),
+    memberchk(xc_microtheory(Occurrence,Mt),Metadata),
+    memberchk(xc_kb_names(Occurrence,Names),Metadata),
+    context_key(Mt,Key),public_path(Source,Public),metadata_json(Metadata,Properties),
+    Evidence=_{sourceId:Occurrence,source:Public,line:Line,mt:Key,names:Names,properties:Properties}.

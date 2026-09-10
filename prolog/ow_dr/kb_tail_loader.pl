@@ -68,7 +68,6 @@ expand_term_data(kb_cache_header(Header), _, _, []) :- !,
 expand_term_data(kb_cache_footer(_), _, _, []) :- !.
 expand_term_data((Head :- Guard), Module, Stream, Expanded) :- !,
     kb_runtime:valid_guarded_clause(Head, Guard),
-    functor(Head, Name, Arity),
     kb_runtime:install_guard(Module, Guard),
     arg(1,Guard,Id),
     retractall(last_assertion(Stream,_)),assertz(last_assertion(Stream,Id)),
@@ -77,8 +76,8 @@ expand_term_data((Head :- Guard), Module, Stream, Expanded) :- !,
     retractall(pending_origin(Stream,_,_,_)),
     properties_terms(Props,Id,Stream,Metadata),
     metadata_expansions(Metadata,Declarations),
-    Expanded = [(:- dynamic(Name/Arity)), (:- multifile(Name/Arity)),
-                (Head :- Guard)|Declarations].
+    Expanded = [(:- dynamic(xc_native_clause/3)), (:- multifile(xc_native_clause/3)),
+                xc_native_clause(Id,Head,Guard)|Declarations].
 expand_term_data(Term, _, Stream, Expanded) :-
     nonvar(Term),functor(Term,last_clause,_), !,
     (last_assertion(Stream,Id)->true;native_error('Orphan last_clause metadata')),
