@@ -14,6 +14,19 @@ test(absolute_rejected,[throws(error(permission_error(access,kb_source,_),_))]) 
     repo_root(Root),authorize_sources([Root],_).
 test(backslash_rejected,[throws(error(permission_error(access,kb_source,_),_))]) :-
     authorize_sources(['KBs\\tinyKB.kif'],_).
+test(canonical_discovery_requires_trusted_local_request,
+     [throws(error(permission_error(execute,prolog_query,untrusted_origin),_))]) :-
+    kb_server:action(catalog,[search([canonical=true]),peer(ip(192,0,2,1)),host(localhost),port(3050)],_).
+test(canonical_discovery_is_additive_only_for_private_mode,
+     [setup((tmp_file_stream(text,File,Stream),write(Stream,'fixture'),close(Stream))),
+      cleanup((retractall(kb_catalog:source_measure(File,_,_,_)),delete_file(File)))]) :-
+    size_file(File,Size),time_file(File,Time),
+    statistics(walltime,[Start,_]),Entry=_{path:File,sizeBytes:Size,modified:Time},
+    kb_catalog:catalog_file(Start,false,Entry,Public),
+    kb_catalog:catalog_file(Start,true,Entry,Private),
+    assertion(\+get_dict(canonicalPath,Public,_)),
+    resolve_source(File,Canonical),assertion(Private.canonicalPath==Canonical),
+    assertion(Private.path==Public.path).
 test(page_limits) :-
     kb_server:page([a,b,c],1,1,_{items:[b],total:3,offset:1,limit:1}).
 test(empty_page) :-

@@ -21,6 +21,8 @@ test('real browser exercises the API contract, source transactions, rendering an
   let failNextLoad = false;
   let failContextList = false;
   let failCodeReload = false;
+  let extraCatalogNodes = [];
+  let failCanonicalDiscovery = false;
   let compilerDiagnostics = {};
   const requests = [];
   const apiRequests = name => requests.filter(request => request.path === apiPath(name));
@@ -121,10 +123,20 @@ test('real browser exercises the API contract, source transactions, rendering an
         const mountedPath = url.pathname.startsWith(APP_BASE) ? `/${url.pathname.slice(APP_BASE.length)}` : null;
         switch (mountedPath) {
           case '/api/status': return json(status());
-          case '/api/kb/catalog': return json({ root: 'KBs', generation, active, nodes: [
+          case '/api/kb/catalog': {
+            const canonical = url.searchParams.get('canonical') === 'true';
+            if (canonical && failCanonicalDiscovery) return json({ error: { code: 'discovery_failed', message: 'Discovery unavailable' } }, 500);
+            const nodes = [
             { type: 'directory', path: 'KBs/alpha', name: 'alpha', children: [file('KBs/alpha/a.kif'), file('KBs/alpha/b.krf'), file('KBs/alpha/c.metta')] },
             file('KBs/tinyKB.kif'),
-          ] });
+            ...extraCatalogNodes,
+            ];
+            const canonicalNodes = nodes => nodes.map(node => node.type === 'file'
+              ? { ...node, canonicalPath: `C:/fixture/${node.path}` }
+              : { ...node, children: canonicalNodes(node.children ?? []) });
+            return json({ root: 'KBs', generation, active, nodes: canonical ? canonicalNodes(nodes) : nodes,
+              ...(canonical ? { canonicalRoot: 'C:/fixture', pathCaseSensitive: false } : {}) });
+          }
           case '/api/search': return json(page(active.length ? [{ term: 'x_Dog', count: 3 }, { term: 'x_Animal', count: 2 }] : [], url));
           case '/api/predicates': return json(page(active.length ? [{ term: 'x_isa', count: 3, arity: 2 }] : [], url));
           case '/api/term': {
@@ -433,6 +445,41 @@ test('real browser exercises the API contract, source transactions, rendering an
     })()`), true);
     assert.equal(apiRequests('server/settings/save').length, 1);
     assert.deepEqual(serverConfig.pools, Object.fromEntries(['loader', 'inference', 'http'].map(pool => [pool, { start: 5, max: 10, spare: 2 }])));
+    extraCatalogNodes = [{ type: 'directory', path: 'KBs/unseen', children: [
+      ...Array.from({ length: 405 }, (_, i) => file(`KBs/unseen/${i}.krf`)),
+      file('KBs/unseen/generated.krf.pl'), file('KBs/unseen/generated.krf.pl.qlf'),
+      file('KBs/unseen/generated.krf.inventory.json'),
+    ] }];
+    await evaluate(`(() => {
+      const add = Array.from(document.querySelectorAll(".startup-settings button")).find(button => button.textContent === "Add source");
+      for (const path of ["c:\\\\fixture\\\\kbs\\\\alpha\\\\a.kif", "D:/other/KBs/alpha/a.kif"]) {
+        add.click(); document.querySelector(".startup-source-list li:last-child input").value = path;
+      }
+    })()`);
+    const selectAll = 'Array.from(document.querySelectorAll(".startup-settings button")).find(button => button.textContent === "Select All Files")';
+    assert.equal(await evaluate(`${selectAll}.type`), 'button');
+    const beforeSelect = { saves: apiRequests('server/settings/save').length, loads: apiRequests('kb/load').length, generation };
+    await evaluate(`${selectAll}.click()`);
+    await wait('document.querySelector(".startup-settings").textContent.includes("draft has not been saved or loaded")');
+    const selectedStartup = await evaluate('Array.from(document.querySelectorAll(".startup-source-list input"), input => input.value)');
+    assert.equal(selectedStartup.length, 410);
+    assert.ok(selectedStartup.includes('C:/fixture/KBs/unseen/404.krf'));
+    assert.ok(selectedStartup.includes('D:/other/KBs/alpha/a.kif'));
+    assert.ok(!selectedStartup.some(path => /\.(pl|qlf|json)$/u.test(path)));
+    assert.deepEqual(apiRequests('kb/catalog').at(-1).params, { canonical: 'true' });
+    assert.equal(apiRequests('server/settings/save').length, beforeSelect.saves);
+    assert.equal(apiRequests('kb/load').length, beforeSelect.loads);
+    assert.equal(generation, beforeSelect.generation);
+    assert.deepEqual(serverConfig.startupFiles, active);
+    failCanonicalDiscovery = true;
+    await evaluate(`${selectAll}.click()`);
+    await wait('document.querySelector(".startup-settings [role=alert]")?.textContent.includes("Discovery unavailable")');
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".startup-source-list input"), input => input.value)'), selectedStartup);
+    assert.equal(apiRequests('server/settings/save').length, beforeSelect.saves);
+    failCanonicalDiscovery = false; extraCatalogNodes = [];
+    await evaluate(`${selectAll}.click()`);
+    await wait('document.querySelector(".startup-settings").textContent.includes("draft has not been saved or loaded")');
+    await evaluate('Array.from(document.querySelectorAll(".startup-settings button")).find(button => button.textContent === "Use currently loaded sources").click()');
     assert.equal(await evaluate('document.querySelector(\'input[name="pageSize"]\').value'), '400');
     assert.equal(await evaluate('document.querySelector(\'input[name="queryLimit"]\').value'), '400');
     await evaluate('document.querySelector(\'input[name="pageSize"]\').value = "0"; document.querySelector(".settings-form").requestSubmit()');

@@ -207,7 +207,10 @@ action(assertion,Request,Reply) :-
     http_parameters(Request,[id(Id,[atom])]),
     with_mutex(openworld_store,
       (kb_store:lookup_assertion(Id,Reply)->true;throw(error(existence_error(assertion,Id),_)))).
-action(catalog,_,Reply) :- catalog(Reply).
+action(catalog,Request,Reply) :-
+    http_parameters(Request,[canonical(Canonical,[boolean,default(false)])]),
+    (Canonical==true->trusted_local_request(Request);true),
+    catalog(Canonical,Reply).
 action(load,Request,Reply) :-
     body(Request,Body),must_be(list,Body.files),must_be(integer,Body.generation),
     authorize_sources(Body.files,Paths),

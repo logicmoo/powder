@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON, supportedSource } from '../web/model.js';
+import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, mergeStartupSources, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON, supportedSource } from '../web/model.js';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, validateSettings } from '../web/settings.js';
 import { APP_BASE, apiPath, appPath } from '../web/paths.js';
 
@@ -97,6 +97,23 @@ test('large shallow trees keep exact selection counts', () => {
   assert.equal(model.state('KBs/large').selected, 9999);
   assert.equal(model.selectedFiles().length, 9999);
   assert.ok(!model.selected.has('KBs/large/5000.kif'));
+});
+
+test('startup Select All uses complete discovery and canonical identities without losing external entries', () => {
+  const files = Array.from({ length: 405 }, (_, index) => file(`KBs/all/${index}.krf`,
+    { canonicalPath: `C:/repo/KBs/all/${index}.krf` }));
+  const catalog = { canonicalRoot: 'C:/repo', pathCaseSensitive: false, nodes: [
+    { type: 'directory', path: 'KBs/all', children: [...files,
+      file('KBs/all/derived.krf.pl'), file('KBs/all/derived.krf.pl.qlf'), file('KBs/all/derived.krf.inventory.json')] },
+  ] };
+  const existing = ['c:\\REPO\\kbs\\all\\0.krf', 'KBs/all/./0.krf', 'D:/other/KBs/all/0.krf'];
+  const selected = mergeStartupSources(existing, catalog);
+  assert.equal(selected.length, 406);
+  assert.deepEqual(selected.slice(0, 2), [existing[0], existing[2]]);
+  assert.ok(selected.includes('C:/repo/KBs/all/404.krf'));
+  assert.deepEqual(mergeStartupSources(selected, catalog), selected);
+  assert.throws(() => mergeStartupSources(existing, { nodes: files }), /Update the server/u);
+  assert.equal(existing.length, 3);
 });
 
 test('URL state preserves filters and safely bounds pagination', () => {

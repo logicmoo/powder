@@ -1,5 +1,5 @@
 import { assertionRoles, contextExpression, contextInputText, contextLabel, expressionText, groupAssertions, renderExpression, routeHref, symbolLabel } from './render.js';
-import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON } from './model.js';
+import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, mergeStartupSources, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON } from './model.js';
 import { collectDiagnostics, diagnosticCounts, diagnosticMessages, diagnosticProperty, mappingRowsOf, splitMappingRows } from './diagnostics.js';
 import { DEFAULT_SETTINGS, MAXIMUMS, loadSettings, saveSettings } from './settings.js';
 import { apiPath } from './paths.js';
@@ -1159,6 +1159,23 @@ function serverSettingsPanel(signal) {
           }))));
       const feedback = element('div', { 'aria-live': 'polite' });
       const save = element('button', { type: 'submit', className: 'button' }, 'Save next-start settings');
+      const selectAll = button('Select All Files', async () => {
+        selectAll.disabled = true;
+        feedback.setAttribute('role', 'status');
+        feedback.replaceChildren(element('p', {}, 'Discovering all KB source files…'));
+        try {
+          const catalog = await api('kb/catalog', { canonical: true }, { signal });
+          const selected = mergeStartupSources(Array.from(rows.querySelectorAll('input'), input => input.value), catalog);
+          rows.replaceChildren(); for (const path of selected) addRow(path);
+          configured.checked = true;
+          feedback.replaceChildren(element('p', {}, `${number(selected.length)} startup entries selected. This draft has not been saved or loaded.`));
+        } catch (error) {
+          if (error.name !== 'AbortError') {
+            feedback.setAttribute('role', 'alert');
+            feedback.replaceChildren(element('p', { className: 'error-panel' }, error.message));
+          }
+        } finally { selectAll.disabled = false; }
+      }, 'button secondary');
       form.onsubmit = async event => {
         event.preventDefault();
         save.disabled = true;
@@ -1189,7 +1206,7 @@ function serverSettingsPanel(signal) {
       contents.replaceChildren(...(config.issues ?? []).map(issue => element('p', { role: 'alert' }, issue.message)),
       element('label', { className: 'field' }, element('span', {}, configured, ' Use the saved source list on server startup')),
       element('p', { className: 'muted' }, 'Unchecked preserves the default initial KB. Checked with an empty list loads no KB. Explicit command-line sources always take precedence.'),
-      rows, button('Add source', () => addRow(''), 'button secondary'),
+      rows, button('Add source', () => addRow(''), 'button secondary'), selectAll,
       button('Use currently loaded sources', () => { rows.replaceChildren(); for (const file of state.status?.files ?? []) addRow(file.path); configured.checked = true; }, 'button secondary'),
       save, feedback);
     } catch (error) {
