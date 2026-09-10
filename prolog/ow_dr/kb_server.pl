@@ -69,10 +69,14 @@ start_server(Port) :-
     effective_server_settings(Settings),
     start_server(Port,Settings).
 start_server(Port,Settings) :-
+    with_mutex(powder_http_lifecycle,start_server_locked(Port,Settings)).
+start_server_locked(Port,Settings) :-
     must_be(integer,Port),between(1,65535,Port),
+    (http_server_property(Port,goal(_))->permission_error(start,http_listener,Port);true),
     start_pools(Settings),
-    http_server(http_dispatch,[port('127.0.0.1':Port),workers(Settings.pools.http.start)]),
     attach_http(Port,Settings.pools.http),
+    catch(http_server(http_dispatch,[port('127.0.0.1':Port),workers(Settings.pools.http.start)]),
+          Error,(detach_http(Port),throw(Error))),
     assertz(server_port(Port)).
 stop_server :-
     forall(retract(server_port(Port)),
