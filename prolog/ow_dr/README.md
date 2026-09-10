@@ -92,6 +92,39 @@ recovers abandoned work; `--force-recover` rebuilds only affected interrupted
 sources. Neither overrides a live native lock. Ordinary `--force` rebuilds every
 selected source.
 
+## Offline dynamic QLF conversion
+
+The standalone command intentionally uses the requested spelling:
+
+```powershell
+swipl .\prolog\ow_dr\to_dynanic_qlf.pl -- KBs
+swipl .\prolog\ow_dr\to_dynanic_qlf.pl -- KBs\tinyKB.kif.pl
+```
+
+It reads complete compiled `.kif.pl`, `.krf.pl`, and `.metta.pl` companions as
+data, builds one QLF per file, and exits. It does not start powder/SWISH, HTTP,
+loader/inference pools, or an active KB. Source/index files and `XXXX` counting
+artifacts are not conversion inputs. All records, duplicates, real IDs,
+microtheories, variable sharing and metadata are retained: no offline interning,
+deduplication or renumbering occurs.
+
+For `example.krf.pl`, outputs are `example.krf.pl.qlf`, its
+`.qlf.meta.pl` identity manifest, and `.qlf-stage.pl` controlled staging source.
+Every staging KB predicate and metadata predicate is declared **dynamic and
+multifile** before clauses are installed; live shared form predicates also
+retain both flags. No `compile_predicates/1` is used. Runtime form sharing
+remains a separate later operation.
+
+`kb_qlf:convert_companion(File,Options,Result)` is the callable offline API.
+Options include `force(true)`; the CLI accepts `--force`. Valid converter-owned
+caches are reused. Input hash, normalized identity, converter implementation,
+SWI version/architecture/address width, staging hash and QLF binary hash are
+checked. Unknown preexisting outputs are refused rather than overwritten.
+Per-file locks and staged publication protect final QLF files; failures retain
+honest errors and the batch continues. Importing the utility does not run its
+CLI or load a default corpus. Generated binaries/staging files are derived
+local artifacts and are not automatically committed.
+
 ## Dialects and mappings
 
 KIF and KRF default to ISO-8859-1 for the legacy corpus. Explicit `--encoding=utf8`
@@ -440,6 +473,60 @@ set smaller startup/maximum values when appropriate.
 A server predating this service needs one normal restart to create the pools
 and apply startup settings. Application-code reload may install the API/UI code
 but deliberately does not bootstrap or resize an already running server.
+
+## On-disk inventory reports
+
+`kb_inventory:inventory(SourceDirectory, ReportDirectory)` scans the original
+KIF/KRF/MeTTa files as data, without consulting, compiling, importing, or
+executing KB expressions. It writes derived `<source>.inventory.json` sidecars
+and a `microtheory` subdirectory containing one safe, readable JSON filename per
+MT plus `_catalog.json`. Compound contexts use names such as
+`DataOfFn_Something.json`; canonical identities are retained inside the data,
+and case-insensitive filename collisions receive stable hash suffixes.
+Existing unrelated JSON files are not overwritten.
+
+The report directory contains `microtheories.csv`,
+`microtheory-predicates-files.csv`, `kb-file-counts.csv`, a complete NDJSON
+per-file stream, and `summary.json`. Counts are disk occurrences, not runtime
+form/MT deduplication. Rules count executable `<===` heads; GAFs are ground
+atomic assertions. Non-ground and logical formula assertions are counted
+separately. Declaration targets of `argIsa`, `argGenl`, `resultIsa`,
+`resultGenl`, `argFormat`, known indexed variants, range/domain declarations,
+and explicit arity declarations are included with distinct reference counts.
+An argument-position number is never treated as full predicate arity.
+
+Companion `physicalLineCount` is the exact number of LF bytes, equivalent to
+`wc -l`, including metadata and directives and excluding any unterminated final
+line. Parsed semantic clauses, metadata facts, and directives have separate
+counts. Missing/unreadable/stale/changing evidence is labelled explicitly.
+Sources, normalized companions, indexes, allocator state and running
+generations are not changed. Inventory JSON is generated local data and should
+not be automatically staged or pushed.
+
+`kb_inventory_links:extend_inventory(SourceDirectory, ReportDirectory)` adds a
+compiled-companion-only projection to the same sidecars/catalogs without
+repeating the original-source or LF-count pass. It discovers relations whose
+first **and** second arguments have Microtheory-valued schema declarations
+(`argIsa`, `arg1Isa`, `arg2Isa`, plus documented explicit subtype/predicate
+specialization evidence). `_relations.json` contains the actual evidence and
+unresolved one-sided signatures. This is not a name-suffix heuristic.
+
+Each MT JSON contains relation-specific `mtRelations` with `asArg1` and `asArg2`
+neighbors and source/line/asserting-context supports. `genlMt` additionally has
+the same two arrays as a convenient hierarchy field. Endpoints are associated
+with the MTs named in the relation, not its asserting context. Referenced-only
+MTs receive zero-clause entries. Multiple parents, cycles, self-links and support
+multiplicity remain explicit data; no inferred edge or runtime MT inheritance
+is introduced. Compiled metadata guards are removed for semantic identity:
+`Head :- x_cid(...)` remains a fact, while `x_cid_io` recovers the rule body.
+
+The projection retains an `assertion-identities.ndjson` stream for exact
+disk-backed global deduplication. Its variant hash is the runtime's
+`variant_sha1/2`; an exact variable-preserving canonical form is retained as a
+collision check. Source IDs/properties/locations are excluded from form identity,
+and canonical MTs distinguish per-MT assertion identities. This is separate
+from a requested quick **textual** `^x_` line count whose temporary copies only
+replace guard IDs with `XXXX`; that quick count does not alpha-normalize forms.
 
 ## Scope and current limitations
 
