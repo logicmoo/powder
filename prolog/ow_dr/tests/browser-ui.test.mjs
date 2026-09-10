@@ -69,7 +69,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     ] },
   ];
   const allAssertions = [...assertions, ...compoundAssertions, ...diagnosticAssertions];
-  const mappings = Array.from({ length: 55 }, (_, index) => ({
+  const mappings = Array.from({ length: 405 }, (_, index) => ({
     id: index === 0 ? 'instance-isa' : `row-${index}`, sumo: index === 0 ? 'instance' : `Source${index}`,
     cycl: '#$isa', conversion: 'rename(isa,2)', category: 'predicate', equivalence: 'close',
     confidence: 'medium', basis: index === 54 ? 'evidence' : 'guess', notes: 'Curated test fixture, not corpus evidence.',
@@ -150,8 +150,8 @@ test('real browser exercises the API contract, source transactions, rendering an
             return json(status());
           default: {
             const asset = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-            if (!['index.html', 'app.js', 'style.css', 'render.js', 'model.js', 'diagnostics.js'].includes(asset)) { response.writeHead(404); response.end(); return; }
-            response.writeHead(200, { 'Content-Type': asset.endsWith('.html') ? 'text/html' : asset.endsWith('.css') ? 'text/css' : 'text/javascript', 'Cache-Control': 'no-store' });
+            if (!['index.html', 'app.js', 'style.css', 'render.js', 'model.js', 'diagnostics.js', 'settings.js', 'settings.json'].includes(asset)) { response.writeHead(404); response.end(); return; }
+            response.writeHead(200, { 'Content-Type': asset.endsWith('.html') ? 'text/html' : asset.endsWith('.css') ? 'text/css' : asset.endsWith('.json') ? 'application/json' : 'text/javascript', 'Cache-Control': 'no-store' });
             response.end(await readFile(join(here, '..', 'web', asset)));
           }
         }
@@ -334,12 +334,27 @@ test('real browser exercises the API contract, source transactions, rendering an
     await route('#/mappings?basis=guess');
     assert.ok(await evaluate('document.querySelector(".mapping-table").textContent.includes("#$isa")'));
     assert.ok(await evaluate('document.querySelector(".mapping-table").textContent.includes("Curated guess")'));
-    assert.equal(await evaluate('document.querySelectorAll(".mapping-table tbody tr").length'), 50);
+    assert.equal(await evaluate('document.querySelectorAll(".mapping-table tbody tr").length'), 400);
     await evaluate('document.querySelector(".page-actions a:last-child").click()');
-    await wait('location.hash.includes("offset=50") && document.querySelectorAll(".mapping-table tbody tr").length === 4');
+    await wait('location.hash.includes("offset=400") && document.querySelectorAll(".mapping-table tbody tr").length === 4');
     await route('#/mappings?row=instance-isa');
     assert.equal(await evaluate('document.querySelectorAll(".mapping-table tbody tr").length'), 1);
     assert.ok(await evaluate('document.querySelector(".selected-mapping") !== null'));
+    await route('#/settings');
+    assert.equal(await evaluate('document.querySelector(\'input[name="pageSize"]\').value'), '400');
+    assert.equal(await evaluate('document.querySelector(\'input[name="queryLimit"]\').value'), '400');
+    await evaluate('document.querySelector(\'input[name="pageSize"]\').value = "0"; document.querySelector(".settings-form").requestSubmit()');
+    assert.ok(await evaluate('document.querySelector(".settings-feedback[role=alert]").textContent.includes("not saved")'));
+    await evaluate('document.querySelector(\'input[name="pageSize"]\').value = "125"; document.querySelector(\'input[name="queryLimit"]\').value = "350"; document.querySelector(".settings-form").requestSubmit()');
+    await route('#/search');
+    assert.equal(requests.filter(request => request.path === '/api/search').at(-1).params.limit, '125');
+    await route('#/query');
+    assert.equal(await evaluate('document.querySelector(\'input[name="limit"]\').value'), '350');
+    await cdp('Page.reload');
+    await wait('document.querySelector("textarea") !== null && document.querySelector("main").getAttribute("aria-busy") === "false"');
+    assert.equal(await evaluate('document.querySelector(\'input[name="limit"]\').value'), '350');
+    await route('#/microtheories');
+    assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), allContexts.length);
     await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await noOverflow();
     await route('#/term?term=x_compoundDemo');

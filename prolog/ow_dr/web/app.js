@@ -1,6 +1,7 @@
 import { assertionRoles, contextExpression, contextInputText, contextLabel, expressionText, groupAssertions, renderExpression, routeHref, symbolLabel } from './render.js';
 import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON } from './model.js';
 import { collectDiagnostics, diagnosticCounts, diagnosticMessages, diagnosticProperty, mappingRowsOf, splitMappingRows } from './diagnostics.js';
+import { DEFAULT_SETTINGS, MAXIMUMS, loadSettings, saveSettings } from './settings.js';
 
 const $ = selector => document.querySelector(selector);
 const content = $('#content');
@@ -10,7 +11,8 @@ const state = {
   status: null, catalog: null, selection: null, expanded: new Set(['KBs']),
   knownSources: new Set(), knownMappings: null, contexts: new Map(),
   mutation: false, routeController: null, queryController: null, view: 0,
-  query: { query: '', mt: '', limit: 50, timeout: 3 },
+  settings: { ...DEFAULT_SETTINGS },
+  query: { query: '', mt: '', limit: DEFAULT_SETTINGS.queryLimit, timeout: 3 },
 };
 
 function element(tag, attributes = {}, ...children) {
@@ -258,7 +260,7 @@ function updateRoute(values = {}, { replace = false } = {}) {
 function pagination(data, route) {
   const total = positiveInteger(data.total, 0);
   const offset = positiveInteger(data.offset, route.offset);
-  const limit = positiveInteger(data.limit, route.limit, 100, 1);
+  const limit = positiveInteger(data.limit, route.limit, MAXIMUMS.pageSize, 1);
   const range = pageRange(total, offset, limit);
   const controls = element('nav', { className: 'pagination', 'aria-label': 'Results pages' });
   const params = Object.fromEntries(route.params);
@@ -320,7 +322,7 @@ async function ensureMappingIds(signal) {
   let offset = 0;
   let total;
   do {
-    const page = await api('mappings', { offset, limit: 100 }, { signal });
+    const page = await api('mappings', { offset, limit: state.settings.pageSize }, { signal });
     for (const row of page.items ?? []) ids.add(row.id);
     const size = page.items?.length ?? 0;
     if (!size) break;
@@ -751,7 +753,7 @@ async function queryPage(route, signal) {
   const mt = element('input', { name: 'mt', type: 'text', value: initialContext.display, list: 'context-names',
     placeholder: values.mt?.startsWith('mt:') && !initialContext.display ? 'Selected compound microtheory' : 'All contexts, independently',
     'aria-describedby': 'context-input-help' });
-  const limit = element('input', { name: 'limit', type: 'number', min: 1, max: 100, step: 1, required: true, value: positiveInteger(values.limit, 50, 100, 1) });
+  const limit = element('input', { name: 'limit', type: 'number', min: 1, max: MAXIMUMS.queryLimit, step: 1, required: true, value: positiveInteger(values.limit, state.settings.queryLimit, MAXIMUMS.queryLimit, 1) });
   const timeout = element('input', { name: 'timeout', type: 'number', min: 1, max: 30, step: 1, required: true, value: positiveInteger(values.timeout, 3, 30, 1) });
   const results = element('div', { className: 'query-results', 'aria-live': 'polite' });
   const run = element('button', { type: 'submit', className: 'button' }, 'Run query');
@@ -778,7 +780,7 @@ async function queryPage(route, signal) {
     saveDraft();
     const body = {
       query: query.value.trim(), mt: currentContext(),
-      limit: positiveInteger(limit.value, 50, 100, 1), timeout: positiveInteger(timeout.value, 3, 30, 1),
+      limit: positiveInteger(limit.value, state.settings.queryLimit, MAXIMUMS.queryLimit, 1), timeout: positiveInteger(timeout.value, 3, 30, 1),
     };
     updateRoute({ ...body }, { replace: true });
     const controller = new AbortController();
@@ -854,14 +856,14 @@ async function mappingsPage(route, signal) {
   const selectedRow = params.get('row');
   const query = params.get('q') ?? '';
   const filters = ['category', 'equivalence', 'confidence', 'basis'];
-  const request = { q: selectedRow || query, offset: selectedRow ? 0 : route.offset, limit: selectedRow ? 100 : route.limit };
+  const request = { q: selectedRow || query, offset: selectedRow ? 0 : route.offset, limit: selectedRow ? state.settings.pageSize : route.limit };
   for (const field of filters) request[field] = selectedRow ? '' : params.get(field);
   let data = await api('mappings', request, { signal });
   if (selectedRow && !data.items?.some(row => row.id === selectedRow)) {
     let offset = 0;
     let total;
     do {
-      const page = await api('mappings', { offset, limit: 100 }, { signal });
+      const page = await api('mappings', { offset, limit: state.settings.pageSize }, { signal });
       const match = page.items?.find(row => row.id === selectedRow);
       if (match) { data = { items: [match], total: 1, offset: 0, limit: 1 }; break; }
       const size = page.items?.length || 0;
@@ -924,11 +926,41 @@ async function mappingsPage(route, signal) {
   return panel;
 }
 
+function settingsPage() {
+  const inputs = {};
+  const feedback = element('div', { className: 'settings-feedback', 'aria-live': 'polite' });
+  const apply = values => {
+    try {
+      state.settings = saveSettings(localStorage, values);
+      state.query.limit = state.settings.queryLimit;
+      for (const key of Object.keys(inputs)) inputs[key].value = state.settings[key];
+      feedback.setAttribute('role', 'status');
+      feedback.replaceChildren(element('p', {}, 'Settings saved for this browser. New requests use these limits.'));
+    } catch (error) {
+      feedback.setAttribute('role', 'alert');
+      feedback.replaceChildren(element('p', { className: 'error-panel' }, `Settings were not saved: ${error.message}`));
+    }
+  };
+  const fields = [['pageSize', 'Results per page'], ['queryLimit', 'Maximum query results']].map(([key, label]) => {
+    const input = element('input', { type: 'number', name: key, min: 1, max: MAXIMUMS[key], step: 1, required: true, value: state.settings[key] });
+    inputs[key] = input;
+    return inputField(`${label} (1–${MAXIMUMS[key]})`, input);
+  });
+  return element('div', {}, heading('Settings', 'Persisted preferences for this browser; changing them does not reload KB sources.'),
+    element('form', { className: 'settings-form', novalidate: true, onsubmit: event => {
+      event.preventDefault();
+      apply(Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value])));
+    } }, fields, element('div', { className: 'form-actions' },
+      element('button', { type: 'submit', className: 'button' }, 'Save settings'),
+      button('Restore defaults', () => apply(DEFAULT_SETTINGS), 'button secondary')), feedback),
+    element('p', { className: 'muted' }, 'Page size applies to terms, predicates, assertions and mappings. Explicit URL limits still override defaults. Query timeouts remain unchanged. All microtheories are always listed, without a cap.'));
+}
+
 const pages = {
   overview, search: searchPage, predicates: searchPage, term: termPage,
   microtheory: microtheoryPage, microtheories: microtheoriesPage,
   assertion: assertionPage, source: sourcePage, sources: sourcesPage,
-  query: queryPage, mappings: mappingsPage,
+  query: queryPage, mappings: mappingsPage, settings: settingsPage,
 };
 
 async function renderRoute() {
@@ -938,7 +970,7 @@ async function renderRoute() {
   state.queryController = null;
   const controller = new AbortController();
   state.routeController = controller;
-  const route = parseRoute(location.hash);
+  const route = parseRoute(location.hash, state.settings);
   const navRoute = { term: 'search', assertion: 'search', source: 'sources', microtheory: 'microtheories' }[route.name] ?? route.name;
   for (const anchor of document.querySelectorAll('#navigation a')) {
     if (anchor.dataset.route === navRoute) anchor.setAttribute('aria-current', 'page');
@@ -1017,5 +1049,11 @@ function startLiveReload() {
 
 window.addEventListener('hashchange', renderRoute);
 $('.skip-link').addEventListener('click', event => { event.preventDefault(); content.focus(); });
+try {
+  state.settings = loadSettings(localStorage);
+  state.query.limit = state.settings.queryLimit;
+} catch (error) {
+  showNotice(`Saved settings could not be loaded: ${error.message}. Default limits are active; repair or reset them on Settings.`, true);
+}
 renderRoute();
 startLiveReload();

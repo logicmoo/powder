@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON, supportedSource } from '../web/model.js';
+import { DEFAULT_SETTINGS, loadSettings, saveSettings, validateSettings } from '../web/settings.js';
 
 const file = (path, attributes = {}) => ({ type: 'file', path, name: path.split('/').at(-1), sizeBytes: 1024, ...attributes });
 const nodes = [
@@ -107,10 +108,26 @@ test('URL state preserves filters and safely bounds pagination', () => {
   assert.equal(route.limit, 20);
   assert.equal(parseRoute('').name, 'overview');
   assert.equal(parseRoute('#/search?offset=-5&limit=0').offset, 0);
-  assert.equal(parseRoute('#/search?offset=-5&limit=0').limit, 50);
-  assert.equal(parseRoute('#/search?limit=10000').limit, 100);
+  assert.equal(parseRoute('#/search?offset=-5&limit=0').limit, 400);
+  assert.equal(parseRoute('#/search?limit=10000').limit, 400);
   assert.equal(parseRoute('#/search?offset=Infinity').offset, 0);
   assert.equal(positiveInteger('1.5', 3), 3);
+});
+
+test('400 defaults and validated preferences persist and drive page limits', () => {
+  let stored = null;
+  const storage = { getItem: () => stored, setItem: (_, value) => { stored = value; } };
+  assert.deepEqual(loadSettings(storage), { pageSize: 400, queryLimit: 400 });
+  const saved = saveSettings(storage, { pageSize: '125', queryLimit: '350' });
+  assert.deepEqual(loadSettings(storage), saved);
+  assert.equal(parseRoute('#/predicates', saved).limit, 125);
+  assert.equal(parseRoute('#/predicates?limit=400', saved).limit, 400);
+  for (const invalid of [0, -1, 401, 1.5, '', 'no', true]) {
+    assert.throws(() => saveSettings(storage, { ...DEFAULT_SETTINGS, pageSize: invalid }));
+    assert.deepEqual(loadSettings(storage), saved);
+  }
+  assert.throws(() => validateSettings({ pageSize: 400, queryLimit: 1001 }));
+  assert.throws(() => saveSettings({ setItem: () => { throw new Error('Storage unavailable'); } }, DEFAULT_SETTINGS), /Storage unavailable/u);
 });
 
 test('query MT input preserves canonical keys and passes source expressions without prefixing', () => {

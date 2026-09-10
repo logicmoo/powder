@@ -251,8 +251,15 @@ Read endpoints: `/api/status`, `/api/search`, `/api/predicates`, `/api/term`,
 `/api/mappings`, and `/api/version`.
 Mutation/query endpoints: `POST /api/kb/load`, `/api/kb/unload`, `/api/query`.
 Load/unload requests carry the expected `generation`; conflicts return HTTP 409.
-Pagination uses `offset` and `limit` (1-200). Query limits are 1-1000 results and
-at most 30 seconds. Errors have `{error:{code,message}}` form.
+Pagination uses `offset` and `limit` (1-400), defaulting to 400. Queries default
+to 400 results, accept 1-1000 results, and retain the existing 30-second timeout
+ceiling. Errors have `{error:{code,message}}` form.
+
+The Settings page changes results per page and the default query result limit.
+Validated preferences persist in this browser's local storage across reloads.
+Settings do not modify KBs or other users' preferences. Explicit URL limits
+override defaults; the microtheory catalog remains uncapped. The shared
+`web/settings.json` defines browser/server defaults and safety ceilings.
 
 The browser provides linked S-expressions, MT groups, term-role views, provenance,
 draft source-tree selection, loaded-file removal, bounded queries, and the

@@ -208,6 +208,7 @@ main:focus { outline: none; }
 .microtheory-directory .mt-reference { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .microtheory-directory .selected-context { border-color: var(--accent); }
 .context-count { color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.settings-form { display: grid; gap: 18px; max-width: 620px; margin-bottom: 24px; }
 .source-lines { padding: 0; margin: 24px 0; list-style: none; background: var(--surface); border: 1px solid var(--line); }
 .source-lines li { display: flex; gap: 18px; padding: 3px 15px 3px 0; min-width: 0; font-size: .83rem; }
 .source-lines .line-number { flex: 0 0 64px; text-align: right; user-select: none; padding: 0 10px; color: var(--muted); border-right: 1px solid var(--soft-line); text-decoration: none; font-variant-numeric: tabular-nums; }

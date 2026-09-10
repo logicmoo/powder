@@ -1,0 +1,4 @@
+{
+  "defaults": { "pageSize": 400, "queryLimit": 400 },
+  "maximums": { "pageSize": 400, "queryLimit": 1000 }
+}

@@ -17,4 +17,12 @@ test(no_generated_assets) :-
     assertion(\+kb_server:web_name('../AGENTS.md')),
     assertion(\+kb_server:web_name('app.pl')),
     assertion(kb_server:web_name('app.js')).
+test(result_limits_share_400_defaults) :-
+    kb_server:paging([],0,400),
+    kb_server:paging([search([limit='400'])],0,400),
+    kb_limits:setting_default(queryLimit,400),
+    kb_limits:validate_result_limit(queryLimit,400).
+test(result_limit_rejects_excess_without_silent_clamp,
+     [throws(error(domain_error(result_limit(pageSize,1,400),401),_))]) :-
+    kb_server:paging([search([limit='401'])],_,_).
 :- end_tests(ow_api).

@@ -13,6 +13,7 @@
 :- use_module(library(assoc)).
 :- use_module(kb_index, []).
 :- use_module(kb_symbols).
+:- use_module(kb_limits).
 :- dynamic native_file/2.
 :- dynamic native_handle/4.
 :- dynamic native_signature/4.
@@ -202,7 +203,7 @@ query(Goal, MT, Limit, Seconds, Solutions) :-
     query_modules(Modules, Goal, MT, Limit, Seconds, Solutions).
 
 query_modules(Modules, Goal, MT, Limit, Seconds, Solutions) :-
-    must_be(integer, Limit), between(1, 1000, Limit),
+    validate_result_limit(queryLimit,Limit),
     must_be(number, Seconds), Seconds > 0, Seconds =< 30,
     must_be(list, Modules), maplist(must_be(atom), Modules),
     term_variables(Goal, Variables),

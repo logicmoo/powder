@@ -4,6 +4,7 @@
 :- use_module(kb_catalog).
 :- use_module(kb_terms).
 :- use_module(kb_messages).
+:- use_module(kb_limits).
 :- use_module(library(http/thread_httpd)).
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_parameters)).
@@ -113,9 +114,9 @@ action(unload,Request,Reply) :-
 action(query,Request,Reply) :-
     body(Request,Body),must_be(string,Body.query),
     string_length(Body.query,N),N=<65536,
-    field(Body,limit,50,Limit),field(Body,timeout,3,Seconds),
+    setting_default(queryLimit,DefaultLimit),field(Body,limit,DefaultLimit,Limit),field(Body,timeout,3,Seconds),
     (get_dict(mt,Body,Mt0),Mt0\=="",Mt0\==null->context_input(Mt0,Mt);true),
-    must_be(integer,Limit),between(1,1000,Limit),
+    validate_result_limit(queryLimit,Limit),
     must_be(number,Seconds),Seconds>0,Seconds=<30,
     with_mutex(openworld_store,kb_store:query_text(Body.query,Mt,Limit,Seconds,Reply)).
 action(source,Request,Reply) :-
@@ -145,8 +146,10 @@ body(Request,Body) :-
     http_read_json_dict(Request,Body),must_be(dict,Body).
 field(Dict,Key,Default,Value) :- (get_dict(Key,Dict,V)->Value=V;Value=Default).
 paging(Request,Offset,Limit) :-
-    http_parameters(Request,[offset(Offset,[integer,default(0)]),limit(Limit,[integer,default(50)])]),
-    (Offset>=0,between(1,200,Limit)->true;throw(error(domain_error(pagination,Offset-Limit),_))).
+    setting_default(pageSize,Default),
+    http_parameters(Request,[offset(Offset,[integer,default(0)]),limit(Limit,[integer,default(Default)])]),
+    (Offset>=0->true;throw(error(domain_error(pagination_offset,Offset),_))),
+    validate_result_limit(pageSize,Limit).
 search_text(Request,Q) :- http_parameters(Request,[q(Text,[atom,default('')])]),downcase_atom(Text,Q).
 filter_terms('',All,All) :- !.
 filter_terms(Q,All,Items) :- include(term_matches(Q),All,Items).
@@ -194,7 +197,8 @@ static(Request) :-
 web_name(Name) :-
     atom(Name),file_base_name(Name,Name),
     \+sub_atom(Name,_,_,_,'\\'),\+sub_atom(Name,_,_,_,'..'),
-    file_name_extension(_,Ext,Name),memberchk(Ext,[html,css,js,mjs]).
+    file_name_extension(_,Ext,Name),
+    (memberchk(Ext,[html,css,js,mjs]);Name=='settings.json').
 asset_options(Name,[mime_type('application/javascript')]) :-
     file_name_extension(_,Ext,Name),memberchk(Ext,[js,mjs]), !.
 asset_options(_,[]).

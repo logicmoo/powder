@@ -1,4 +1,5 @@
-export const PAGE_SIZE = 50;
+import { DEFAULT_SETTINGS, MAXIMUMS } from './settings.js';
+export const PAGE_SIZE = DEFAULT_SETTINGS.pageSize;
 
 export function normalizeContextInput(value) {
   const input = String(value ?? '').trim();
@@ -28,7 +29,7 @@ export function positiveInteger(value, fallback, maximum = Number.MAX_SAFE_INTEG
   return Number.isSafeInteger(number) && number >= minimum ? Math.min(maximum, number) : fallback;
 }
 
-export function parseRoute(hash = '') {
+export function parseRoute(hash = '', preferences = DEFAULT_SETTINGS) {
   const raw = hash.replace(/^#\/?/u, '');
   const separator = raw.indexOf('?');
   const name = (separator < 0 ? raw : raw.slice(0, separator)) || 'overview';
@@ -36,7 +37,7 @@ export function parseRoute(hash = '') {
   return {
     name, params,
     offset: positiveInteger(params.get('offset'), 0),
-    limit: positiveInteger(params.get('limit'), PAGE_SIZE, 100, 1),
+    limit: positiveInteger(params.get('limit'), preferences.pageSize, MAXIMUMS.pageSize, 1),
   };
 }
 
