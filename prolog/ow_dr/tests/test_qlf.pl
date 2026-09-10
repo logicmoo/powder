@@ -1,6 +1,8 @@
 :- begin_tests(dynamic_qlf).
 :- use_module('../kb_qlf').
 :- use_module('../kb_cache').
+:- use_module('../kb_runtime',[native_load/2,native_load/3,native_unload/1,
+                               native_load_format/2,xc_form_handle/2,query_modules/6]).
 :- use_module(library(filesex)).
 
 fixture(Directory,Input) :-
@@ -42,4 +44,32 @@ test(refuses_unknown_output,
     atom_concat(F,'.qlf',Output),
     setup_call_cleanup(open(Output,write,S),format(S,'user file~n',[]),close(S)),
     convert_companion(F,[],_).
+
+test(native_qlf_interning_and_owned_snapshot_leases,
+    [setup(fixture(D,F)),cleanup((native_unload(F),delete_directory_and_contents(D)))]) :-
+    convert_companion(F,[],_),
+    native_load(F,qlf_native_one),
+    absolute_file_name(F,Absolute),native_load_format(Absolute,Format),
+    assertion(Format.format==qlf),
+    predicate_property(qlf_native_one:x_p(_),dynamic),
+    predicate_property(qlf_native_one:x_p(_),multifile),
+    xc_form_handle(a701,Shared),xc_form_handle(a702,Shared),
+    findall(Id,kb_forms:mt_record(_,x_A,Id),[a701]),
+    assertz(kb_forms:x_p(x_mutable),Added),erase(Added),
+    directory_file_path(D,'lease.krf.pl',Lease),copy_file(F,Lease),
+    setup_call_cleanup(native_load(Lease,qlf_native_two,[qlf_origin(F)]),
+     (native_unload(F),xc_form_handle(a701,Shared),
+      query_modules([qlf_native_two],x_p(x_a),x_A,1,2,[_]),
+      kb_runtime:module_assertion(qlf_native_two,a701,_,Ref),
+      clause_property(Ref,line_count(_)),clause_property(Ref,file(_))),
+     native_unload(Lease)),
+    assertion(\+kb_forms:mt_record(_,x_A,_)).
+
+test(native_pl_fallback_stays_dynamic_and_multifile,
+    [setup(fixture(D,F)),cleanup((native_unload(F),delete_directory_and_contents(D)))]) :-
+    native_load(F,qlf_fallback),
+    absolute_file_name(F,Absolute),native_load_format(Absolute,Format),
+    assertion(Format.format==pl),
+    predicate_property(qlf_fallback:x_p(_),dynamic),
+    predicate_property(qlf_fallback:x_p(_),multifile).
 :- end_tests(dynamic_qlf).

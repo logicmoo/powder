@@ -91,10 +91,13 @@ stage_sources([P|Ps], Acc, Staged) :-
           E, (cleanup_staged(Acc), throw(E))),
     stage_sources(Ps, [Entry|Acc], Staged).
 
-stage_source(prepared(Source,Info,Records), entry(Source,Info,Module,Native,Records,Reuse)) :-
+stage_source(prepared(Source,Info,Records), entry(Source,LoadedInfo,Module,Native,Records,Reuse)) :-
     ( source_info(Source,Old), source_module(Source,Module,Native),
       Old.outputHash == Info.outputHash ->
-        Reuse = true
+        Reuse = true,
+        (get_dict(nativeLoad,Old,PreviousFormat)->true;
+         PreviousFormat=_{format:pl,reason:"Loaded before prebuilt QLF support."}),
+        LoadedInfo=Info.put(nativeLoad,PreviousFormat)
     ; Reuse = false,
       uuid(Uuid), atom_concat(ow_source_, Uuid, Module),
       app_dir(App), directory_file_path(App,'.runtime',Root),
@@ -103,7 +106,10 @@ stage_source(prepared(Source,Info,Records), entry(Source,Info,Module,Native,Reco
       catch((copy_file(Info.normalized,Native),
              crypto_file_hash(Native,ActualHash,[algorithm(sha256)]),
              (ActualHash==Info.outputHash->true;throw(error(snapshot_mismatch(Source),_))),
-             kb_runtime:native_load(Native,Module,[diagnostics(false),generation_snapshot(true)])),
+             kb_runtime:native_load(Native,Module,[diagnostics(false),generation_snapshot(true),
+                                                  qlf_origin(Info.normalized)]),
+             kb_runtime:native_load_format(Native,Format),
+             LoadedInfo=Info.put(nativeLoad,Format)),
             E, (cleanup_native(Native), throw(E)))
     ).
 

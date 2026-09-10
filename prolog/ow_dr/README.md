@@ -117,6 +117,16 @@ multifile** before clauses are installed; live shared form predicates also
 retain both flags. No `compile_predicates/1` is used. Runtime form sharing
 remains a separate later operation.
 
+Normal native, startup and loader-pool loads prefer a matching **prebuilt** QLF
+and admit its records through the same form/MT/property interner as PL input.
+They never build QLFs. Missing/stale caches fall back to the selected PL
+snapshot; actual loading errors remain errors. Per-source status reports
+`nativeLoad.format` (`qlf` or `pl`). `native_load/3` accepts
+`prebuilt_qlf(false)` to explicitly use PL. Owned, reference-counted staging
+leases keep older generation readers independent; source removal releases only
+its support/lease. QLF-native clause locations identify the retained controlled
+staging source, while original KB source/line metadata stays unchanged.
+
 `kb_qlf:convert_companion(File,Options,Result)` is the callable offline API.
 Options include `force(true)`; the CLI accepts `--force`. Valid converter-owned
 caches are reused. Input hash, normalized identity, converter implementation,

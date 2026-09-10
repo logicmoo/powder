@@ -62,6 +62,20 @@ test(variants_not_unification_and_alias_lookup,
     kb_forms:form_record(Id,x_v(X,Y),_,_),assertion(X==Y),
     kb_forms:form_record(Other,x_v(P,Q),_,_),assertion(P\==Q).
 
+test(prebuilt_qlfs_use_normal_generation_interning,
+     [setup(fixture(D,A,B,C)),cleanup(cleanup(D))]) :-
+    kb_compile:compile_sources([A,B,C],[progress(none)],Compiled),
+    forall(member(Info,Compiled.results),kb_qlf:convert_companion(Info.normalized,[],_)),
+    load_sources([A,B,C],any,Loaded),
+    forall(source_info(_,Info),assertion(Info.nativeLoad.format==qlf)),
+    record_for(x_MtA,x_p,Id,Data),assertion(length(Data.contributions,3)),
+    Data.sameForm=[Other],kb_runtime:xc_form_handle(Id,Ref),kb_runtime:xc_form_handle(Other,Ref),
+    predicate_property(kb_forms:x_p(_),dynamic),predicate_property(kb_forms:x_p(_),multifile),
+    load_sources([A,B,C],Loaded.generation,Reused),
+    unload_source(A,Reused.generation,Removed),record_for(x_MtA,x_p,Id,Remaining),
+    assertion(length(Remaining.contributions,1)),
+    unload_source(B,Removed.generation,_),kb_runtime:xc_form_handle(Other,Ref).
+
 native_fixture(D,Name,Id,Mt,File) :-
     directory_file_path(D,Name,File),app_dir(App),
     directory_file_path(App,'kb_tail_loader.pl',Loader),
