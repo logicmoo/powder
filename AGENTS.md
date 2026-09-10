@@ -562,7 +562,7 @@ Never serialize native opaque clause handles.
 
 
 
-`xc\\\\\\\_plvars` contains ground name atoms, not shared live query variables. Generate names deterministically, handle collisions, and invalidate them when original variable-name metadata changes.
+`xc\\\_plvars` contains ground name atoms, not shared live query variables. Generate names deterministically, handle collisions, and invalidate them when original variable-name metadata changes.
 
 
 
@@ -1058,7 +1058,7 @@ Implement functional `x\\\\\\\_cid/N` and `x\\\\\\\_cid\\\\\\\_io/4` helpers—n
 
 
 
-`x\\\\\\\_cid(Id,Vars...)`:
+`x\\\_cid(Id,Vars...)`:
 
 
 
@@ -1074,7 +1074,7 @@ Implement functional `x\\\\\\\_cid/N` and `x\\\\\\\_cid\\\\\\\_io/4` helpers—n
 
 
 
-`x\\\\\\\_cid\\\\\\\_io(Id,and(Goals...),vs(HeadVars...),vs(BodyOnlyVars...))`:
+`x\\\_cid\\\_io(Id,and(Goals...),vs(HeadVars...),vs(BodyOnlyVars...))`:
 
 
 
