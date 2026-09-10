@@ -1120,15 +1120,20 @@ function settingsPage(_route, signal) {
       element('button', { type: 'submit', className: 'button' }, 'Save settings'),
       button('Restore defaults', () => apply(DEFAULT_SETTINGS), 'button secondary')), feedback),
     element('p', { className: 'muted' }, 'Page size applies to terms, predicates, assertions and mappings. Explicit URL limits still override defaults. Query timeouts remain unchanged. All microtheories are always listed, without a cap.'),
-    serverSettingsPanel(signal), tasksPanel(signal), applicationReloadControls());
+    applicationReloadControls(), serverSettingsPanel(signal));
 }
 
 function serverSettingsPanel(signal) {
-  const panel = element('section', { className: 'server-settings' },
+  const panel = element('section', { className: 'server-settings' });
+  const startup = element('section', { className: 'startup-settings' },
     element('h2', {}, 'Next server startup'),
     element('p', {}, 'This ordered source list and these pool profiles are saved on the server. Saving does not load files, restart, or resize the running server.'));
-  const contents = element('div', { role: 'status' }, 'Loading saved server settings…');
-  panel.append(contents);
+  const contents = element('div', { className: 'startup-settings-fields', role: 'status' }, 'Loading saved server settings…');
+  const profileSlot = element('div');
+  startup.append(contents);
+  const form = element('form', { className: 'server-settings-form' },
+    profileSlot, tasksPanel(signal), startup);
+  panel.append(form);
   const load = async () => {
     try {
       const config = await api('server/settings', {}, { signal });
@@ -1154,7 +1159,7 @@ function serverSettingsPanel(signal) {
           }))));
       const feedback = element('div', { 'aria-live': 'polite' });
       const save = element('button', { type: 'submit', className: 'button' }, 'Save next-start settings');
-      const form = element('form', { className: 'server-settings-form', onsubmit: async event => {
+      form.onsubmit = async event => {
         event.preventDefault();
         save.disabled = true;
         try {
@@ -1179,13 +1184,14 @@ function serverSettingsPanel(signal) {
           feedback.setAttribute('role', 'alert');
           feedback.replaceChildren(element('p', { className: 'error-panel' }, error.message));
         } finally { save.disabled = false; }
-      } },
+      };
+      profileSlot.replaceChildren(profiles);
+      contents.replaceChildren(...(config.issues ?? []).map(issue => element('p', { role: 'alert' }, issue.message)),
       element('label', { className: 'field' }, element('span', {}, configured, ' Use the saved source list on server startup')),
       element('p', { className: 'muted' }, 'Unchecked preserves the default initial KB. Checked with an empty list loads no KB. Explicit command-line sources always take precedence.'),
       rows, button('Add source', () => addRow(''), 'button secondary'),
       button('Use currently loaded sources', () => { rows.replaceChildren(); for (const file of state.status?.files ?? []) addRow(file.path); configured.checked = true; }, 'button secondary'),
-      profiles, save, feedback);
-      contents.replaceChildren(...(config.issues ?? []).map(issue => element('p', { role: 'alert' }, issue.message)), form);
+      save, feedback);
     } catch (error) {
       if (error.name !== 'AbortError') contents.replaceChildren(errorPanel(error, load));
     }

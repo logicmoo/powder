@@ -409,7 +409,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelectorAll(".mapping-table tbody tr").length'), 1);
     assert.ok(await evaluate('document.querySelector(".selected-mapping") !== null'));
     await route('#/settings');
-    await wait('document.querySelector(".server-settings-form") !== null');
+    await wait('document.querySelector(\'input[name="server_loader_start"]\') !== null');
     assert.equal(await evaluate('document.querySelector(\'input[name="server_loader_start"]\').value'), '5');
     assert.equal(await evaluate('document.querySelector(\'input[name="server_inference_max"]\').value'), '10');
     assert.equal(await evaluate('document.querySelector(\'input[name="server_http_spare"]\').value'), '2');
@@ -422,6 +422,17 @@ test('real browser exercises the API contract, source transactions, rendering an
     await wait('document.querySelectorAll(".tasks-panel [data-pool]").length === 3');
     assert.ok(await evaluate('document.querySelector(\'[data-pool="loader"]\').textContent.includes("Requested tasks")'));
     assert.ok(await evaluate('document.querySelector(\'[data-pool="inference"]\').textContent.includes("Requested tasks")'));
+    assert.equal(await evaluate(`(() => {
+      const startup = document.querySelector(".startup-settings");
+      const form = document.querySelector(".server-settings-form");
+      return form.lastElementChild === startup
+        && !form.parentElement.nextElementSibling
+        && Array.from(document.querySelectorAll('.settings-form, .application-reload, .pool-settings, .tasks-panel [data-pool]'))
+          .every(node => Boolean(node.compareDocumentPosition(startup) & Node.DOCUMENT_POSITION_FOLLOWING))
+        && Array.from(form.querySelectorAll("input, button")).every(input => input.form === form);
+    })()`), true);
+    assert.equal(apiRequests('server/settings/save').length, 1);
+    assert.deepEqual(serverConfig.pools, Object.fromEntries(['loader', 'inference', 'http'].map(pool => [pool, { start: 5, max: 10, spare: 2 }])));
     assert.equal(await evaluate('document.querySelector(\'input[name="pageSize"]\').value'), '400');
     assert.equal(await evaluate('document.querySelector(\'input[name="queryLimit"]\').value'), '400');
     await evaluate('document.querySelector(\'input[name="pageSize"]\').value = "0"; document.querySelector(".settings-form").requestSubmit()');
