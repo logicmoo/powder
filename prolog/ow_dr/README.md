@@ -137,6 +137,12 @@ honest errors and the batch continues. Importing the utility does not run its
 CLI or load a default corpus. Generated binaries/staging files are derived
 local artifacts and are not automatically committed.
 
+The 2026-09-10 offline corpus run produced 975 QLFs containing 1,994,021
+records, with zero failures/busy/missing files. Binary outputs totalled
+888,707,273 bytes; wall time was 835.692 seconds. A subsequent tinyKB cache hit
+took 0.073 seconds. These are conversion/cache measurements, not live-server
+startup claims.
+
 ## Dialects and mappings
 
 KIF and KRF default to ISO-8859-1 for the legacy corpus. Explicit `--encoding=utf8`
@@ -500,9 +506,11 @@ Existing unrelated JSON files are not overwritten.
 The report directory contains `microtheories.csv`,
 `microtheory-predicates-files.csv`, `kb-file-counts.csv`, a complete NDJSON
 per-file stream, and `summary.json`. Counts are disk occurrences, not runtime
-form/MT deduplication. Rules count executable `<===` heads; GAFs are ground
-atomic assertions. Non-ground and logical formula assertions are counted
-separately. Declaration targets of `argIsa`, `argGenl`, `resultIsa`,
+form/MT deduplication. The original `ruleCount` field counts **executable**
+`<===` heads only; it must not be interpreted as the total logical-rule count.
+GAFs are ground atomic assertions. The semantic supplement below separates
+logical rule-shaped data from remaining non-ground/formula data.
+Declaration targets of `argIsa`, `argGenl`, `resultIsa`,
 `resultGenl`, `argFormat`, known indexed variants, range/domain declarations,
 and explicit arity declarations are included with distinct reference counts.
 An argument-position number is never treated as full predicate arity.
@@ -539,6 +547,40 @@ collision check. Source IDs/properties/locations are excluded from form identity
 and canonical MTs distinguish per-MT assertion identities. This is separate
 from a requested quick **textual** `^x_` line count whose temporary copies only
 replace guard IDs with `XXXX`; that quick count does not alpha-normalize forms.
+
+After exact aggregation has retained `unique-forms.sqlite`, the optional
+standard-library Python/SQLite reporter enriches the existing JSON without
+reading original sources or compiled payloads again:
+
+```powershell
+python .\prolog\ow_dr\inventory_rule_counts.py --report-directory C:\path\to\completed-inventory-report
+```
+
+`kb_inventory_rules:rule_classification/2` is the authoritative inert structural
+classifier. `compiledSemanticCounts` separates `semanticRuleCount`,
+`logicalRuleDataCount`, `executableRuleCount`, `gafCount`, and `otherCount`.
+Recognized positive forms include implications, biconditionals, and preserved
+`<==` rule-shaped operator data (including head-only forms); universal binder
+wrappers are retained in the evidence. `<==` keeps its own classification and
+is **not** translated into implication, committed choice, or executable code.
+Negated rules and arbitrary non-ground data are not counted as positive rules.
+
+`compiledRuleHeads` retains consequent/head predicate, semantic arity, polarity,
+side and reference count. Multiple/disjunctive conclusions can produce more
+head references than rule assertions; they do not become separately asserted
+facts. `headReferenceCount` and `rulesWithoutHeadReferences` make this explicit.
+`semantic-rule-occurrences.ndjson` retains source, line, MT, canonical form and
+classification for each supporting occurrence. Every source/MT/catalog JSON
+defines the legacy `ruleCount` meaning in `countSemantics`.
+
+The completed 975-source snapshot has 9,281 logical rule-shaped occurrences
+(5,177 implications, 153 biconditionals, 3,951 `<==` forms), **zero executable
+rules**, 1,974,602 GAFs and 10,138 remaining forms. Its 13,682 head references
+are distinct from assertion counts. There are 1,942,605 globally unique forms
+(8,308 rule-shaped forms) and 1,985,179 unique form/MT assertions (9,023
+rule-shaped assertions). The supplement includes all 975 sidecars, including
+11 zero-assertion sources, and 2,746 MT JSON files. These are retained
+disk-snapshot counts, not an inference result or a claim about a running server.
 
 ## Scope and current limitations
 
