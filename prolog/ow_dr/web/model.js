@@ -173,6 +173,7 @@ export class APIError extends Error {
     this.status = status;
     this.counts = details?.counts && typeof details.counts === 'object' && !Array.isArray(details.counts) ? details.counts : null;
     this.issues = Array.isArray(details?.issues) ? details.issues : [];
+    this.execution = details?.execution?.mode === 'prolog' ? details.execution : null;
   }
 }
 
@@ -191,12 +192,12 @@ export function compilationIssues(error) {
     issue && typeof issue === 'object' && (!issue.status || issue.status === 'failed' || issue.status === 'busy'));
 }
 
-export async function requestJSON(path, { method = 'GET', body, signal, fetch: fetcher = globalThis.fetch } = {}) {
+export async function requestJSON(path, { method = 'GET', body, signal, headers = {}, fetch: fetcher = globalThis.fetch } = {}) {
   let response;
   try {
     response = await fetcher(path, {
       method, signal, cache: 'no-store', credentials: 'same-origin',
-      headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch (error) {

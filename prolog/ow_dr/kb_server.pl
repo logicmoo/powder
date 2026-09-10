@@ -6,6 +6,8 @@
 :- use_module(kb_messages).
 :- use_module(kb_limits).
 :- use_module(kb_reload).
+:- use_module(kb_prolog).
+:- use_module(kb_questions).
 :- use_module(library(http/thread_httpd)).
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_parameters)).
@@ -16,6 +18,7 @@
 :- use_module(library(lists)).
 :- use_module(library(error)).
 :- dynamic server_port/1.
+:- dynamic prolog_access_token/1.
 :- http_handler(root(api/status), endpoint(status), []).
 :- http_handler(root(api/search), endpoint(search), []).
 :- http_handler(root(api/predicates), endpoint(predicates), []).
@@ -31,6 +34,9 @@
 :- http_handler(root(api/mappings), endpoint(mappings), []).
 :- http_handler(root(api/version), endpoint(version), []).
 :- http_handler(root(api/app/reload), endpoint(reload_application), [method(post)]).
+:- http_handler(root(api/prolog/access), endpoint(prolog_access), []).
+:- http_handler(root(api/prolog/query), endpoint(prolog_query), [method(post)]).
+:- http_handler(root('api/test-questions'), endpoint(test_questions), []).
 :- http_handler(root(.), static, [prefix]).
 
 start_server(Port) :-
@@ -42,9 +48,15 @@ stop_server :-
 
 endpoint(Name,Request) :-
     catch((valid_origin(Request),
-           ( action(Name,Request,Reply) -> reply_json_dict(Reply)
+           ( action(Name,Request,Reply) -> reply_api(Name,Reply)
            ; throw(error(domain_error(api_input,Name),_)) )),
           Error,api_error(Error)).
+
+reply_api(prolog_query,Reply) :-
+    memberchk(Reply.status,[exception,timeout]),!,
+    (Reply.status==timeout->Status=408,Code=prolog_timeout;Status=422,Code=prolog_exception),
+    reply_json_dict(_{error:_{code:Code,message:Reply.exception.message,execution:Reply}},[status(Status)]).
+reply_api(_,Reply) :- reply_json_dict(Reply).
 
 valid_origin(Request) :-
     ( memberchk(origin(Origin),Request) ->
@@ -76,6 +88,7 @@ error_response(error(type_error(_,_),_),400,invalid_input) :- !.
 error_response(error(domain_error(_,_),_),400,invalid_input) :- !.
 error_response(error(instantiation_error,_),400,invalid_input) :- !.
 error_response(error(source_error(_,_,_,_),_),400,invalid_expression) :- !.
+error_response(error(syntax_error(_),_),400,invalid_prolog_syntax) :- !.
 error_response(_,500,internal_error).
 
 action(status,_,Reply) :- with_mutex(openworld_store,kb_store:status(Reply)).
@@ -83,6 +96,27 @@ action(reload_application,Request,Reply) :-
     body(Request,Body),
     (dict_pairs(Body,_,[])->true;throw(error(domain_error(empty_reload_request,Body),_))),
     reload_changed_files(Reply).
+action(prolog_access,Request,_{token:Token}) :-
+    trusted_local_request(Request),
+    with_mutex(powder_prolog_token,
+      (prolog_access_token(Token)->true;
+        crypto_n_random_bytes(32,Bytes),crypto_data_hash(Bytes,Token,[encoding(octet)]),
+        assertz(prolog_access_token(Token)))).
+action(prolog_query,Request,Reply) :-
+    trusted_local_request(Request),
+    (memberchk(x_powder_local_token(Token),Request),prolog_access_token(Token)->true;
+      throw(error(permission_error(execute,prolog_query,missing_local_token),_))),
+    body(Request,Body),must_be(string,Body.query),
+    setting_default(queryLimit,Default),field(Body,limit,Default,Limit),field(Body,timeout,3,Seconds),
+    (get_dict(mt,Body,Mt0),Mt0\=="",Mt0\==null->context_input(Mt0,Mt);true),
+    run_prolog(Body.query,Mt,Limit,Seconds,Reply).
+action(test_questions,Request,Reply) :-
+    paging(Request,Offset,Limit),search_text(Request,Search),
+    with_mutex(openworld_store,
+      (stored_questions(All),include(question_matches(Search),All,Matches),
+       page(Matches,Offset,Limit,Page),kb_store:generation(Generation),
+       Reply=Page.put(generation,Generation))).
+
 action(search,Request,Reply) :-
     paging(Request,Offset,Limit),search_text(Request,Q),
     with_mutex(openworld_store,
@@ -212,3 +246,18 @@ web_name(Name) :-
 asset_options(Name,[mime_type('application/javascript')]) :-
     file_name_extension(_,Ext,Name),memberchk(Ext,[js,mjs]), !.
 asset_options(_,[]).
+
+trusted_local_request(Request) :-
+    memberchk(peer(Peer),Request),
+    memberchk(Peer,[ip(127,0,0,1),ip(0,0,0,0,0,0,0,1)]),
+    memberchk(host(Host),Request),memberchk(Host,[localhost,'127.0.0.1','[::1]']),
+    memberchk(port(Port),Request),server_port(Port),
+    (memberchk(sec_fetch_site(Site),Request)->memberchk(Site,['same-origin',none]);true),
+    valid_origin(Request),!.
+trusted_local_request(_) :-
+    throw(error(permission_error(execute,prolog_query,untrusted_origin),_)).
+
+question_matches('',_) :- !.
+question_matches(Search,Question) :-
+    atomic_list_concat([Question.identifier,Question.question,Question.source,Question.prolog],' ',Text),
+    downcase_atom(Text,Lower),sub_atom(Lower,_,_,_,Search).

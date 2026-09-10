@@ -39,6 +39,11 @@ test('real browser exercises the API contract, source transactions, rendering an
     [compoundC, app('ContextFn', symbol('A & B'), app('nested', symbol('C')))],
   ]);
   const normalizedMT = value => value === sourceA ? compoundA : value === sourceB ? compoundB : value;
+  const storedQuestions = Array.from({ length: 405 }, (_, index) => ({
+    id: `question-${index}`, identifier: `TQ${index}`, question: `Stored question ${index}`,
+    prolog: 'member(V1, [one,two]).', mt: compoundA, mtExpression: mtExpressions.get(compoundA),
+    source: 'KBs/alpha/a.kif', line: 10, variables: [{ prolog: 'V1', source: '?X' }],
+  }));
   const allContexts = [
     ...['x_B', 'x_A'].map(mt => ({ mt, mtExpression: { type: 'symbol', value: mt }, count: 2 })),
     ...[...mtExpressions].map(([mt, mtExpression]) => ({ mt, mtExpression, count: 1 })),
@@ -92,7 +97,8 @@ test('real browser exercises the API contract, source transactions, rendering an
           for await (const chunk of request) chunks.push(chunk);
           body = JSON.parse(Buffer.concat(chunks).toString());
         }
-        requests.push({ path: url.pathname, params: Object.fromEntries(url.searchParams), body });
+        requests.push({ path: url.pathname, params: Object.fromEntries(url.searchParams), body,
+          token: request.headers['x-powder-local-token'] });
         const json = (value, code = 200) => {
           response.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
           response.end(JSON.stringify(value));
@@ -127,6 +133,16 @@ test('real browser exercises the API contract, source transactions, rendering an
             return json(page(filtered, url));
           }
           case '/api/version': return json({ version: 'fixture-v1' });
+          case '/api/test-questions': return json({ generation, ...page(active.length ? storedQuestions : [], url) });
+          case '/api/prolog/access': return json({ token: 'fixture-local-token' });
+          case '/api/prolog/query': {
+            const execution = { mode: 'prolog', status: 'success', generation, mt: body.mt,
+              output: 'captured output', errorOutput: '', exception: null,
+              solutions: [{ bindings: [{ name: 'V1', value: 'one' }] }] };
+            if (body.query.includes('throw')) return json({ error: { code: 'prolog_exception', message: 'test exception',
+              execution: { ...execution, status: 'exception', exception: { term: 'test_exception', message: 'test exception' } } } }, 422);
+            return json(execution);
+          }
           case '/api/app/reload':
             await new Promise(resolve => setTimeout(resolve, 40));
             if (failCodeReload) return json({ error: { code: 'application_reload_failed',
@@ -383,6 +399,21 @@ test('real browser exercises the API contract, source transactions, rendering an
     await route('#/settings');
     assert.equal(await evaluate('document.querySelector(\'input[name="pageSize"]\').value'), '125');
     assert.equal(await evaluate('document.querySelector(\'input[name="queryLimit"]\').value'), '350');
+    await route('#/query');
+    await wait('document.querySelectorAll(\'select[name="storedQuestion"] option\').length === 406');
+    const executionsBefore = requests.filter(request => request.path === '/api/prolog/query').length;
+    await evaluate('const select = document.querySelector(\'select[name="storedQuestion"]\'); select.value = "question-404"; select.dispatchEvent(new Event("change", { bubbles: true }))');
+    assert.equal(await evaluate('document.querySelector("textarea").value'), 'member(V1, [one,two]).');
+    assert.equal(requests.filter(request => request.path === '/api/prolog/query').length, executionsBefore);
+    await evaluate('document.querySelector(\'[data-query-mode="prolog"]\').click()');
+    await wait('document.querySelector(".prolog-results") !== null');
+    assert.ok(await evaluate('document.querySelector(".prolog-output").textContent.includes("captured output")'));
+    assert.equal(requests.filter(request => request.path === '/api/prolog/query').at(-1).token, 'fixture-local-token');
+    assert.equal(requests.filter(request => request.path === '/api/prolog/query').at(-1).body.mt, compoundA);
+    await evaluate('document.querySelector("textarea").value = "throw(test_exception)."; document.querySelector(\'[data-query-mode="prolog"]\').click()');
+    await wait('document.querySelector(".prolog-results[role=alert]") !== null');
+    assert.ok(await evaluate('document.querySelector(".prolog-results").textContent.includes("test_exception")'));
+    assert.ok(await evaluate('document.querySelector(".prolog-results").textContent.includes("captured output")'));
     await route('#/microtheories');
     assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), allContexts.length);
     await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });

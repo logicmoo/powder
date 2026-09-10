@@ -13,6 +13,7 @@ const state = {
   mutation: false, routeController: null, queryController: null, view: 0,
   settings: { ...DEFAULT_SETTINGS },
   query: { query: '', mt: '', limit: DEFAULT_SETTINGS.queryLimit, timeout: 3 },
+  refreshQuestions: null,
 };
 
 function element(tag, attributes = {}, ...children) {
@@ -735,6 +736,26 @@ function queryResults(data) {
   return results;
 }
 
+function prologResults(data) {
+  const failed = ['exception', 'timeout'].includes(data.status);
+  const titles = { success: 'Prolog succeeded', failure: 'Prolog failed (false)',
+    limit: 'Prolog result limit reached', exception: 'Prolog raised an exception', timeout: 'Prolog timed out' };
+  const panel = element('section', { className: `prolog-results${failed ? ' error-panel' : ''}`, role: failed ? 'alert' : 'status' },
+    element('h2', {}, titles[data.status] ?? data.status),
+    element('p', { className: 'muted' }, 'Executed in powder_console. Side effects are not rolled back, including on failure, cancellation, or exceptions.'));
+  if (data.exception) panel.append(element('pre', { className: 'prolog-output' }, data.exception.term));
+  for (const [label, output] of [['Output', data.output], ['Error output', data.errorOutput]]) {
+    if (output) panel.append(element('h3', {}, label), element('pre', { className: 'prolog-output' }, output));
+  }
+  for (const [index, solution] of (data.solutions ?? []).entries()) {
+    panel.append(element('h3', {}, `Solution ${index + 1}`),
+      solution.bindings.length ? element('dl', { className: 'bindings' }, solution.bindings.flatMap(binding => [
+        element('dt', {}, binding.name), element('dd', {}, element('code', {}, binding.value)),
+      ])) : element('p', {}, 'true'));
+  }
+  return panel;
+}
+
 async function queryPage(route, signal) {
   const values = { ...state.query };
   for (const key of ['query', 'mt', 'limit', 'timeout']) {
@@ -744,7 +765,7 @@ async function queryPage(route, signal) {
     const context = await api('microtheory', { mt: values.mt, limit: 1 }, { signal });
     rememberContext(values.mt, context.mtExpression ?? context.items?.[0]?.mtExpression);
   }
-  const initialContext = { key: values.mt ?? '', display: contextInputText(values.mt, state.contexts.get(values.mt)) };
+  let initialContext = { key: values.mt ?? '', display: contextInputText(values.mt, state.contexts.get(values.mt)) };
   let contextEdited = false;
   const query = element('textarea', {
     name: 'query', rows: 5, required: true, value: values.query,
@@ -757,6 +778,7 @@ async function queryPage(route, signal) {
   const timeout = element('input', { name: 'timeout', type: 'number', min: 1, max: 30, step: 1, required: true, value: positiveInteger(values.timeout, 3, 30, 1) });
   const results = element('div', { className: 'query-results', 'aria-live': 'polite' });
   const run = element('button', { type: 'submit', className: 'button' }, 'Run query');
+  const runProlog = element('button', { type: 'submit', className: 'button secondary', 'data-query-mode': 'prolog' }, 'Run Prolog');
   const cancel = button('Cancel query', () => state.queryController?.abort(), 'button secondary');
   cancel.hidden = true;
   const selectedContext = element('div', { className: 'selected-context' });
@@ -777,6 +799,7 @@ async function queryPage(route, signal) {
   const form = element('form', { className: 'query-form', onsubmit: async event => {
     event.preventDefault();
     if (state.queryController || !query.value.trim()) return;
+    const prolog = event.submitter?.dataset.queryMode === 'prolog';
     saveDraft();
     const body = {
       query: query.value.trim(), mt: currentContext(),
@@ -786,24 +809,30 @@ async function queryPage(route, signal) {
     const controller = new AbortController();
     state.queryController = controller;
     run.disabled = true;
+    runProlog.disabled = true;
     cancel.hidden = false;
     results.setAttribute('aria-busy', 'true');
-    results.replaceChildren(element('p', { className: 'loading', role: 'status' }, 'Searching for bounded, context-isolated proofs…'));
+    results.replaceChildren(element('p', { className: 'loading', role: 'status' },
+      prolog ? 'Running full Prolog in the local server process…' : 'Searching for bounded, context-isolated proofs…'));
     try {
-      const data = await api('query', {}, { method: 'POST', body, signal: controller.signal });
-      if (!controller.signal.aborted) results.replaceChildren(queryResults(data));
+      let token;
+      if (prolog) token = (await api('prolog/access', {}, { signal: controller.signal })).token;
+      const data = await api(prolog ? 'prolog/query' : 'query', {}, { method: 'POST', body, signal: controller.signal,
+        headers: prolog ? { 'X-Powder-Local-Token': token } : {} });
+      if (!controller.signal.aborted) results.replaceChildren(prolog ? prologResults(data) : queryResults(data));
     } catch (error) {
       results.replaceChildren(error.name === 'AbortError'
-        ? element('p', { className: 'muted' }, 'Query cancelled. Server-side execution remains bounded by the time limit.')
-        : errorPanel(error, () => form.requestSubmit()));
+        ? element('p', { className: 'muted' }, 'Stopped waiting for the query. Server execution remains time-bounded; any Prolog side effects are not rolled back.')
+        : error.execution ? prologResults(error.execution) : errorPanel(error, () => form.requestSubmit(prolog ? runProlog : run)));
     } finally {
       if (state.queryController === controller) state.queryController = null;
       run.disabled = false;
+      runProlog.disabled = false;
       cancel.hidden = true;
       results.setAttribute('aria-busy', 'false');
     }
   } },
-  inputField('S-expression query', query),
+  inputField('KB S-expression or Prolog goal', query),
   element('p', { className: 'muted', id: 'query-help' }, 'Only registered KB predicates and supported logical forms are dispatched. A blank context runs whole-query solutions independently by microtheory.'),
   element('div', { className: 'query-options' },
     inputField('Microtheory (optional)', mt), contextSuggestions(),
@@ -812,13 +841,89 @@ async function queryPage(route, signal) {
     element('span', { className: 'muted' }, 'Enter an atomic name or a source S-expression such as (MicrotheoryFn Argument).'),
     clearContext),
   selectedContext,
-  element('div', { className: 'form-actions' }, run, cancel));
+  element('div', { className: 'prolog-warning' }, element('strong', {}, 'Run Prolog grants full local-process access. '),
+    'Built-ins and side effects can modify files, application state, or stop the server. Only run code you trust. ',
+    'Unqualified goals run in powder_console, where user assertions persist. Qualify user: or an application module explicitly when needed. ',
+    'Select a microtheory to call current-generation x_ KB predicates. Without one, ordinary Prolog goals still run once. Interactive input is EOF.'),
+  element('div', { className: 'form-actions' }, run, runProlog, cancel));
+  const questionPicker = storedQuestionPicker(signal, item => {
+    query.value = item.prolog;
+    rememberContext(item.mt, item.mtExpression);
+    initialContext = { key: item.mt, display: contextInputText(item.mt, item.mtExpression) };
+    mt.value = initialContext.display;
+    contextEdited = false;
+    selectedContext.replaceChildren(mtLink(item.mt, item.mtExpression));
+    saveDraft();
+    query.focus();
+  });
   return element('div', {}, heading('Query console', 'Ask the active knowledge base and inspect the successful proof, not failed branches.'),
-    form, results,
+    questionPicker, form, results,
     element('details', { className: 'query-help' },
       element('summary', {}, 'Query semantics'),
       element('p', {}, 'Facts use their own microtheory. Executable <=== rules run ordered bodies within that same context. <== and ordinary implication are assertion data, not commands.'),
-      element('p', {}, 'No filesystem, process, administrative, or MeTTa execution is available through this console. Bound-slot counts are diagnostics, not proof-pruning conditions.')));
+      element('p', {}, 'Run query uses the restricted KB dispatcher. Run Prolog is a separate, explicit trusted-local capability with side effects. Loading KBs or selecting a saved question never runs its code.')));
+}
+
+function storedQuestionPicker(signal, selectQuestion) {
+  let questions = [];
+  let refreshVersion = 0;
+  const select = element('select', { name: 'storedQuestion', disabled: true, 'aria-label': 'Stored test question' });
+  const search = element('input', { type: 'search', name: 'questionSearch', placeholder: 'Filter identifier, question or source', 'aria-label': 'Filter stored test questions' });
+  const stateText = element('p', { className: 'muted', role: 'status' }, 'Loading stored test questions…');
+  const provenance = element('div', { className: 'question-provenance' });
+  const render = () => {
+    const filter = search.value.trim().toLowerCase();
+    const matching = questions.filter(item => `${item.identifier} ${item.question} ${item.source} ${item.prolog}`.toLowerCase().includes(filter));
+    select.replaceChildren(element('option', { value: '' }, 'Select a question to populate the Prolog editor'),
+      ...matching.map(item => element('option', { value: item.id },
+        `${item.identifier}: ${item.question} — ${contextLabel(item.mt, item.mtExpression)} — ${item.source}:${item.line}`)));
+    select.disabled = !matching.length;
+    stateText.textContent = questions.length ? `${number(matching.length)} of ${number(questions.length)} loaded test questions. Selection does not execute code.`
+      : 'No test_Qs questions are loaded. Load a question source from KB Sources to list its assertions.';
+  };
+  search.addEventListener('input', render);
+  select.addEventListener('change', () => {
+    const item = questions.find(question => question.id === select.value);
+    if (!item) return;
+    selectQuestion(item);
+    provenance.replaceChildren(element('p', {}, item.question),
+      element('p', {}, mtLink(item.mt, item.mtExpression), ' · ', sourceLink(item.source, item.line)),
+      element('p', { className: 'muted' }, (item.variables ?? []).map(pair => `${pair.prolog} = ${pair.source}`).join(', ')),
+      element('p', { className: 'muted' }, 'The owning context is selected; change it if the question needs another data context. Conjunction/disjunction become Prolog controls; other formula heads remain KB predicates.'));
+  });
+  const refresh = async () => {
+    const version = ++refreshVersion;
+    select.disabled = true;
+    stateText.setAttribute('role', 'status');
+    stateText.textContent = 'Loading stored test questions…';
+    try {
+      const all = [];
+      let offset = 0, generation;
+      do {
+        const page = await api('test-questions', { offset, limit: state.settings.pageSize }, { signal });
+        if (generation !== undefined && page.generation !== generation) throw new APIError('The active generation changed while listing questions. Refresh the list.', 'generation_changed');
+        generation = page.generation;
+        if (!Number.isSafeInteger(page.total) || page.total < 0 || !Array.isArray(page.items)
+          || (!page.items.length && offset < page.total)) throw new APIError('The server returned an incomplete question list.', 'incomplete_question_list');
+        all.push(...page.items); offset += page.items.length;
+        if (offset >= page.total) break;
+      } while (!signal.aborted);
+      if (signal.aborted || version !== refreshVersion) return;
+      questions = all;
+      render();
+    } catch (error) {
+      if (error.name === 'AbortError' || version !== refreshVersion) return;
+      questions = [];
+      select.replaceChildren(element('option', {}, 'Question list unavailable'));
+      stateText.setAttribute('role', 'alert');
+      stateText.textContent = error.message;
+    }
+  };
+  state.refreshQuestions = refresh;
+  refresh();
+  return element('section', { className: 'stored-questions', 'aria-label': 'Stored test questions' },
+    element('h2', {}, 'Stored test questions'), search, select, stateText,
+    button('Refresh questions', refresh, 'button secondary'), provenance);
 }
 
 function copyButton(label, value) {
@@ -996,6 +1101,7 @@ async function renderRoute() {
   state.routeController?.abort();
   state.queryController?.abort();
   state.queryController = null;
+  state.refreshQuestions = null;
   const controller = new AbortController();
   state.routeController = controller;
   const route = parseRoute(location.hash, state.settings);
@@ -1048,11 +1154,12 @@ function startLiveReload() {
         location.reload();
         return;
       }
-      if (['microtheory', 'microtheories'].includes(parseRoute(location.hash).name)) {
+      if (['microtheory', 'microtheories', 'query'].includes(parseRoute(location.hash).name)) {
         const status = await api('status', {}, { signal: requestController.signal });
         if (status.generation !== state.status?.generation) {
           setStatus(status);
-          await renderRoute();
+          if (state.refreshQuestions) await state.refreshQuestions();
+          else await renderRoute();
         }
       }
       target.textContent = 'Interface live refresh enabled';

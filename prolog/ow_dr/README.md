@@ -210,7 +210,7 @@ their original sources to migrate.
 
 ## Queries and active generations
 
-The browser query console accepts S-expressions, a microtheory (or all contexts),
+The browser's **Run query** action accepts S-expressions, a microtheory (or all contexts),
 a result limit, and a timeout. Results include bindings and successful proof
 steps. Unscoped queries run the **whole query independently in each MT**.
 There is no implicit MT inheritance or cross-MT joining.
@@ -228,10 +228,41 @@ API contexts keep atomic keys such as `x_tinyKB`. Compound contexts use an opaqu
 key and render the expression. Query inputs may also use a source S-expression
 such as `(CommonsenseMicrostoryMtFn ViolentImpact-Harm)`.
 
-The dispatcher calls only registered guarded KB predicates and supported
+The KB dispatcher calls only registered guarded KB predicates and supported
 conjunction/disjunction forms. It does not execute operating-system commands,
 arbitrary Prolog built-ins, or MeTTa. Unsupported goals are errors. Neither
 loading nor browsing a rule executes its body.
+
+**Run Prolog** is a separate, explicitly trusted-local execution mode, not a
+sandbox. It accepts a single Prolog goal, including built-ins and side effects.
+Unqualified predicates and user assertions live in the persistent
+`powder_console` module. Use explicit module qualification to access `user` or
+application modules. Current-generation KB predicates are bridged into the
+console and require a selected microtheory; ordinary built-ins run once without
+one. For example, `member(X,[a,b]).` needs no KB context.
+
+Execution honors the selected result/time limits without rerunning goals to
+count results. Output from current output, `user_output`, and `user_error` is
+captured together; input is EOF. Results distinguish success, false, reaching
+the result limit, exceptions, and timeout, preserving output and earlier
+solutions on exceptions. Unqualified assertions persist until explicitly
+retracted. Side effects are **not rolled back** by failure, cancellation,
+exceptions, or timeout; full Prolog can change files and stop the server.
+
+Full execution requires a loopback peer, the server's exact localhost host/port,
+same-origin browser metadata, and a server-issued local CSRF capability header.
+It is only available on explicit POST; no GET or dropdown action executes code.
+Do not expose this trusted-local server through an unauthenticated remote proxy.
+
+The stored-question dropdown reads actual loaded `test_Qs/3` assertions. The
+schema is declared in `KBs\SigmaTestQuestions.krf`: identifier string, English
+question string, then query formula. Every available choice is retrieved through
+pagination, searchable, and labelled with its owning MT/source location.
+Selecting one fills editable Prolog text and context, but never runs it.
+Variables keep their sharing and show their original-to-Prolog name mapping.
+Conjunction/disjunction become Prolog controls; other formula heads remain KB
+predicates. The owning question MT is not necessarily the data context needed
+to answer it, so the context stays editable.
 
 Runtime source replacement uses validated immutable native `.pl` snapshots in
 `.runtime`. Native clause `file/1` and `line_count/1` properties refer to those
@@ -253,6 +284,9 @@ Read endpoints: `/api/status`, `/api/search`, `/api/predicates`, `/api/term`,
 `/api/mappings`, and `/api/version`.
 Mutation/query endpoints: `POST /api/kb/load`, `/api/kb/unload`, `/api/query`.
 Application maintenance: `POST /api/app/reload` with an empty JSON object.
+Stored questions: `GET /api/test-questions` (`q`, `offset`, `limit`).
+Full local Prolog: `GET /api/prolog/access` obtains the local capability;
+`POST /api/prolog/query` requires it in `X-Powder-Local-Token`.
 Load/unload requests carry the expected `generation`; conflicts return HTTP 409.
 Pagination uses `offset` and `limit` (1-400), defaulting to 400. Queries default
 to 400 results, accept 1-1000 results, and retain the existing 30-second timeout

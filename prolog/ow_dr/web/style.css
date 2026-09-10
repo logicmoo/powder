@@ -209,6 +209,13 @@ main:focus { outline: none; }
 .microtheory-directory .selected-context { border-color: var(--accent); }
 .context-count { color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .settings-form { display: grid; gap: 18px; max-width: 620px; margin-bottom: 24px; }
+.prolog-warning { padding: 12px 16px; border: 1px solid var(--warning); background: var(--warning-soft); color: var(--warning); font-size: .86rem; }
+.prolog-output { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: var(--surface); margin: 10px 0; }
+.prolog-results > h3 { margin-top: 18px; }
+.stored-questions { display: grid; gap: 10px; margin-bottom: 24px; }
+.stored-questions select { width: 100%; max-width: 100%; }
+.stored-questions > .button { justify-self: start; }
+.question-provenance { overflow-wrap: anywhere; }
 .source-lines { padding: 0; margin: 24px 0; list-style: none; background: var(--surface); border: 1px solid var(--line); }
 .source-lines li { display: flex; gap: 18px; padding: 3px 15px 3px 0; min-width: 0; font-size: .83rem; }
 .source-lines .line-number { flex: 0 0 64px; text-align: right; user-select: none; padding: 0 10px; color: var(--muted); border-right: 1px solid var(--soft-line); text-decoration: none; font-variant-numeric: tabular-nums; }
