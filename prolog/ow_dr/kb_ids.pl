@@ -8,6 +8,8 @@ the directory when pruning adjacent .pl/.index.pl caches. Identical occurrences
 match by source-content key and duplicate ordinal; source line layout is not an
 identity. Reservations are persisted before IDs escape, under a stable native
 lock; ledger installation uses complete, validated same-directory stages.
+`state_dir(...)` takes precedence over the optional `POWDER_STATE_DIR`
+environment override. An unset override retains the repository default.
 */
 
 :- use_module(library(option)).
@@ -18,6 +20,8 @@ lock; ledger installation uses complete, validated same-directory stages.
 
 state_directory(Options, Dir) :-
     ( option(state_dir(Input),Options)
+    -> absolute_file_name(Input,Dir,[file_errors(fail),access(none)])
+    ; getenv('POWDER_STATE_DIR',Input),Input\==''
     -> absolute_file_name(Input,Dir,[file_errors(fail),access(none)])
     ; source_file(kb_ids:state_directory(_,_), Here),
       file_directory_name(Here,App),

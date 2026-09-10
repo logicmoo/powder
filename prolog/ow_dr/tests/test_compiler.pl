@@ -26,6 +26,15 @@ fixture(Dir,Name,Text,File) :-
 opts(Dir,[state_dir(State),progress(none),diagnostics(false)]) :-
     directory_file_path(Dir,state,State).
 
+test(process_allocator_override_is_isolated_and_explicit_options_win,
+     [setup(test_dir(D)),cleanup(clean_dir(D))]) :-
+    (getenv('POWDER_STATE_DIR',Value)->Previous=some(Value);Previous=none),
+    directory_file_path(D,environment,Environment),directory_file_path(D,explicit,Explicit),
+    setup_call_cleanup(setenv('POWDER_STATE_DIR',Environment),
+      (state_directory([],Actual),same_file(Actual,Environment),
+       state_directory([state_dir(Explicit)],Selected),same_file(Selected,Explicit)),
+      (Previous=some(Value)->setenv('POWDER_STATE_DIR',Value);unsetenv('POWDER_STATE_DIR'))).
+
 header(File,Header) :-
     terms_digest([fixture],Hash),converter_version(Converter),
     Header=cache{source:File,sourceHash:Hash,dialect:kif,mappingHash:none,
