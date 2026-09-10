@@ -251,6 +251,7 @@ owned_repair(File,Normal,Index,Options,Start,Abandoned,Result) :-
           repair_or_throw(File,Normal,Index,Options,Start,Abandoned,Error,Result)).
 
 repair_or_throw(File,Normal,Index,Options,Start,Abandoned,Error,Result) :-
+    (Error=job_cancelled(_)->throw(Error);true),
     print_diagnostic(File,Error),
     (option(edit(true),Options),\+prompts_suppressed,
      \+ Error=error(resource_error(_),_)
@@ -481,8 +482,15 @@ diagnostic(Options,Format,Args) :-
 
 compile_sources(Paths,Options,Summary) :-
     with_path_cache(
-       (implementation_hash(_),discover_sources(Paths,Files),
+       (implementation_hash(_),
+        (option(preserve_order(true),Options)->ordered_sources(Paths,Files);discover_sources(Paths,Files)),
         batch_files(Files,Options,Summary))).
+
+ordered_sources(Paths,Files) :-
+    maplist(source_absolute,Paths,Absolute),
+    (forall(member(File,Absolute),(exists_file(File),supported_source(File)))->
+      list_to_set(Absolute,Files)
+    ;discover_sources_cached(Absolute,Files)).
 
 batch_files(Files,Options,Summary) :-
     with_path_cache(batch_files_cached(Files,Options,Summary)).
@@ -512,6 +520,7 @@ batch_loop([File|Files],Options,[Result|Results]) :-
     ;batch_loop(Files,Options,Results)).
 
 failure_result(File,Options,Error,Result) :-
+    (Error=job_cancelled(_)->throw(Error);true),
     (Error=error(reported_source_error(_,Cause,Warnings),_)->true
     ;Error=error(reported_source_error(_,Cause),_)->Warnings=[]
     ;Error=error(compilation_aborted(_,Warnings),_)->Cause=Error
@@ -586,6 +595,11 @@ add_pause(Seconds) :-
     (retract(batch_state(S))->P is S.paused+Seconds,assertz(batch_state(S.put(paused,P)));true).
 
 progress_phase(Phase,File,Fraction) :-
+    (batch_state(Observed),option(progress_observer(Observer),Observed.options)->
+      call(Observer,_{phase:Phase,source:File,completedFiles:Observed.done,
+                      totalFiles:Observed.total,fileFraction:Fraction,
+                      warnings:Observed.warnings,failures:Observed.failures})
+    ;true),
     (batch_state(S),\+option(progress(none),S.options),
      monotonic_seconds(Now),
      (Fraction=:=0;Fraction=:=1;Now-S.lastProgress>=0.2)

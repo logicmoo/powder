@@ -24,6 +24,19 @@ test('real browser exercises the API contract, source transactions, rendering an
   let compilerDiagnostics = {};
   const requests = [];
   const apiRequests = name => requests.filter(request => request.path === apiPath(name));
+  let serverConfig = { startupConfigured: false, startupFiles: [], revision: 'fixture-0', issues: [],
+    pools: Object.fromEntries(['loader', 'inference', 'http'].map(name => [name, { start: 5, max: 10, spare: 2 }])) };
+  const jobs = new Map();
+  const acceptJob = (pool, label, files, work) => {
+    const id = `task-${jobs.size + 1}`;
+    jobs.set(id, { id, pool, label, files, work, polls: 0, state: 'queued', createdAt: Date.now() / 1000,
+      startedAt: null, finishedAt: null, cancelable: true, progress: { phase: 'queued' } });
+    return { accepted: true, jobId: id, pool, state: 'queued' };
+  };
+  const publicJob = job => {
+    const { work, polls, ...publicData } = job;
+    return publicData;
+  };
   const file = path => ({ type: 'file', name: path.split('/').at(-1), path, lineCount: 40, sizeBytes: 1200, count: 3 });
   const expression = app('implies', app('and', app('isa', variable('?X'), symbol('Dog')), app('relatedTo', variable('?X'), symbol('Fido'))), app('isa', variable('?X'), symbol('Animal')));
   const assertions = ['x_A', 'x_B', 'x_A'].map((mt, index) => ({
@@ -136,15 +149,42 @@ test('real browser exercises the API contract, source transactions, rendering an
             return json(page(filtered, url));
           }
           case '/api/version': return json({ version: 'fixture-v1' });
+          case '/api/server/settings': return json(serverConfig);
+          case '/api/server/settings/save':
+            serverConfig = { ...body.settings, revision: `fixture-${Date.now()}`, issues: [] };
+            return json(serverConfig);
+          case '/api/tasks': return json({
+            tasks: [...jobs.values()].map(publicJob), completedHistoryLimit: 100, persistence: 'Transient task history.',
+            pools: ['loader', 'inference', 'http'].map(pool => ({ pool, profile: { start: 5, max: 10, spare: 2 },
+              total: 5, busy: 0, idle: 5, queued: [...jobs.values()].filter(job => job.pool === pool && job.state === 'queued').length })),
+          });
+          case '/api/tasks/detail': {
+            const job = jobs.get(url.searchParams.get('id'));
+            if (!job) return json({ error: { code: 'not_found', message: 'No task' } }, 404);
+            if (job.state === 'queued') { job.state = 'running'; job.startedAt = Date.now() / 1000; job.progress = { phase: 'running' }; }
+            else if (job.state === 'running') {
+              Object.assign(job, job.work()); job.work = null;
+              job.state = job.error || ['exception', 'timeout'].includes(job.result?.status) ? 'failed' : 'succeeded';
+              job.finishedAt = Date.now() / 1000; job.cancelable = false;
+            }
+            return json(publicJob(job));
+          }
+          case '/api/tasks/cancel': {
+            const job = jobs.get(body.id);
+            if (job && ['queued', 'running'].includes(job.state)) {
+              job.state = 'cancelled'; job.finishedAt = Date.now() / 1000; job.cancelable = false;
+            }
+            return json(publicJob(job));
+          }
           case '/api/test-questions': return json({ generation, ...page(active.length ? storedQuestions : [], url) });
           case '/api/prolog/access': return json({ token: 'fixture-local-token' });
           case '/api/prolog/query': {
             const execution = { mode: 'prolog', status: 'success', generation, mt: body.mt,
               output: 'captured output', errorOutput: '', exception: null,
               solutions: [{ bindings: [{ name: 'V1', value: 'one' }] }] };
-            if (body.query.includes('throw')) return json({ error: { code: 'prolog_exception', message: 'test exception',
-              execution: { ...execution, status: 'exception', exception: { term: 'test_exception', message: 'test exception' } } } }, 422);
-            return json(execution);
+            return json(acceptJob('inference', 'Prolog query', [], () => ({ result: body.query.includes('throw')
+              ? { ...execution, status: 'exception', exception: { term: 'test_exception', message: 'test exception' } }
+              : execution })), 202);
           }
           case '/api/app/reload':
             await new Promise(resolve => setTimeout(resolve, 40));
@@ -155,26 +195,26 @@ test('real browser exercises the API contract, source transactions, rendering an
               message: 'Reloaded 1 changed Prolog application file. KB generation and sources are unchanged.' });
           case '/api/query': {
             const contexts = body.query === '(compoundQuery ?X)' && !body.mt ? [compoundA, compoundB] : [normalizedMT(body.mt) || 'x_A'];
-            return json({ solutions: contexts.map(mt => ({
+            return json(acceptJob('inference', 'KB inference', [], () => ({ result: { solutions: contexts.map(mt => ({
               mt, mtExpression: mtExpressions.get(mt), bindings: [{ name: '?X', value: symbol('Fido') }],
               proof: [{ id: assertions[0].id, kind: 'fact', before: 0, after: 1, expression: app('isa', symbol('Fido'), symbol('Dog')) }],
-            })) });
+            })) } })), 202);
           }
           case '/api/kb/load':
             if (failNextLoad) {
               const error = typeof failNextLoad === 'object' ? failNextLoad : { code: 'compile_failed', message: 'Fixture compile failure' };
               failNextLoad = false;
-              return json({ error }, error.code === 'busy' ? 503 : 422);
+              return json(acceptJob('loader', 'Load sources', body.files, () => ({ error })), 202);
             }
             if (body.generation !== generation) return json({ error: { code: 'stale_generation', message: 'Stale generation' } }, 409);
-            active = body.files;
-            generation++;
-            return json(status());
+            return json(acceptJob('loader', 'Load sources', body.files, () => {
+              active = body.files; generation++; return { result: status() };
+            }), 202);
           case '/api/kb/unload':
             if (body.generation !== generation) return json({ error: { code: 'stale_generation', message: 'Stale generation' } }, 409);
-            active = active.filter(path => path !== body.path);
-            generation++;
-            return json(status());
+            return json(acceptJob('loader', 'Unload source', [body.path], () => {
+              active = active.filter(path => path !== body.path); generation++; return { result: status() };
+            }), 202);
           default: {
             const asset = mountedPath === '/' ? 'index.html' : mountedPath?.slice(1);
             if (!['index.html', 'app.js', 'style.css', 'render.js', 'model.js', 'diagnostics.js', 'settings.js', 'settings.json', 'paths.js', 'paths.json'].includes(asset)) { response.writeHead(404); response.end(); return; }
@@ -369,6 +409,19 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelectorAll(".mapping-table tbody tr").length'), 1);
     assert.ok(await evaluate('document.querySelector(".selected-mapping") !== null'));
     await route('#/settings');
+    await wait('document.querySelector(".server-settings-form") !== null');
+    assert.equal(await evaluate('document.querySelector(\'input[name="server_loader_start"]\').value'), '5');
+    assert.equal(await evaluate('document.querySelector(\'input[name="server_inference_max"]\').value'), '10');
+    assert.equal(await evaluate('document.querySelector(\'input[name="server_http_spare"]\').value'), '2');
+    const configGeneration = generation;
+    await evaluate('Array.from(document.querySelectorAll(".server-settings button")).find(button => button.textContent === "Use currently loaded sources").click(); document.querySelector(".server-settings-form").requestSubmit()');
+    await wait('document.querySelector(".server-settings").textContent.includes("Saved for the next server start")');
+    assert.equal(generation, configGeneration);
+    assert.equal(serverConfig.startupConfigured, true);
+    assert.deepEqual(serverConfig.startupFiles, active);
+    await wait('document.querySelectorAll(".tasks-panel [data-pool]").length === 3');
+    assert.ok(await evaluate('document.querySelector(\'[data-pool="loader"]\').textContent.includes("Requested tasks")'));
+    assert.ok(await evaluate('document.querySelector(\'[data-pool="inference"]\').textContent.includes("Requested tasks")'));
     assert.equal(await evaluate('document.querySelector(\'input[name="pageSize"]\').value'), '400');
     assert.equal(await evaluate('document.querySelector(\'input[name="queryLimit"]\').value'), '400');
     await evaluate('document.querySelector(\'input[name="pageSize"]\').value = "0"; document.querySelector(".settings-form").requestSubmit()');

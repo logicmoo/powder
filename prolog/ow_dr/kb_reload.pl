@@ -1,5 +1,6 @@
 :- module(kb_reload, [reload_changed_files/1, remember_loaded_code/0]).
 :- use_module(kb_paths).
+:- use_module(kb_activity).
 :- use_module(library(crypto)).
 :- use_module(library(lists)).
 :- use_module(library(ugraphs)).
@@ -29,7 +30,7 @@ changed_file(File) :-
 reload_changed_files(Report) :-
     (mutex_trylock(openworld_code_reload)->
       setup_call_cleanup(true,
-        with_mutex(openworld_store,reload_locked(Report)),
+        with_exclusive_reload(with_mutex(openworld_store,reload_locked(Report))),
         mutex_unlock(openworld_code_reload))
     ;throw(error(application_reload_busy,_))).
 

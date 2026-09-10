@@ -15,6 +15,7 @@ const state = {
   settings: { ...DEFAULT_SETTINGS },
   query: { query: '', mt: '', limit: DEFAULT_SETTINGS.queryLimit, timeout: 3 },
   refreshQuestions: null,
+  queryJobId: null,
 };
 
 function element(tag, attributes = {}, ...children) {
@@ -57,6 +58,36 @@ function api(path, params = {}, options = {}) {
     if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
   }
   return requestJSON(`${apiPath(path)}${query.size ? `?${query}` : ''}`, options);
+}
+
+async function localAdmin(path, body) {
+  const { token } = await api('prolog/access');
+  return api(path, {}, { method: 'POST', body, headers: { 'X-Powder-Local-Token': token } });
+}
+
+async function awaitTask(accepted, { signal, onUpdate } = {}) {
+  if (!accepted?.accepted) return accepted;
+  const id = accepted.jobId;
+  const abort = () => { localAdmin('tasks/cancel', { id }).catch(error => showNotice(`Cancellation could not be confirmed: ${error.message}`, true)); };
+  if (signal?.aborted) { abort(); throw new DOMException('Cancelled', 'AbortError'); }
+  signal?.addEventListener('abort', abort, { once: true });
+  try {
+    for (;;) {
+      const task = await api('tasks/detail', { id }, { signal });
+      onUpdate?.(task);
+      if (task.state === 'succeeded') return task.result;
+      if (['failed', 'cancelled'].includes(task.state)) {
+        if (task.result?.mode === 'prolog') {
+          throw new APIError(task.result.exception?.message ?? 'Prolog task failed.', 'prolog_exception', 422, { execution: task.result });
+        }
+        throw new APIError(task.error?.message ?? `Task ${task.state}.`, `task_${task.state}`, 422, task.error);
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+      if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    }
+  } finally {
+    signal?.removeEventListener('abort', abort);
+  }
 }
 
 function showNotice(message, isError = false) {
@@ -376,6 +407,10 @@ async function overview(_route, signal) {
     heading('Knowledge overview', 'Follow a term, inspect its assertions, and trace every claim to its source.'),
     searchForm('search', '', 'Search the active knowledge base…'),
     stats, diagnosticsPanel(status, { status: true }));
+  if (status.startup) panel.append(element('section', { className: 'startup-status', role: 'status' },
+    element('h2', {}, `Startup load: ${status.startup.state}`),
+    status.startup.error?.message && element('p', {}, status.startup.error.message),
+    link('Inspect requested tasks and startup settings', 'settings')));
   if (!status.files?.length) {
     panel.append(loadedFiles([]));
     return panel;
@@ -569,7 +604,11 @@ async function mutateSource(path, body, successMessage) {
   setMutation(true);
   showNotice('Updating the active knowledge base. The previous generation remains available until this succeeds.');
   try {
-    const status = await api(path, {}, { method: 'POST', body });
+    const accepted = await api(path, {}, { method: 'POST', body });
+    const status = await awaitTask(accepted, { onUpdate: task => {
+      const progress = task.progress ?? {};
+      showNotice(`Loader task ${task.state}: ${progress.phase ?? task.label}${progress.source ? ` — ${progress.source}` : ''}. The previous KB remains active until publication succeeds.`);
+    } });
     setStatus(status);
     if (state.selection) state.selection.reset((status.files ?? []).map(file => file.path), status.generation);
     showNotice(successMessage);
@@ -738,9 +777,9 @@ function queryResults(data) {
 }
 
 function prologResults(data) {
-  const failed = ['exception', 'timeout'].includes(data.status);
+  const failed = ['exception', 'timeout', 'cancelled'].includes(data.status);
   const titles = { success: 'Prolog succeeded', failure: 'Prolog failed (false)',
-    limit: 'Prolog result limit reached', exception: 'Prolog raised an exception', timeout: 'Prolog timed out' };
+    limit: 'Prolog result limit reached', exception: 'Prolog raised an exception', timeout: 'Prolog timed out', cancelled: 'Prolog cancelled' };
   const panel = element('section', { className: `prolog-results${failed ? ' error-panel' : ''}`, role: failed ? 'alert' : 'status' },
     element('h2', {}, titles[data.status] ?? data.status),
     element('p', { className: 'muted' }, 'Executed in powder_console. Side effects are not rolled back, including on failure, cancellation, or exceptions.'));
@@ -818,8 +857,13 @@ async function queryPage(route, signal) {
     try {
       let token;
       if (prolog) token = (await api('prolog/access', {}, { signal: controller.signal })).token;
-      const data = await api(prolog ? 'prolog/query' : 'query', {}, { method: 'POST', body, signal: controller.signal,
+      const accepted = await api(prolog ? 'prolog/query' : 'query', {}, { method: 'POST', body,
         headers: prolog ? { 'X-Powder-Local-Token': token } : {} });
+      state.queryJobId = accepted.jobId ?? null;
+      const data = await awaitTask(accepted, { signal: controller.signal, onUpdate: task => {
+        results.replaceChildren(element('p', { className: 'loading', role: 'status' },
+          `Inference task ${task.id}: ${task.state}.`));
+      } });
       if (!controller.signal.aborted) results.replaceChildren(prolog ? prologResults(data) : queryResults(data));
     } catch (error) {
       results.replaceChildren(error.name === 'AbortError'
@@ -827,6 +871,7 @@ async function queryPage(route, signal) {
         : error.execution ? prologResults(error.execution) : errorPanel(error, () => form.requestSubmit(prolog ? runProlog : run)));
     } finally {
       if (state.queryController === controller) state.queryController = null;
+      state.queryJobId = null;
       run.disabled = false;
       runProlog.disabled = false;
       cancel.hidden = true;
@@ -1032,7 +1077,7 @@ async function mappingsPage(route, signal) {
   return panel;
 }
 
-function settingsPage() {
+function settingsPage(_route, signal) {
   const inputs = {};
   const feedback = element('div', { className: 'settings-feedback', 'aria-live': 'polite' });
   const apply = values => {
@@ -1060,7 +1105,144 @@ function settingsPage() {
       element('button', { type: 'submit', className: 'button' }, 'Save settings'),
       button('Restore defaults', () => apply(DEFAULT_SETTINGS), 'button secondary')), feedback),
     element('p', { className: 'muted' }, 'Page size applies to terms, predicates, assertions and mappings. Explicit URL limits still override defaults. Query timeouts remain unchanged. All microtheories are always listed, without a cap.'),
-    applicationReloadControls());
+    serverSettingsPanel(signal), tasksPanel(signal), applicationReloadControls());
+}
+
+function serverSettingsPanel(signal) {
+  const panel = element('section', { className: 'server-settings' },
+    element('h2', {}, 'Next server startup'),
+    element('p', {}, 'This ordered source list and these pool profiles are saved on the server. Saving does not load files, restart, or resize the running server.'));
+  const contents = element('div', { role: 'status' }, 'Loading saved server settings…');
+  panel.append(contents);
+  const load = async () => {
+    try {
+      const config = await api('server/settings', {}, { signal });
+      const configured = element('input', { type: 'checkbox', checked: config.startupConfigured });
+      const rows = element('ol', { className: 'startup-source-list' });
+      const addRow = value => {
+        const input = element('input', { type: 'text', value, placeholder: 'KBs\\tinyKB.kif or an absolute source path', 'aria-label': 'Startup source path' });
+        const row = element('li', {}, input,
+          button('Up', () => { if (row.previousElementSibling) rows.insertBefore(row, row.previousElementSibling); }, 'button secondary'),
+          button('Down', () => { if (row.nextElementSibling) rows.insertBefore(row.nextElementSibling, row); }, 'button secondary'),
+          button('Remove', () => row.remove(), 'button secondary'));
+        rows.append(row);
+      };
+      for (const file of config.startupFiles) addRow(file);
+      const fields = {};
+      const profiles = element('div', { className: 'pool-settings' },
+        ['loader', 'inference', 'http'].map(pool => element('fieldset', {},
+          element('legend', {}, `${pool === 'http' ? 'HTTP (server-wide)' : pool} pool`),
+          ['start', 'max', 'spare'].map(key => {
+            const input = element('input', { type: 'number', name: `server_${pool}_${key}`, min: key === 'spare' ? 0 : 1, max: 128, step: 1, required: true, value: config.pools[pool][key] });
+            fields[`${pool}.${key}`] = input;
+            return inputField({ start: 'Startup threads', max: 'Maximum threads', spare: 'Preferred idle reserve' }[key], input);
+          }))));
+      const feedback = element('div', { 'aria-live': 'polite' });
+      const save = element('button', { type: 'submit', className: 'button' }, 'Save next-start settings');
+      const form = element('form', { className: 'server-settings-form', onsubmit: async event => {
+        event.preventDefault();
+        save.disabled = true;
+        try {
+          const pools = Object.fromEntries(['loader', 'inference', 'http'].map(pool => [pool,
+            Object.fromEntries(['start', 'max', 'spare'].map(key => [key, Number(fields[`${pool}.${key}`].value)]))]));
+          for (const profile of Object.values(pools)) {
+            if (!Number.isInteger(profile.start) || !Number.isInteger(profile.max) || !Number.isInteger(profile.spare)
+              || profile.start < 1 || profile.max > 128 || profile.start > profile.max || profile.spare < 0 || profile.spare > profile.max) {
+              throw new Error('Pool profiles require 1 ≤ startup ≤ maximum ≤ 128 and 0 ≤ spare ≤ maximum.');
+            }
+          }
+          const startupFiles = Array.from(rows.querySelectorAll('input')).map(input => input.value.trim());
+          if (startupFiles.some(path => !path)) throw new Error('Enter a source path or remove the empty startup row.');
+          const saved = await localAdmin('server/settings/save', { revision: config.revision,
+            settings: { startupConfigured: configured.checked, startupFiles, pools } });
+          config.revision = saved.revision;
+          rows.replaceChildren(); for (const file of saved.startupFiles) addRow(file);
+          feedback.setAttribute('role', 'status');
+          feedback.replaceChildren(element('p', {}, 'Saved for the next server start. No files were loaded and no running pools were resized.'),
+            ...(saved.issues ?? []).map(issue => element('p', {}, `${issue.path ?? ''} ${issue.message}`)));
+        } catch (error) {
+          feedback.setAttribute('role', 'alert');
+          feedback.replaceChildren(element('p', { className: 'error-panel' }, error.message));
+        } finally { save.disabled = false; }
+      } },
+      element('label', { className: 'field' }, element('span', {}, configured, ' Use the saved source list on server startup')),
+      element('p', { className: 'muted' }, 'Unchecked preserves the default initial KB. Checked with an empty list loads no KB. Explicit command-line sources always take precedence.'),
+      rows, button('Add source', () => addRow(''), 'button secondary'),
+      button('Use currently loaded sources', () => { rows.replaceChildren(); for (const file of state.status?.files ?? []) addRow(file.path); configured.checked = true; }, 'button secondary'),
+      profiles, save, feedback);
+      contents.replaceChildren(...(config.issues ?? []).map(issue => element('p', { role: 'alert' }, issue.message)), form);
+    } catch (error) {
+      if (error.name !== 'AbortError') contents.replaceChildren(errorPanel(error, load));
+    }
+  };
+  load();
+  return panel;
+}
+
+function tasksPanel(signal) {
+  const panel = element('section', { className: 'tasks-panel' }, element('h2', {}, 'Tasks and worker pools'));
+  const content = element('div', { role: 'status' }, 'Loading requested tasks…');
+  let timer;
+  const stamp = value => value === null || value === undefined ? '—' : new Date(value * 1000).toLocaleString();
+  const refresh = async () => {
+    clearTimeout(timer);
+    if (signal.aborted) return;
+    if (document.hidden) { timer = setTimeout(refresh, 1000); return; }
+    try {
+      const data = await api('tasks', {}, { signal });
+      const pools = element('div', { className: 'worker-pool-list' });
+      for (const pool of data.pools ?? []) {
+        const profile = pool.profile;
+        const name = pool.pool === 'http' ? 'HTTP server-wide pool' : `${pool.pool} pool`;
+        const section = element('section', { 'data-pool': pool.pool },
+          element('h3', {}, name),
+          element('p', {}, `Actual ${pool.total} · busy ${pool.busy} · idle ${pool.idle} · queued ${pool.queued}`),
+          element('p', { className: 'muted' }, profile
+            ? `Running profile: startup ${profile.start}, maximum ${profile.max}, spare ${profile.spare}`
+            : pool.pool === 'http' ? 'This listener predates pool configuration. Restart normally to apply a saved profile.'
+              : 'This pool has not been initialized. Restart the server once to create its workers.'),
+          pool.statisticsBasis && element('p', { className: 'muted' }, pool.statisticsBasis),
+          pool.sparePolicy && element('p', { className: 'muted' }, pool.sparePolicy));
+        if (pool.pool !== 'http') {
+          const tasks = (data.tasks ?? []).filter(task => task.pool === pool.pool);
+          section.append(element('h4', {}, 'Requested tasks'),
+            tasks.length ? element('ul', { className: 'requested-tasks' }, tasks.map(task => {
+              const item = element('li', { 'data-task-id': task.id, 'data-state': task.state },
+                element('strong', {}, `${task.label}: ${task.state}`),
+                element('code', {}, task.id),
+                element('p', { className: 'muted' }, `Requested ${stamp(task.createdAt)} · started ${stamp(task.startedAt)} · finished ${stamp(task.finishedAt)}`),
+                element('p', {}, `${task.progress?.phase ?? ''}${task.progress?.source ? ` — ${task.progress.source}` : ''}`),
+                task.progress?.totalFiles ? element('p', {}, `${task.progress.completedFiles ?? 0}/${task.progress.totalFiles} files`) : null,
+                task.files?.length ? element('details', {}, element('summary', {}, `${task.files.length} selected files/paths`),
+                  element('pre', { className: 'prolog-output' }, task.files.join('\n'))) : null,
+                task.error ? requestErrorDetails(new APIError(task.error.message, 'task_failed', 422, task.error)) : null,
+                task.resultCount !== undefined && element('p', {}, `${task.resultCount} solutions returned`),
+                task.resultGeneration !== undefined && element('p', {}, `Published generation ${task.resultGeneration}`));
+              if (task.cancelable && ['queued', 'running'].includes(task.state)) {
+                item.append(button('Cancel task', async event => {
+                  event.currentTarget.disabled = true;
+                  try { await localAdmin('tasks/cancel', { id: task.id }); await refresh(); }
+                  catch (error) { showNotice(error.message, true); }
+                }, 'button secondary'));
+              }
+              return item;
+            })) : element('p', { className: 'muted' }, 'No requested tasks in this pool.'));
+        }
+        pools.append(section);
+      }
+      content.replaceChildren(pools,
+        ...(data.serviceErrors ?? []).map(error => element('p', { role: 'alert' }, `${error.pool}: ${error.message}`)),
+        element('p', { className: 'muted' }, `All active/queued tasks and the latest ${data.completedHistoryLimit} completed tasks are retained. ${data.persistence}`));
+    } catch (error) {
+      if (error.name !== 'AbortError') content.replaceChildren(errorPanel(error, refresh));
+    } finally {
+      if (!signal.aborted) timer = setTimeout(refresh, 1000);
+    }
+  };
+  panel.append(button('Refresh tasks', refresh, 'button secondary'), content);
+  signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
+  refresh();
+  return panel;
 }
 
 function applicationReloadControls() {
@@ -1155,12 +1337,13 @@ function startLiveReload() {
         location.reload();
         return;
       }
-      if (['microtheory', 'microtheories', 'query'].includes(parseRoute(location.hash).name)) {
+      {
+        const route = parseRoute(location.hash).name;
         const status = await api('status', {}, { signal: requestController.signal });
-        if (status.generation !== state.status?.generation) {
+        if (status.generation !== state.status?.generation || status.startup?.state !== state.status?.startup?.state) {
           setStatus(status);
           if (state.refreshQuestions) await state.refreshQuestions();
-          else await renderRoute();
+          else if (route !== 'settings') await renderRoute();
         }
       }
       target.textContent = 'Interface live refresh enabled';

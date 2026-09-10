@@ -15,12 +15,16 @@ main(Args) :-
     catch(run(Args),Error,(print_message(error,Error),halt(1))).
 run(Args) :-
     arguments(Args,3050,Port,[],Selected),
-    (Selected=[]->default_source(Source),Sources=[Source];reverse(Selected,Sources)),
-    load_sources(Sources,any,Status),
-    start_server(Port),
+    reverse(Selected,Explicit),
+    kb_server:effective_server_settings(Settings),
+    start_server(Port,Settings),
     app_base(Base),
-    format('powder - Paraconsistent Open World Defeasible Epistemic Reasoner~nReady: http://localhost:~d~w~n',[Port,Base]),
-    format('Generation ~d; ~d assertions.~n',[Status.generation,Status.counts.assertions]),
+    format('powder - Paraconsistent Open World Defeasible Epistemic Reasoner~nServer listening: http://localhost:~d~w~n',[Port,Base]),
+    queue_startup(Explicit,Settings,Task),
+    (Task.accepted==false->
+       (kb_server:startup_config_error(_)->format('Startup settings failed; the server is available to correct them in Settings.~n',[])
+       ;format('No startup KB load configured.~n',[]))
+    ;format('Startup load queued as ~w. Inspect Settings Tasks for completion or failures.~n',[Task.jobId])),
     thread_get_message(stop),stop_server.
 arguments([],Port,Port,Sources,Sources).
 arguments(['--'|Rest],P,Port,S,Files) :- !,arguments(Rest,P,Port,S,Files).

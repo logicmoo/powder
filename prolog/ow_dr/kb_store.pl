@@ -1,7 +1,8 @@
 :- module(kb_store, [load_sources/3, unload_source/3, status/1, active_modules/1,
                     assertion/2, assertions/1, terms/1, predicates/1,
                     generation/1, source_info/2, query_text/5,
-                    term_assertions/2, mt_assertions/2, term_exists/1, microtheories/1]).
+                    term_assertions/2, mt_assertions/2, term_exists/1, microtheories/1,
+                    load_sources_worker/3, unload_source_worker/2, with_generation/1]).
 :- use_module(kb_paths).
 :- use_module(kb_runtime, []).
 :- use_module(kb_compile, []).
@@ -9,6 +10,7 @@
 :- use_module(kb_index, []).
 :- use_module(kb_reader, []).
 :- use_module(kb_terms).
+:- use_module(kb_activity).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
 :- use_module(library(lists)).
@@ -20,6 +22,8 @@
 :- dynamic generation_timing/1.
 :- dynamic microtheory_catalog/1.
 :- dynamic term_count/2, constant_locator/2, mt_locator/2, ordered_assertions/1, current_counts/1.
+:- dynamic native_readers/2, retired_native/1.
+:- meta_predicate with_generation(2).
 initialize_store :-
     forall(member(Fact,[generation(0),term_rank([]),predicate_rank([]),
       microtheory_catalog([]),generation_timing(_{loadSeconds:0}),ordered_assertions([]),
@@ -34,20 +38,29 @@ cleanup_owned_runtime :-
       catch(cleanup_native(Native),Error,print_message(error,Error))).
 
 load_sources(Paths, Expected, Status) :-
-    with_mutex(openworld_code_reload,load_sources_locked(Paths,Expected,Status)).
+    (current_predicate(kb_jobs:pools_started/0),kb_jobs:pools_started,\+kb_jobs:in_loader->
+      kb_jobs:submit_load(Paths,Expected,Job),kb_jobs:await_result(Job.jobId,Status)
+    ;with_application(load_sources_locked(Paths,Expected,[],Status))).
 
-load_sources_locked(Paths, Expected, Status) :-
+load_sources_worker(Paths,Id,Status) :-
+    prepare_sources(Paths,[progress_observer(kb_jobs:loader_progress(Id))],Prepared,Start),
+    kb_jobs:wait_loader_turn(Id),kb_jobs:mark_publishing(Id),
+    install_generation(Prepared,any,Start,Status).
+
+load_sources_locked(Paths, Expected, Options, Status) :-
+    prepare_sources(Paths,Options,Prepared,Start),
+    install_generation(Prepared,Expected,Start,Status).
+
+prepare_sources(Paths,Options,Prepared,Start) :-
     statistics(walltime,[Start,_]),
     must_be(list, Paths),
     maplist(kb_paths:resolve_source, Paths, Absolute),
-    kb_compile:discover_sources(Absolute, Files),
-    kb_compile:compile_sources(Files, [progress(none)], Summary),
+    kb_compile:compile_sources(Absolute, [progress(none),preserve_order(true)|Options], Summary),
     ( Summary.failures =:= 0, Summary.busy =:= 0 -> true
     ; throw(error(compile_incomplete(Summary), _))
     ),
     maplist(prepare_source, Summary.results, Prepared),
-    validate_unique_ids(Prepared),
-    with_mutex(openworld_store, install_generation(Prepared, Expected, Start, Status)).
+    validate_unique_ids(Prepared).
 
 prepare_source(Info, prepared(Source, WithHash, Records)) :-
     absolute_file_name(Info.source,Source,[access(read)]),
@@ -63,16 +76,19 @@ validate_unique_ids(Prepared) :-
     ; true).
 
 install_generation(Prepared, Expected, Start, Status) :-
-    generation(Current),
-    ( Expected == any ; Expected =:= Current ), !,
+    with_mutex(openworld_store,
+      (generation(Current),
+       ((Expected==any;Expected=:=Current)->true;throw(error(generation_conflict(Expected,Current),_))))),
     stage_sources(Prepared, Staged),
-    catch((commit_generation(Staged, Current)->true;throw(error(generation_install_failed,_))), Error,
+    catch(with_mutex(openworld_store,
+      (generation(Now),
+       (Now=:=Current->true;throw(error(generation_conflict(Current,Now),_))),
+       (commit_generation(Staged,Current)->true;throw(error(generation_install_failed,_))),
+       statistics(walltime,[End,_]),Elapsed is (End-Start)/1000,
+       retractall(generation_timing(_)),assertz(generation_timing(_{loadSeconds:Elapsed})),
+       status(Status))), Error,
           (cleanup_staged(Staged), throw(Error))),
-    statistics(walltime,[End,_]),Elapsed is (End-Start)/1000,
-    retractall(generation_timing(_)),assertz(generation_timing(_{loadSeconds:Elapsed})),
-    status(Status).
-install_generation(_, Expected, _, _) :-
-    generation(Current), throw(error(generation_conflict(Expected,Current), _)).
+    !.
 
 stage_sources(Prepared, Staged) :-
     stage_sources(Prepared, [], Staged).
@@ -107,7 +123,7 @@ commit_generation(Staged, Current) :-
         rebuild_rankings,
         retractall(generation(_)), Next is Current+1, assertz(generation(Next))
     )),
-    maplist(cleanup_native, Obsolete).
+    maplist(retire_native, Obsolete).
 
 activate_source(entry(Source,Info,Module,Native,Records,_)) :-
     assertz(source_info(Source,Info)), assertz(source_module(Source,Module,Native)),
@@ -156,6 +172,11 @@ cleanup_native(Native) :-
     ( exists_directory(Directory) -> delete_directory(Directory) ; true ).
 
 unload_source(Path, Expected, Status) :-
+    (current_predicate(kb_jobs:pools_started/0),kb_jobs:pools_started,\+kb_jobs:in_loader->
+      atom_string(Atom,Path),kb_jobs:submit_unload(Atom,Expected,Job),kb_jobs:await_result(Job.jobId,Status)
+    ;unload_source_direct(Path,Expected,Status)).
+unload_source_worker(Path,Status) :- generation(G),unload_source_direct(Path,G,Status).
+unload_source_direct(Path, Expected, Status) :-
     atom_string(Input,Path),repo_root(Root),
     absolute_file_name(Input,Absolute,[relative_to(Root),access(none)]),
     with_mutex(openworld_store, unload_locked(Absolute, Expected, Status)).
@@ -173,7 +194,27 @@ unload_locked(Path, Expected, Status) :-
         rebuild_rankings,retractall(generation(_)),
         Next is Current+1,assertz(generation(Next))
     )),
-    cleanup_native(Native), status(Status).
+    retire_native(Native), status(Status).
+
+retire_native(File) :-
+    (native_readers(File,N),N>0->
+      (retired_native(File)->true;assertz(retired_native(File)))
+    ;cleanup_native(File)).
+
+with_generation(Goal) :-
+    setup_call_cleanup(
+      with_mutex(openworld_store,
+        (generation(Generation),active_modules(Modules),
+         findall(File,source_module(_,_,File),Files),maplist(acquire_native,Files))),
+      call(Goal,Modules,Generation),
+      with_mutex(openworld_store,maplist(release_native,Files))).
+acquire_native(File) :-
+    (retract(native_readers(File,N))->true;N=0),
+    Next is N+1,assertz(native_readers(File,Next)).
+release_native(File) :-
+    retract(native_readers(File,N)),Next is N-1,
+    (Next>0->assertz(native_readers(File,Next))
+    ;retract(retired_native(File))->cleanup_native(File);true).
 
 active_modules(Modules) :- findall(M,source_module(_,M,_),Modules).
 assertions(Items) :-
@@ -232,20 +273,26 @@ diagnostic_text(Data,Message,Text) :-
     format(string(Text),'~w:~d: ~w',[Data.source,Data.line,Message]).
 
 query_text(Text, MT, Limit, Timeout, Result) :-
+    (current_predicate(kb_jobs:pools_started/0),kb_jobs:pools_started,\+kb_jobs:in_inference->
+      (var(MT)->Scope=none;Scope=context(MT)),
+      kb_jobs:submit_inference(kb,query(Text,Scope,Limit,Timeout),Job),kb_jobs:await_result(Job.jobId,Result)
+    ;with_application(with_generation(query_snapshot(Text,MT,Limit,Timeout,Result)))).
+query_snapshot(Text,MT,Limit,Timeout,Result,Modules,Generation) :-
     kb_reader:normalize_query(Text,Semantic,Names),
-    active_modules(Modules),
     kb_runtime:query_modules(Modules,Semantic,MT,Limit,Timeout,Solutions),
-    maplist(solution_json(Names),Solutions,Values), Result=_{solutions:Values}.
-solution_json(Names,solution(Mt,Variables,Steps),
+    maplist(solution_json(Names,Modules),Solutions,Values), Result=_{solutions:Values,generation:Generation}.
+solution_json(Names,Modules,solution(Mt,Variables,Steps),
               _{mt:MtKey,mtExpression:MtExpression,bindings:Bindings,proof:Proof}) :-
     context_key(Mt,MtKey),term_ast(Mt,[],MtExpression),
     maplist(binding_json,Names,Variables,Bindings),
-    maplist(step_json,Steps,Proof).
+    maplist(step_json(Modules),Steps,Proof).
 binding_json(Name,Value,_{name:Name,value:AST}) :- term_ast(Value,[Name],AST).
-step_json(step(Id,Kind,Slots,Before,After),JSON) :-
-    assertion(Id,Data),
-    maplist(binding_json,Data.names,Slots,Bindings),
-    kb_runtime:module_assertion(Data.module,Id,Semantic,_),
-    bound_semantic_ast(Semantic,Data.names,Slots,Expression),
-    JSON=_{id:Id,kind:Kind,expression:Expression,mt:Data.mt,mtExpression:Data.mtExpression,
+step_json(Modules,step(Id,Kind,Slots,Before,After),JSON) :-
+    member(Module,Modules),kb_runtime:module_assertion(Module,Id,Semantic,_),!,
+    kb_runtime:module_metadata(Module,kb_names,Id,Names),
+    kb_runtime:module_metadata(Module,microtheory,Id,Mt),
+    context_key(Mt,MtKey),term_ast(Mt,[],MtExpression),
+    maplist(binding_json,Names,Slots,Bindings),
+    bound_semantic_ast(Semantic,Names,Slots,Expression),
+    JSON=_{id:Id,kind:Kind,expression:Expression,mt:MtKey,mtExpression:MtExpression,
            before:Before,after:After,bindings:Bindings}.

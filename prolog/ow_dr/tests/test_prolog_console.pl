@@ -93,9 +93,9 @@ test(real_http_requires_token_and_captures_output) :-
        http_post(QueryURL,json(_{query:"write(visible), X=ok.",limit:2,timeout:3}),Denied,
          [json_object(dict),status_code(DeniedStatus)]),
        assertion(DeniedStatus=:=403),assertion(Denied.error.code=="forbidden"),
-       http_post(QueryURL,json(_{query:"write(visible), X=ok.",limit:2,timeout:3}),Reply,
+       http_post(QueryURL,json(_{query:"write(visible), X=ok.",limit:2,timeout:3}),Accepted,
          [request_header('X-Powder-Local-Token'=Access.token),json_object(dict),status_code(Status)]),
-       assertion(Status=:=200),assertion(Reply.output=="visible"),
-       assertion(Reply.status=="success")),
+       assertion(Status=:=202),atom_string(Id,Accepted.jobId),kb_jobs:await_result(Id,Reply),
+       assertion(Reply.output=="visible"),assertion(Reply.status==success)),
       kb_server:stop_server).
 :- end_tests(full_prolog_console).

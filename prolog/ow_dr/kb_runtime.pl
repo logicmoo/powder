@@ -57,9 +57,17 @@ install_guard(Module, Guard) :-
 native_load(File, Module) :-
     native_load(File,Module,[]).
 import_cache(File,Module) :-
+    (current_predicate(kb_jobs:pools_started/0),kb_jobs:pools_started,\+kb_jobs:in_loader->
+      kb_jobs:submit_native(import_cache(File,Module),Job),kb_jobs:await_result(Job.jobId,_)
+    ;import_cache_direct(File,Module)).
+import_cache_direct(File,Module) :-
     kb_cache:read_cache(File,_,_),
     native_load(File,Module).
 native_load(File, Module, Options) :-
+    (current_predicate(kb_jobs:pools_started/0),kb_jobs:pools_started,\+kb_jobs:in_loader->
+      kb_jobs:submit_native(native_load(File,Module,Options),Job),kb_jobs:await_result(Job.jobId,_)
+    ;native_load_direct(File,Module,Options)).
+native_load_direct(File, Module, Options) :-
     must_be(atom, Module),
     must_be(list,Options),
     flag(ow_native_load,Key,Key+1),
@@ -141,8 +149,14 @@ native_unload(File) :-
     retractall(native_signature(_,Absolute,_,_)).
 
 native_modules(Modules) :-
-    findall(M, (native_file(_, M), once(module_metadata(M, microtheory, _, _))), Ms),
+    (nb_current(logos_query,context(Selected,_,_,_))->Modules=Selected
+    ;visible_native_modules(Modules)).
+visible_native_modules(Modules) :-
+    findall(M, (native_file(File, M),\+retired_file(File),
+                once(module_metadata(M, microtheory, _, _))), Ms),
     sort(Ms, Modules).
+retired_file(File) :-
+    current_predicate(kb_store:retired_native/1),kb_store:retired_native(File).
 
 module_metadata(Module, Property, Id, Value) :-
     atom(Property), atom_concat(xc_, Property, Predicate),

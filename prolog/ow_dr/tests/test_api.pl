@@ -58,7 +58,7 @@ test(nested_mount_static_api_and_parent_routes) :-
        mount_url(Port,'/api/status',OldURL),
        http_get(OldURL,Old,[to(string),status_code(OldCode)]),assertion(OldCode=:=404),
        assertion(\+sub_string(Old,_,_,_,'<title>powder')),
-       findall(Name,kb_server:api_route(Name,_,_),Names),length(Names,18),
+       findall(Name,kb_server:api_route(Name,_,_),Names),length(Names,23),
        forall(member(Name,Names),(api_path(Name,Path),http_current_handler(Path,_)))),
       (kb_server:stop_server,http_delete_handler('/swish/'))).
 :- end_tests(ow_api).

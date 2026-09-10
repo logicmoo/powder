@@ -1,4 +1,4 @@
-:- module(kb_server, [start_server/1, stop_server/0]).
+:- module(kb_server, [start_server/1, start_server/2, stop_server/0, queue_startup/3]).
 :- use_module(kb_paths).
 :- use_module(kb_store, []).
 :- use_module(kb_catalog).
@@ -9,6 +9,8 @@
 :- use_module(kb_prolog).
 :- use_module(kb_questions).
 :- use_module(kb_urls).
+:- use_module(kb_config).
+:- use_module(kb_jobs).
 :- use_module(library(http/thread_httpd)).
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_parameters)).
@@ -20,6 +22,7 @@
 :- use_module(library(error)).
 :- dynamic server_port/1.
 :- dynamic prolog_access_token/1.
+:- dynamic startup_task/1, startup_config_error/1.
 :- dynamic registered_route/1.
 
 api_route(status,status,[]).
@@ -40,6 +43,11 @@ api_route('app/reload',reload_application,[method(post)]).
 api_route('prolog/access',prolog_access,[]).
 api_route('prolog/query',prolog_query,[method(post)]).
 api_route('test-questions',test_questions,[]).
+api_route('server/settings',server_settings,[]).
+api_route('server/settings/save',save_server_settings,[method(post)]).
+api_route(tasks,tasks,[]).
+api_route('tasks/detail',task_detail,[]).
+api_route('tasks/cancel',cancel_task,[method(post)]).
 
 register_routes :-
     forall(retract(registered_route(Path)),http_delete_handler(Path)),
@@ -58,11 +66,31 @@ unknown_api(Request) :-
     reply_json_dict(_{error:_{code:not_found,message:"Unknown powder API route",path:Path}},[status(404)]).
 
 start_server(Port) :-
+    effective_server_settings(Settings),
+    start_server(Port,Settings).
+start_server(Port,Settings) :-
     must_be(integer,Port),between(1,65535,Port),
-    http_server(http_dispatch,[port('127.0.0.1':Port),workers(4)]),
+    start_pools(Settings),
+    http_server(http_dispatch,[port('127.0.0.1':Port),workers(Settings.pools.http.start)]),
+    attach_http(Port,Settings.pools.http),
     assertz(server_port(Port)).
 stop_server :-
-    forall(retract(server_port(Port)),http_stop_server('127.0.0.1':Port,[])).
+    forall(retract(server_port(Port)),
+      (detach_http(Port),http_stop_server(Port,[]))),
+    stop_pools,retractall(startup_task(_)),retractall(startup_config_error(_)).
+
+queue_startup(Explicit,Settings,Task) :-
+    startup_selection(Explicit,Settings,Sources),retractall(startup_task(_)),
+    (Sources=[]->Task=_{accepted:false}
+    ;submit_load(Sources,any,Task),assertz(startup_task(Task.jobId))).
+
+effective_server_settings(Settings) :-
+    catch(server_settings(Settings),Error,
+      (message_to_string(Error,Message),retractall(startup_config_error(_)),
+       print_message(error,Error),
+       assertz(startup_config_error(Message)),server_defaults(Default),
+       kb_config:settings_file(File),(exists_file(File)->kb_cache:file_digest(File,Revision);Revision=none),
+       Settings=Default.put(_{startupConfigured:true,startupFiles:[],revision:Revision,issues:[_{message:Message}]}))).
 
 endpoint(Name,Request) :-
     catch((valid_origin(Request),
@@ -70,6 +98,8 @@ endpoint(Name,Request) :-
            ; throw(error(domain_error(api_input,Name),_)) )),
           Error,api_error(Error)).
 
+reply_api(_,Reply) :-
+    get_dict(accepted,Reply,true),!,reply_json_dict(Reply,[status(202)]).
 reply_api(prolog_query,Reply) :-
     memberchk(Reply.status,[exception,timeout]),!,
     (Reply.status==timeout->Status=408,Code=prolog_timeout;Status=422,Code=prolog_exception),
@@ -95,6 +125,10 @@ api_error(Error) :-
     reply_json_dict(_{error:Payload},[status(Status)]).
 error_response(error(generation_conflict(_,_),_),409,generation_conflict) :- !.
 error_response(error(application_reload_busy,_),409,reload_busy) :- !.
+error_response(error(server_settings_conflict,_),409,settings_conflict) :- !.
+error_response(error(server_settings_busy,_),409,settings_busy) :- !.
+error_response(error(task_queue_full(_),_),429,queue_full) :- !.
+error_response(error(task_pools_require_startup,_),503,restart_required) :- !.
 error_response(error(application_reload_failed(_),_),500,application_reload_failed) :- !.
 error_response(error(compile_incomplete(S),_),422,compile_failed) :- S.failures>0, !.
 error_response(error(compile_incomplete(_),_),503,busy) :- !.
@@ -109,7 +143,12 @@ error_response(error(source_error(_,_,_,_),_),400,invalid_expression) :- !.
 error_response(error(syntax_error(_),_),400,invalid_prolog_syntax) :- !.
 error_response(_,500,internal_error).
 
-action(status,_,Reply) :- with_mutex(openworld_store,kb_store:status(Reply)).
+action(status,_,Reply) :-
+    with_mutex(openworld_store,kb_store:status(Status)),
+    (startup_task(Id),catch(job_status(Id,Task),error(existence_error(task,_),_),fail)->
+      Reply=Status.put(startup,Task)
+    ;startup_config_error(Message)->Reply=Status.put(startup,_{state:failed,error:_{message:Message}})
+    ;Reply=Status).
 action(reload_application,Request,Reply) :-
     body(Request,Body),
     (dict_pairs(Body,_,[])->true;throw(error(domain_error(empty_reload_request,Body),_))),
@@ -121,13 +160,12 @@ action(prolog_access,Request,_{token:Token}) :-
         crypto_n_random_bytes(32,Bytes),crypto_data_hash(Bytes,Token,[encoding(octet)]),
         assertz(prolog_access_token(Token)))).
 action(prolog_query,Request,Reply) :-
-    trusted_local_request(Request),
-    (memberchk(x_powder_local_token(Token),Request),prolog_access_token(Token)->true;
-      throw(error(permission_error(execute,prolog_query,missing_local_token),_))),
+    require_local_admin(Request),
     body(Request,Body),must_be(string,Body.query),
     setting_default(queryLimit,Default),field(Body,limit,Default,Limit),field(Body,timeout,3,Seconds),
-    (get_dict(mt,Body,Mt0),Mt0\=="",Mt0\==null->context_input(Mt0,Mt);true),
-    run_prolog(Body.query,Mt,Limit,Seconds,Reply).
+    validate_result_limit(queryLimit,Limit),validate_seconds(Seconds),
+    query_scope(Body,Scope),
+    submit_inference(prolog,query(Body.query,Scope,Limit,Seconds),Reply).
 action(test_questions,Request,Reply) :-
     paging(Request,Offset,Limit),search_text(Request,Search),
     with_mutex(openworld_store,
@@ -169,18 +207,30 @@ action(catalog,_,Reply) :- catalog(Reply).
 action(load,Request,Reply) :-
     body(Request,Body),must_be(list,Body.files),must_be(integer,Body.generation),
     authorize_sources(Body.files,Paths),
-    kb_store:load_sources(Paths,Body.generation,Reply).
+    submit_load(Paths,Body.generation,Reply).
 action(unload,Request,Reply) :-
     body(Request,Body),must_be(integer,Body.generation),
-    kb_store:unload_source(Body.path,Body.generation,Reply).
+    atom_string(Path,Body.path),submit_unload(Path,Body.generation,Reply).
 action(query,Request,Reply) :-
     body(Request,Body),must_be(string,Body.query),
     string_length(Body.query,N),N=<65536,
     setting_default(queryLimit,DefaultLimit),field(Body,limit,DefaultLimit,Limit),field(Body,timeout,3,Seconds),
-    (get_dict(mt,Body,Mt0),Mt0\=="",Mt0\==null->context_input(Mt0,Mt);true),
     validate_result_limit(queryLimit,Limit),
-    must_be(number,Seconds),Seconds>0,Seconds=<30,
-    with_mutex(openworld_store,kb_store:query_text(Body.query,Mt,Limit,Seconds,Reply)).
+    validate_seconds(Seconds),query_scope(Body,Scope),
+    submit_inference(kb,query(Body.query,Scope,Limit,Seconds),Reply).
+action(server_settings,Request,Reply) :-
+    trusted_local_request(Request),effective_server_settings(Reply).
+action(save_server_settings,Request,Reply) :-
+    require_local_admin(Request),body(Request,Body),
+    save_server_settings(Body.settings,Body.revision,Reply),
+    retractall(startup_config_error(_)).
+action(tasks,Request,Reply) :-
+    trusted_local_request(Request),task_overview(Reply).
+action(task_detail,Request,Reply) :-
+    trusted_local_request(Request),http_parameters(Request,[id(Id,[atom])]),job_status(Id,Reply).
+action(cancel_task,Request,Reply) :-
+    require_local_admin(Request),body(Request,Body),atom_string(Id,Body.id),
+    cancel_job(Id),job_status(Id,Reply).
 action(source,Request,Reply) :-
     http_parameters(Request,[path(Path,[atom]),line(Line,[integer,default(1)])]),
     source_excerpt(Path,Line,Reply).
@@ -280,3 +330,13 @@ question_matches('',_) :- !.
 question_matches(Search,Question) :-
     atomic_list_concat([Question.identifier,Question.question,Question.source,Question.prolog],' ',Text),
     downcase_atom(Text,Lower),sub_atom(Lower,_,_,_,Search).
+
+require_local_admin(Request) :-
+    trusted_local_request(Request),
+    (memberchk(x_powder_local_token(Token),Request),prolog_access_token(Token)->true;
+      throw(error(permission_error(execute,local_administration,missing_local_token),_))).
+query_scope(Body,Scope) :-
+    (get_dict(mt,Body,Value),Value\=="",Value\==null->context_input(Value,Mt),Scope=context(Mt);Scope=none).
+validate_seconds(Seconds) :-
+    must_be(number,Seconds),
+    (Seconds>0,Seconds=<30->true;domain_error(query_timeout,Seconds)).

@@ -24,8 +24,24 @@ swipl .\prolog\ow_dr\app.pl -- --kb-source=KBs\tinyKB.kif --kb-source=KBs\exampl
 ```
 
 The default address is **http://localhost:3050/swish/powder/**, bound to the loopback interface.
-All selected inputs must finish compilation and loading before startup is
-announced. An invalid source or a busy compiler prevents startup.
+The HTTP server becomes available first, then the selected startup sources are
+queued in the loader pool. Enqueueing is not successful loading: Overview and
+Settings show the startup task's actual state, progress and failures. Publication
+is transactional; failed loads do not install a partial generation.
+
+Settings > **Next server startup** stores an ordered list of `.kif`, `.krf`, and
+`.metta` files on the server. Paths are saved as canonical absolute paths and
+duplicates are removed without reordering the remaining entries. Enable the
+saved list and leave it empty to start with no KB. With no enabled saved list,
+the original default `KBs\tinyKB.kif` is retained. Explicit CLI sources override
+the saved list. Saving settings does not load anything immediately, restart the
+server, or affect browser source-selection drafts.
+
+Machine settings live in the ignored
+`prolog\ow_dr\.logos-state\server-settings.json`; `POWDER_SERVER_SETTINGS` may
+select a different local settings file. Writes are locked, atomic and guarded
+by a revision check. Missing sources are flagged, and startup failures leave the
+server available to correct the saved list.
 
 Requirements: SWI-Prolog with its standard libraries. Windows source-catalog
 authorization uses the included PowerShell helper and native .NET file attributes:
@@ -292,6 +308,17 @@ Full local Prolog: `GET prolog/access` obtains the local capability;
 `POST prolog/query` requires it in `X-Powder-Local-Token`.
 All names in this paragraph are relative to `/swish/powder/api/`.
 
+Loads, unloads, KB queries and full-Prolog queries return **HTTP 202** with
+`{accepted:true,jobId,pool,state:"queued"}`. Read `GET tasks/detail?id=...` until
+the task reaches `succeeded`, `failed` or `cancelled`; only then consume its
+`result` or `error`. The browser does this automatically and does not reset a
+source draft on acceptance or failure. `GET tasks` returns the pool overview
+and task lists. `POST tasks/cancel` accepts `{id:...}` and requires the local
+capability header; full-Prolog side effects completed before cancellation are
+not undone. `GET server/settings` reads next-start configuration;
+`POST server/settings/save` saves `{revision,settings}` with the same trusted-local
+capability protection. Neither settings endpoint executes a startup load.
+
 Examples: `/swish/powder/#/query`, `/swish/powder/#/settings`, and
 `/swish/powder/api/status`. `/swish/powder` redirects to its trailing-slash form.
 Powder does not claim `/`, the parent `/swish/`, or sibling applications, and
@@ -325,7 +352,9 @@ Settings > **Reload changed files** reloads changed, already loaded application
 modules directly under `prolog/ow_dr`, using SWI's module loader and recorded
 dependencies. It excludes KB sources, generated companions, runtime snapshots,
 tests, external modules and include-only KB headers; it never invokes broad
-`make/0`. Code reload and source compilation are serialized. Active generations,
+`make/0`. Application-code reload is excluded while loader or inference operations are
+active, rather than serializing all those operations behind one global lock.
+Active generations,
 native assertion handles, browser drafts and saved settings are retained.
 The button sends no filenames or executable goals. Reload failures are reported
 with affected files; already applied code changes cannot be automatically rolled
@@ -335,6 +364,56 @@ A server started before this endpoint existed needs one normal restart to load
 the feature; subsequent button presses do not require restarting the server.
 A long-running `--edit` compiler also keeps its loaded implementation. Start a
 fresh compiler invocation after changing Prolog application code.
+
+## Task pools
+
+Loader, inference and HTTP pools have separate server-side profiles, each
+defaulting to **startup 5, maximum 10, spare 2**. Settings validates
+`1 <= startup <= maximum <= 128` and `0 <= spare <= maximum`. Changes apply
+at the next normal server start, not on save or application-code reload.
+
+The loader and inference pools own separate worker threads and bounded queues
+(100 waiting requests per pool). Each accepted request receives an ID before a
+worker starts. Workers grow toward `busy + queued + spare`, never above the
+configured maximum. Spare is a preferred minimum idle reserve, not a command to
+exceed capacity. Pools do not shrink during the run; workers retire gracefully
+at shutdown. Application-code reload does not spawn duplicate pools.
+
+All managed source replacement/unload, startup-source loads, and public native
+cache import/loading use the loader service. Independent source preparations
+can overlap, but loader publication follows accepted FIFO intent. Accepted
+source selections are complete manifests; later queued selections publish after
+earlier ones. Source and allocator locks still apply; a busy or failed source
+produces a visible failed task. Inference uses immutable generation leases, so
+an existing query can finish against its old native clauses while a new
+generation is published. Retired snapshots are removed after their readers
+finish. Arbitrary Prolog I/O remains explicitly user-operated Prolog, not an
+implicit KB loader.
+
+KB and full-Prolog inference run in the dedicated inference pool, not HTTP
+request threads. The result and time limits still apply. Scheduling, polling,
+listing and counting tasks never rerun a query. Queued cancellation prevents
+execution; running cancellation signals only the matching task. A loader
+publication already in progress is not interrupted.
+
+Settings shows a separate **Requested tasks** list for loader and inference,
+including all active/queued tasks and the latest 100 completed tasks. Completed
+history is bounded; active jobs are never pruned. Task history is transient and
+pending work is **not** resumed after process restart. Public pool views omit
+arbitrary query text, output, tokens and request headers; private query results
+remain available through their task ID.
+
+HTTP profiles apply server-wide to the app's actual listener. Its scoped
+scheduler uses SWI's HTTP worker facilities and enforces the same maximum/reserve
+policy without changing unrelated listeners. HTTP idle counts come from workers
+waiting on the accept queue; busy counts are the remaining workers, not guesses
+based on generic thread `running` state. Queue depth is read from that queue.
+Five or more simultaneous heavy loads can still consume substantial memory;
+set smaller startup/maximum values when appropriate.
+
+A server predating this service needs one normal restart to create the pools
+and apply startup settings. Application-code reload may install the API/UI code
+but deliberately does not bootstrap or resize an already running server.
 
 ## Scope and current limitations
 

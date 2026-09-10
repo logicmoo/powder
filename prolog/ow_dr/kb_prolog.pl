@@ -4,6 +4,7 @@
 :- use_module(kb_store, []).
 :- use_module(kb_terms).
 :- use_module(kb_limits).
+:- use_module(kb_activity).
 :- use_module(library(error)).
 :- use_module(library(streams)).
 :- use_module(library(time)).
@@ -11,14 +12,19 @@
 :- meta_predicate capture_output(0,-,-).
 
 run_prolog(Text,Mt,Limit,Seconds,Result) :-
+    (current_predicate(kb_jobs:pools_started/0),kb_jobs:pools_started,\+kb_jobs:in_inference->
+      (var(Mt)->Scope=none;Scope=context(Mt)),
+      kb_jobs:submit_inference(prolog,query(Text,Scope,Limit,Seconds),Job),
+      kb_jobs:await_result(Job.jobId,Result)
+    ;run_prolog_direct(Text,Mt,Limit,Seconds,Result)).
+run_prolog_direct(Text,Mt,Limit,Seconds,Result) :-
     must_be(string,Text),string_length(Text,Length),
     (Length=<65536->true;throw(error(domain_error(prolog_query_length,Length),_))),
     validate_result_limit(queryLimit,Limit),
     must_be(number,Seconds),
     (Seconds>0,Seconds=<30->true;throw(error(domain_error(query_timeout,Seconds),_))),
     parse_goal(Text,Goal,Names),
-    with_mutex(openworld_code_reload,
-      with_mutex(openworld_store,execute_query(Goal,Names,Mt,Limit,Seconds,Result))).
+    with_application(kb_store:with_generation(kb_prolog:execute_query(Goal,Names,Mt,Limit,Seconds,Result))).
 
 parse_goal(Text,Goal,Names) :-
     setup_call_cleanup(open_string(Text,Stream),
@@ -30,9 +36,8 @@ parse_goal(Text,Goal,Names) :-
        (nonvar(Term),Term=(?-Body)->Goal=Body;Goal=Term),
        must_be(callable,Goal)),close(Stream)).
 
-execute_query(Goal,Names,Mt,Limit,Seconds,Result) :-
-    kb_store:active_modules(Modules),kb_store:generation(Generation),
-    install_bridges(Modules),
+execute_query(Goal,Names,Mt,Limit,Seconds,Result,Modules,Generation) :-
+    with_mutex(powder_console_bridges,install_bridges(Modules)),
     State=execution(0,[],running,null),
     kb_runtime:capture_context(Previous),
     setup_call_cleanup(
@@ -75,7 +80,7 @@ binding(Name=Value,_{name:Name,value:Text}) :-
 record_exception(State,Error) :-
     term_string(Error,Term,[quoted(true),cycles(true)]),
     message_to_string(Error,Message),
-    (Error==time_limit_exceeded->Status=timeout;Status=exception),
+    (Error==time_limit_exceeded->Status=timeout;Error=job_cancelled(_)->Status=cancelled;Status=exception),
     nb_setarg(3,State,Status),
     nb_setarg(4,State,_{term:Term,message:Message}).
 
