@@ -1,4 +1,6 @@
-# OpenWorld Defeasible Reasoner
+# powder
+
+**Paraconsistent Open World Defeasible Epistemic Reasoner**
 
 A local SWI-Prolog knowledge-base compiler, native assertion runtime, and
 dependency-free browser. The original knowledge corpus lives in the repository's

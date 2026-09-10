@@ -4,7 +4,7 @@
             legacy_annotation/2
           ]).
 
-/** <module> OpenWorld Defeasible Reasoner: inert legacy provenance adapter.
+/** <module> powder: inert legacy provenance adapter.
 
 read_legacy(+File,-Records) reads UTF-8 Prolog *data*, producing
 legacy_record(Clause,Properties). Clause variables remain fresh and shared

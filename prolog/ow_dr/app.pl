@@ -17,7 +17,7 @@ run(Args) :-
     (Selected=[]->default_source(Source),Sources=[Source];reverse(Selected,Sources)),
     load_sources(Sources,any,Status),
     start_server(Port),
-    format('OpenWorld Defeasible Reasoner ready: http://localhost:~d/~n',[Port]),
+    format('powder - Paraconsistent Open World Defeasible Epistemic Reasoner~nReady: http://localhost:~d/~n',[Port]),
     format('Generation ~d; ~d assertions.~n',[Status.generation,Status.counts.assertions]),
     thread_get_message(stop),stop_server.
 arguments([],Port,Port,Sources,Sources).

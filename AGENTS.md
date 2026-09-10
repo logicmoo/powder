@@ -46,7 +46,7 @@ If the original corpus is unavailable, request it rather than fabricating its co
 
 
 
-Create a Cyc-style knowledge browser, named \*\*Logos KB Browser\*\*, with:
+Create a Cyc-style knowledge browser, named \*\*powder - Paraconsistent Open World Defeasible Epistemic Reasoner\*\*, with:
 
 
 
@@ -2467,4 +2467,3 @@ Announce \*\*“CLI READY TO TRY”\*\* with the commit and exact command once t
 
 
 Finish all stages and leave concise documentation explaining commands, formats, supported dialects, metadata, recovery, querying, and any genuine limitations.
-

@@ -63,7 +63,7 @@ cli_option(Arg,features(Features)) :-
     (Value==''->Features=[];atomic_list_concat(Features,',',Value)).
 
 usage :-
-    format('OpenWorld Defeasible Reasoner offline compiler~n  swipl compile_kb.pl -- [OPTIONS] FILE_OR_DIRECTORY ...~n~n',[]),
+    format('powder - Paraconsistent Open World Defeasible Epistemic Reasoner~nOffline compiler~n  swipl compile_kb.pl -- [OPTIONS] FILE_OR_DIRECTORY ...~n~n',[]),
     format('  --force --edit --editor=COMMAND --no-progress --progress=plain~n',[]),
     format('  --strict-mappings --recover-tmp --force-recover~n',[]),
     format('  --state-dir=PATH --encoding=utf8 --features=feature1,feature2~n',[]),

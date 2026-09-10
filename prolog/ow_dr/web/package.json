@@ -1,4 +1,6 @@
 {
+  "name": "powder",
+  "description": "Paraconsistent Open World Defeasible Epistemic Reasoner",
   "private": true,
   "type": "module"
 }

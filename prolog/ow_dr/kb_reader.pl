@@ -4,7 +4,7 @@
             normalize_query/3
           ]).
 
-/** <module> OpenWorld Defeasible Reasoner: inert KIF/KRF/MeTTa reader.
+/** <module> powder: inert KIF/KRF/MeTTa reader.
 
 read_source(+File,+Options,-Assertions,-Info) returns
 assertion(Semantic,Names,Microtheory,Line,Properties,OccurrenceKey).

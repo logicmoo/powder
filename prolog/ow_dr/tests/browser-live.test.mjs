@@ -74,7 +74,7 @@ test('live SWI backend and frontend agree, with optional explicit scratch-source
     await send('Emulation.setDeviceMetricsOverride', { width: 1360, height: 950, deviceScaleFactor: 1, mobile: false });
     await send('Page.navigate', { url: base });
     await wait('document.querySelector("h1")?.textContent === "Knowledge overview" && document.querySelector("main").getAttribute("aria-busy") === "false"');
-    assert.equal(await evaluate('document.title'), 'Knowledge overview · OpenWorld Defeasible Reasoner');
+    assert.equal(await evaluate('document.title'), 'Knowledge overview · powder');
     await noOverflow();
     if (process.env.LOGOS_SCREENSHOTS) {
       const image = await send('Page.captureScreenshot');

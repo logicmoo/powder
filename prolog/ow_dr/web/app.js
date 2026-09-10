@@ -5,7 +5,7 @@ import { DEFAULT_SETTINGS, MAXIMUMS, loadSettings, saveSettings } from './settin
 
 const $ = selector => document.querySelector(selector);
 const content = $('#content');
-const APP_NAME = 'OpenWorld Defeasible Reasoner';
+const APP_NAME = 'powder';
 const number = value => new Intl.NumberFormat().format(Number(value) || 0);
 const state = {
   status: null, catalog: null, selection: null, expanded: new Set(['KBs']),

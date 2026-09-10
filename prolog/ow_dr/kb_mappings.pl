@@ -12,7 +12,7 @@
             validate_mapping_text/3
           ]).
 
-/** <module> OpenWorld Defeasible Reasoner: canonical Markdown mappings.
+/** <module> powder: canonical Markdown mappings.
 
 The located reader AST is n(Line, Column, Value), where Value is sym/1,
 quoted/1, var/2, num/1, lexnum/2, str/1, list/1, quote/1 or execute/1.  A rewritten

@@ -176,8 +176,9 @@ test('real browser exercises the API contract, source transactions, rendering an
     await cdp('Emulation.setDeviceMetricsOverride', { width: 1360, height: 950, deviceScaleFactor: 1, mobile: false });
     await cdp('Page.navigate', { url: base });
     await wait(`document.querySelector('h1')?.textContent === 'Knowledge overview' && document.querySelector('main').getAttribute('aria-busy') === 'false'`);
-    assert.equal(await evaluate('document.title'), 'Knowledge overview · OpenWorld Defeasible Reasoner');
-    assert.equal(await evaluate('document.querySelector(".brand").getAttribute("aria-label")'), 'OpenWorld Defeasible Reasoner overview');
+    assert.equal(await evaluate('document.title'), 'Knowledge overview · powder');
+    assert.equal(await evaluate('document.querySelector(".brand").getAttribute("aria-label")'), 'powder overview');
+    assert.ok(await evaluate('document.querySelector(".brand-subtitle").textContent.includes("Paraconsistent Open World Defeasible Epistemic Reasoner")'));
     assert.equal(await evaluate('document.body.innerText.includes("Logos")'), false);
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".sidebar")).position'), 'sticky');
     await noOverflow();

@@ -1,4 +1,4 @@
-# OpenWorld Defeasible Reasoner — SUMO-to-CycL mapping table
+# powder — SUMO-to-CycL mapping table
 References below are retained review provenance. Verify them against the supplied corpus where needed; do not fabricate missing evidence. “Broader” and “narrower” describe the CycL target relative to SUMO.
 | ID | SUMO | CycL | Conversion | Category | Equivalence | Confidence | Basis | Notes / provenance |
 |---|---|---|---|---|---|---|---|---|
