@@ -20,13 +20,13 @@
 :- dynamic generation_timing/1.
 :- dynamic microtheory_catalog/1.
 :- dynamic term_count/2, constant_locator/2, mt_locator/2, ordered_assertions/1, current_counts/1.
-generation(0).
-term_rank([]).
-predicate_rank([]).
-microtheory_catalog([]).
-generation_timing(_{loadSeconds:0}).
-ordered_assertions([]).
-current_counts(_{assertions:0,terms:0,predicates:0,microtheories:0}).
+initialize_store :-
+    forall(member(Fact,[generation(0),term_rank([]),predicate_rank([]),
+      microtheory_catalog([]),generation_timing(_{loadSeconds:0}),ordered_assertions([]),
+      current_counts(_{assertions:0,terms:0,predicates:0,microtheories:0})]),
+      (functor(Fact,Name,Arity),functor(Existing,Name,Arity),
+       (call(Existing)->true;assertz(Fact)))).
+:- initialization(initialize_store).
 :- at_halt(cleanup_owned_runtime).
 
 cleanup_owned_runtime :-
@@ -34,6 +34,9 @@ cleanup_owned_runtime :-
       catch(cleanup_native(Native),Error,print_message(error,Error))).
 
 load_sources(Paths, Expected, Status) :-
+    with_mutex(openworld_code_reload,load_sources_locked(Paths,Expected,Status)).
+
+load_sources_locked(Paths, Expected, Status) :-
     statistics(walltime,[Start,_]),
     must_be(list, Paths),
     maplist(kb_paths:resolve_source, Paths, Absolute),

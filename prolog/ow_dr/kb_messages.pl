@@ -88,7 +88,11 @@ prolog:message(error(generation_conflict(Expected,Current),_)) -->
 prolog:message(error(conflicting_assertion_id(Id),_)) -->
     ['Assertion ID ~w occurs in more than one selected source.'-[Id]].
 prolog:message(error(implementation_changed_restart_required,_)) -->
-    ['Compiler code changed on disk. Start a fresh compiler invocation or restart the Prolog server; refreshing the browser is not enough.'].
+    ['Compiler code changed on disk. Start a fresh compiler invocation, or use Settings > Reload changed files in the server. Refreshing the browser alone is not enough.'].
+prolog:message(error(application_reload_busy,_)) -->
+    ['Application reload is busy or a source compilation is in progress. Retry when it finishes.'].
+prolog:message(error(application_file_changed_during_reload(File),_)) -->
+    ['Application file ~w changed during reload. Some code may already be loaded; retry or restart. No automatic rollback was performed.'-[File]].
 
 issue_lines([]) --> [].
 issue_lines([Issue|Rest]) -->

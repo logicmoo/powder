@@ -250,6 +250,7 @@ Read endpoints: `/api/status`, `/api/search`, `/api/predicates`, `/api/term`,
 `/api/microtheory`, `/api/microtheories`, `/api/assertion`, `/api/kb/catalog`, `/api/source`,
 `/api/mappings`, and `/api/version`.
 Mutation/query endpoints: `POST /api/kb/load`, `/api/kb/unload`, `/api/query`.
+Application maintenance: `POST /api/app/reload` with an empty JSON object.
 Load/unload requests carry the expected `generation`; conflicts return HTTP 409.
 Pagination uses `offset` and `limit` (1-400), defaulting to 400. Queries default
 to 400 results, accept 1-1000 results, and retain the existing 30-second timeout
@@ -271,8 +272,21 @@ including compound contexts, and retains the full list while a context is open.
 cap; assertion pages within each context remain paginated.
 
 Web assets are served without stale caching. Content-version polling refreshes
-HTML/CSS/JavaScript/Markdown changes and pauses while hidden. Backend Prolog
-changes require an explicit restart; a browser refresh does not reload Prolog.
+HTML/CSS/JavaScript/Markdown changes and pauses while hidden. A browser refresh
+does not reload Prolog.
+
+Settings > **Reload changed files** reloads changed, already loaded application
+modules directly under `prolog/ow_dr`, using SWI's module loader and recorded
+dependencies. It excludes KB sources, generated companions, runtime snapshots,
+tests, external modules and include-only KB headers; it never invokes broad
+`make/0`. Code reload and source compilation are serialized. Active generations,
+native assertion handles, browser drafts and saved settings are retained.
+The button sends no filenames or executable goals. Reload failures are reported
+with affected files; already applied code changes cannot be automatically rolled
+back. Fix the files and retry, or restart if necessary.
+
+A server started before this endpoint existed needs one normal restart to load
+the feature; subsequent button presses do not require restarting the server.
 A long-running `--edit` compiler also keeps its loaded implementation. Start a
 fresh compiler invocation after changing Prolog application code.
 

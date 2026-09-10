@@ -19,6 +19,7 @@ test('real browser exercises the API contract, source transactions, rendering an
   let active = ['KBs/alpha/a.kif', 'KBs/tinyKB.kif'];
   let failNextLoad = false;
   let failContextList = false;
+  let failCodeReload = false;
   let compilerDiagnostics = {};
   const requests = [];
   const file = path => ({ type: 'file', name: path.split('/').at(-1), path, lineCount: 40, sizeBytes: 1200, count: 3 });
@@ -126,6 +127,13 @@ test('real browser exercises the API contract, source transactions, rendering an
             return json(page(filtered, url));
           }
           case '/api/version': return json({ version: 'fixture-v1' });
+          case '/api/app/reload':
+            await new Promise(resolve => setTimeout(resolve, 40));
+            if (failCodeReload) return json({ error: { code: 'application_reload_failed',
+              message: 'Some application code changed; reload failed and cannot be rolled back.',
+              issues: [{ source: 'prolog/ow_dr/kb_example.pl', status: 'failed', message: 'Syntax error' }] } }, 500);
+            return json({ count: 1, reloaded: ['prolog/ow_dr/kb_example.pl'], warnings: [], generation,
+              message: 'Reloaded 1 changed Prolog application file. KB generation and sources are unchanged.' });
           case '/api/query': {
             const contexts = body.query === '(compoundQuery ?X)' && !body.mt ? [compoundA, compoundB] : [normalizedMT(body.mt) || 'x_A'];
             return json({ solutions: contexts.map(mt => ({
@@ -353,6 +361,27 @@ test('real browser exercises the API contract, source transactions, rendering an
     await cdp('Page.reload');
     await wait('document.querySelector("textarea") !== null && document.querySelector("main").getAttribute("aria-busy") === "false"');
     assert.equal(await evaluate('document.querySelector(\'input[name="limit"]\').value'), '350');
+    await route('#/sources');
+    await evaluate('document.querySelector(".source-tree input:not(:disabled)").click()');
+    await route('#/settings');
+    const beforeReload = { generation, active: [...active] };
+    await evaluate('const button = document.querySelector(".application-reload button"); button.click(); button.click()');
+    await wait('document.querySelector(".reload-feedback").textContent.includes("Reloaded 1")');
+    assert.equal(requests.filter(request => request.path === '/api/app/reload').length, 1);
+    assert.deepEqual(requests.filter(request => request.path === '/api/app/reload')[0].body, {});
+    assert.equal(generation, beforeReload.generation);
+    assert.deepEqual(active, beforeReload.active);
+    failCodeReload = true;
+    await evaluate('document.querySelector(".application-reload button").click()');
+    await wait('document.querySelector(".reload-feedback[role=alert]") !== null');
+    assert.ok(await evaluate('document.querySelector(".reload-feedback").textContent.includes("cannot be rolled back")'));
+    failCodeReload = false;
+    await route('#/sources');
+    assert.ok(await evaluate('document.querySelector(".draft-count").textContent.includes("unsaved selection")'));
+    await evaluate('document.querySelector(".source-actions .secondary").click()');
+    await route('#/settings');
+    assert.equal(await evaluate('document.querySelector(\'input[name="pageSize"]\').value'), '125');
+    assert.equal(await evaluate('document.querySelector(\'input[name="queryLimit"]\').value'), '350');
     await route('#/microtheories');
     assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), allContexts.length);
     await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });

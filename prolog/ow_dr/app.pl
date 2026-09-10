@@ -7,6 +7,7 @@
 :- use_module(kb_server).
 :- use_module(kb_paths).
 :- use_module(kb_messages).
+:- initialization(kb_reload:remember_loaded_code).
 :- initialization(main, main).
 
 main(Args) :-

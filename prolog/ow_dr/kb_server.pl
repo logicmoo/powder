@@ -5,6 +5,7 @@
 :- use_module(kb_terms).
 :- use_module(kb_messages).
 :- use_module(kb_limits).
+:- use_module(kb_reload).
 :- use_module(library(http/thread_httpd)).
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_parameters)).
@@ -29,6 +30,7 @@
 :- http_handler(root(api/source), endpoint(source), []).
 :- http_handler(root(api/mappings), endpoint(mappings), []).
 :- http_handler(root(api/version), endpoint(version), []).
+:- http_handler(root(api/app/reload), endpoint(reload_application), [method(post)]).
 :- http_handler(root(.), static, [prefix]).
 
 start_server(Port) :-
@@ -54,12 +56,16 @@ valid_origin(Request) :-
 
 api_error(Error) :-
     error_response(Error,Status,Code),
-    (Error=error(compile_incomplete(Summary),_)->
+    (Error=error(application_reload_failed(Report),_),is_dict(Report)->
+      Payload=_{code:Code,message:Report.message,issues:Report.issues}
+    ;Error=error(compile_incomplete(Summary),_)->
       compile_report(Summary,Report),
       Payload=_{code:Code,message:Report.message,issues:Report.issues,counts:Report.counts}
     ;message_to_string(Error,Message),Payload=_{code:Code,message:Message}),
     reply_json_dict(_{error:Payload},[status(Status)]).
 error_response(error(generation_conflict(_,_),_),409,generation_conflict) :- !.
+error_response(error(application_reload_busy,_),409,reload_busy) :- !.
+error_response(error(application_reload_failed(_),_),500,application_reload_failed) :- !.
 error_response(error(compile_incomplete(S),_),422,compile_failed) :- S.failures>0, !.
 error_response(error(compile_incomplete(_),_),503,busy) :- !.
 error_response(error(permission_error(_,_,_),_),403,forbidden) :- !.
@@ -73,6 +79,10 @@ error_response(error(source_error(_,_,_,_),_),400,invalid_expression) :- !.
 error_response(_,500,internal_error).
 
 action(status,_,Reply) :- with_mutex(openworld_store,kb_store:status(Reply)).
+action(reload_application,Request,Reply) :-
+    body(Request,Body),
+    (dict_pairs(Body,_,[])->true;throw(error(domain_error(empty_reload_request,Body),_))),
+    reload_changed_files(Reply).
 action(search,Request,Reply) :-
     paging(Request,Offset,Limit),search_text(Request,Q),
     with_mutex(openworld_store,

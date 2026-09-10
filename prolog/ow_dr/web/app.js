@@ -953,7 +953,35 @@ function settingsPage() {
     } }, fields, element('div', { className: 'form-actions' },
       element('button', { type: 'submit', className: 'button' }, 'Save settings'),
       button('Restore defaults', () => apply(DEFAULT_SETTINGS), 'button secondary')), feedback),
-    element('p', { className: 'muted' }, 'Page size applies to terms, predicates, assertions and mappings. Explicit URL limits still override defaults. Query timeouts remain unchanged. All microtheories are always listed, without a cap.'));
+    element('p', { className: 'muted' }, 'Page size applies to terms, predicates, assertions and mappings. Explicit URL limits still override defaults. Query timeouts remain unchanged. All microtheories are always listed, without a cap.'),
+    applicationReloadControls());
+}
+
+function applicationReloadControls() {
+  const feedback = element('div', { className: 'reload-feedback', 'aria-live': 'polite' });
+  const reload = button('Reload changed files', async () => {
+    if (state.mutation) return;
+    setMutation(true);
+    feedback.setAttribute('role', 'status');
+    feedback.replaceChildren(element('p', {}, 'Reloading changed Prolog application code…'));
+    try {
+      const result = await api('app/reload', {}, { method: 'POST', body: {} });
+      feedback.replaceChildren(element('p', {}, result.message),
+        result.reloaded?.length ? element('ul', {}, result.reloaded.map(file => element('li', {}, file))) : null,
+        result.warnings?.length ? element('ul', {}, result.warnings.map(warning => element('li', {}, `${warning.source}: ${warning.message}`))) : null);
+    } catch (error) {
+      feedback.setAttribute('role', 'alert');
+      feedback.replaceChildren(requestErrorDetails(error));
+    } finally {
+      setMutation(false);
+    }
+  });
+  reload.dataset.mutation = '';
+  reload.disabled = state.mutation;
+  return element('section', { className: 'application-reload' }, element('h2', {}, 'Prolog application code'),
+    element('p', {}, 'Reload only changed, already loaded application modules. This does not recompile KBs, reload source data, or reset settings and draft selections.'),
+    element('p', { className: 'muted' }, 'If code reload fails, some modules may already have changed; SWI-Prolog cannot roll those changes back automatically.'),
+    reload, feedback);
 }
 
 const pages = {
@@ -1028,7 +1056,7 @@ function startLiveReload() {
         }
       }
       target.textContent = 'Interface live refresh enabled';
-      target.title = 'Web assets and mappings refresh automatically. Prolog changes require an explicit server restart.';
+      target.title = 'Web assets and mappings refresh automatically. Use Settings to reload changed Prolog application code.';
     } catch (error) {
       if (!document.hidden) target.textContent = 'Live refresh reconnecting…';
     } finally {

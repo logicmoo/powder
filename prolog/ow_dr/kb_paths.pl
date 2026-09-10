@@ -2,8 +2,8 @@
                      resolve_source/2, public_path/2]).
 :- use_module(library(filesex)).
 
-:- prolog_load_context(directory, App), asserta(app_directory(App)).
 :- dynamic app_directory/1.
+:- prolog_load_context(directory, App), retractall(app_directory(_)), asserta(app_directory(App)).
 
 app_dir(Path) :- app_directory(Path).
 repo_root(Root) :-
