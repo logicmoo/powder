@@ -1,0 +1,10 @@
+kb_index_header(index_header{count:3,digest:'690d59b2fa8accca06464c7a24d3b728d935b53f76c0c3434fb69a0810713725',normalizedDigest:adb6d1e0fcce497781096a125cd74bae8781bb79587272f8be6ad1c2faf38dc1,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/cogsketch/kb-flat-files/skea/ui.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/cogsketch/kb-flat-files/skea/ui.krf',sourceHash:'2905853eff9f1cb972e7b38c01a746a05378182bc245c25962b948d92c079bd0'}).
+kb_index_data(index{constants:[-(x_Relation,1),-(x_arity,1),-(x_comment,1),-(x_isa,1),-(x_userCWA,3)],entries:[entry(a65b125cb01528,signature(x_isa,2),x_SKEAMt,'c:/snet/petta/repos/openworld_dr/KBs/cogsketch/kb-flat-files/skea/ui.krf',26,[x_Relation,x_isa,x_userCWA]),entry(a65b125cb01529,signature(x_arity,2),x_SKEAMt,'c:/snet/petta/repos/openworld_dr/KBs/cogsketch/kb-flat-files/skea/ui.krf',27,[x_arity,x_userCWA]),entry(a65b125cb0152a,signature(x_comment,2),x_SKEAMt,'c:/snet/petta/repos/openworld_dr/KBs/cogsketch/kb-flat-files/skea/ui.krf',28,[x_comment,x_userCWA])],predicates:[-(signature(x_arity,2),1),-(signature(x_comment,2),1),-(signature(x_isa,2),1)],rankedConstants:[-(3,x_userCWA),-(1,x_isa),-(1,x_comment),-(1,x_arity),-(1,x_Relation)],rankedPredicates:[-(1,signature(x_isa,2)),-(1,signature(x_comment,2)),-(1,signature(x_arity,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/cogsketch/kb-flat-files/skea/ui.krf'}).
+xc_indexed_constant(a65b125cb01528,x_Relation).
+xc_indexed_constant(a65b125cb01528,x_isa).
+xc_indexed_constant(a65b125cb01528,x_userCWA).
+xc_indexed_constant(a65b125cb01529,x_arity).
+xc_indexed_constant(a65b125cb01529,x_userCWA).
+xc_indexed_constant(a65b125cb0152a,x_comment).
+xc_indexed_constant(a65b125cb0152a,x_userCWA).
+kb_index_footer(3,'690d59b2fa8accca06464c7a24d3b728d935b53f76c0c3434fb69a0810713725','9b42a5d5340129d83436ab2c3a8f91b9a6b781b3a6b38e59adb60e006029a824').

@@ -1,0 +1,12 @@
+kb_index_header(index_header{count:3,digest:'06ce864e7debfee0aa9faf0f5b4a45b4aa42bf8ba4e36563aaa0ece0364be2e1',normalizedDigest:'979a4aa2a38fed035e4c3d0c098b5b6f85f8bc92898206306a81e992412987f7',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ProgrammingLanguageDataMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ProgrammingLanguageDataMt.krf',sourceHash:'2ed43d7b83555fcf21afef58df81536ae06244bbda53cc2a56ec68c3dd72d44c'}).
+kb_index_data(index{constants:[-(x_BoundsCheckedProgrammingLanguage,2),-('x_CSharp-ProgrammingLanguage',1),-(x_CycL,1),-(x_HigherOrderLogicProgrammingLanguage,1),-(x_JavaProgrammingLanguage,1),-(x_isa,3)],entries:[entry(a65b1276d19a92,signature(x_isa,2),x_ProgrammingLanguageDataMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ProgrammingLanguageDataMt.krf',3,[x_CycL,x_HigherOrderLogicProgrammingLanguage,x_isa]),entry(a65b1276d19a93,signature(x_isa,2),x_ProgrammingLanguageDataMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ProgrammingLanguageDataMt.krf',4,[x_BoundsCheckedProgrammingLanguage,'x_CSharp-ProgrammingLanguage',x_isa]),entry(a65b1276d19a94,signature(x_isa,2),x_ProgrammingLanguageDataMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ProgrammingLanguageDataMt.krf',5,[x_BoundsCheckedProgrammingLanguage,x_JavaProgrammingLanguage,x_isa])],predicates:[-(signature(x_isa,2),3)],rankedConstants:[-(3,x_isa),-(2,x_BoundsCheckedProgrammingLanguage),-(1,x_JavaProgrammingLanguage),-(1,x_HigherOrderLogicProgrammingLanguage),-(1,x_CycL),-(1,'x_CSharp-ProgrammingLanguage')],rankedPredicates:[-(3,signature(x_isa,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ProgrammingLanguageDataMt.krf'}).
+xc_indexed_constant(a65b1276d19a92,x_CycL).
+xc_indexed_constant(a65b1276d19a92,x_HigherOrderLogicProgrammingLanguage).
+xc_indexed_constant(a65b1276d19a92,x_isa).
+xc_indexed_constant(a65b1276d19a93,x_BoundsCheckedProgrammingLanguage).
+xc_indexed_constant(a65b1276d19a93,'x_CSharp-ProgrammingLanguage').
+xc_indexed_constant(a65b1276d19a93,x_isa).
+xc_indexed_constant(a65b1276d19a94,x_BoundsCheckedProgrammingLanguage).
+xc_indexed_constant(a65b1276d19a94,x_JavaProgrammingLanguage).
+xc_indexed_constant(a65b1276d19a94,x_isa).
+kb_index_footer(3,'06ce864e7debfee0aa9faf0f5b4a45b4aa42bf8ba4e36563aaa0ece0364be2e1',d4dcf155e3576df8c1ab87130bfed6c9d8c7b9275f8ab0975b0aa158b8b681dc).

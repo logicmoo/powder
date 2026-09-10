@@ -1,0 +1,17 @@
+kb_index_header(index_header{count:4,digest:cf0006cfa4d809d7f335e8a6b085c86f7aa9d1c83bfc8cc80cbf5d63c25c2d15,normalizedDigest:'590b2b30b98a0fc19fdc463a6187cd3825c06441ffa7e424ef231609886484ba',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/multimodal-instruction/games/fmi-domains.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/multimodal-instruction/games/fmi-domains.krf',sourceHash:'811b47ce0e0aa1634dcac3fc8fb6346ff90dfe0fb7be0331e585a2ef40061be1'}).
+kb_index_data(index{constants:[-(x_FMI,2),-(x_FmiDomainsMt,2),-(x_FmiGamesMt,1),-(x_Game,1),-(x_Instruction,1),-(x_InterpretationMtFn,2),-(x_Microtheory,1),-(x_genlMt,3),-(x_isa,1)],entries:[entry(a65b125da8ace3,signature(x_isa,2),x_BaseKB,'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/multimodal-instruction/games/fmi-domains.krf',17,[x_FmiDomainsMt,x_Microtheory,x_isa]),entry(a65b125da8ace4,signature(x_genlMt,2),x_BaseKB,'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/multimodal-instruction/games/fmi-domains.krf',18,[x_FmiDomainsMt,x_FmiGamesMt,x_genlMt]),entry(a65b125da8ace5,signature(x_genlMt,2),x_BaseKB,'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/multimodal-instruction/games/fmi-domains.krf',20,[x_FMI,x_Instruction,x_InterpretationMtFn,x_genlMt]),entry(a65b125da8ace6,signature(x_genlMt,2),x_BaseKB,'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/multimodal-instruction/games/fmi-domains.krf',21,[x_FMI,x_Game,x_InterpretationMtFn,x_genlMt])],predicates:[-(signature(x_genlMt,2),3),-(signature(x_isa,2),1)],rankedConstants:[-(3,x_genlMt),-(2,x_InterpretationMtFn),-(2,x_FmiDomainsMt),-(2,x_FMI),-(1,x_isa),-(1,x_Microtheory),-(1,x_Instruction),-(1,x_Game),-(1,x_FmiGamesMt)],rankedPredicates:[-(3,signature(x_genlMt,2)),-(1,signature(x_isa,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/multimodal-instruction/games/fmi-domains.krf'}).
+xc_indexed_constant(a65b125da8ace3,x_FmiDomainsMt).
+xc_indexed_constant(a65b125da8ace3,x_Microtheory).
+xc_indexed_constant(a65b125da8ace3,x_isa).
+xc_indexed_constant(a65b125da8ace4,x_FmiDomainsMt).
+xc_indexed_constant(a65b125da8ace4,x_FmiGamesMt).
+xc_indexed_constant(a65b125da8ace4,x_genlMt).
+xc_indexed_constant(a65b125da8ace5,x_FMI).
+xc_indexed_constant(a65b125da8ace5,x_Instruction).
+xc_indexed_constant(a65b125da8ace5,x_InterpretationMtFn).
+xc_indexed_constant(a65b125da8ace5,x_genlMt).
+xc_indexed_constant(a65b125da8ace6,x_FMI).
+xc_indexed_constant(a65b125da8ace6,x_Game).
+xc_indexed_constant(a65b125da8ace6,x_InterpretationMtFn).
+xc_indexed_constant(a65b125da8ace6,x_genlMt).
+kb_index_footer(4,cf0006cfa4d809d7f335e8a6b085c86f7aa9d1c83bfc8cc80cbf5d63c25c2d15,'59bef22121b82839557f78fb6b59d41303dde12a137c314e52f6c249d08586ec').

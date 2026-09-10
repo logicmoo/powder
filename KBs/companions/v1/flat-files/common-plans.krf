@@ -1025,7 +1025,7 @@
   (writeHandoffCheckpoint)
   (actionSequence
    (TheList
-    (doAnnounceDebug "Writing Handoff Mt: ~A" (handoff-mt))
+    (doAnnounceDebug "Writing Handoff Mt: ~A" (?handoff-mt))
     (doWriteHandoffMt ?handoff-mt)))))
 
 (preconditionForMethod

@@ -1,0 +1,362 @@
+(in-microtheory SigmaTestQuestions)
+
+(isa SigmaTestQuestions Microtheory)
+
+(isa test_Qs TernaryPredicate)
+(arity test_Qs 3)
+(arg1Isa test_Qs CharacterString)
+(arg2Isa test_Qs CharacterString)
+(arg3Isa test_Qs CycLFormula)
+(comment test_Qs "(test_Qs ID ENGLISH FORMULA) records a test question: argument 1 is its identifier string, argument 2 is its English question string, and argument 3 is its query formula.")
+
+; Converted from Sigma_Test_Questions.txt.
+; Query formulas are stored as the third argument, not asserted independently.
+; Source query symbols and variables are preserved as supplied.
+; Answering these queries requires the source HPKBCrisis context and related data.
+
+(test_Qs "TQA100-b"
+  "What bodies of water border on Saudi Arabia?"
+  (and (isa ?X BodyOfWater)  (bordersOn ?X SaudiArabia)))
+
+(test_Qs "TQA62"
+  "What are the goals of the International Atomic Energy Agency (IAEA)?"
+  (statementOfPurpose InternationalAtomicEnergyAgency ?PURPOSE))
+
+(test_Qs "TQA70"
+  "Is the United States of America a member of the Organization for Economic Cooperation and Development (OECD)?"
+  (hasMembers OECD UnitedStatesOfAmerica))
+
+(test_Qs "TQA49"
+  "What terrorist group opposing the government of Bahrain exists within Bahrain?"
+  (and (residenceOfOrganization ?AGENT Bahrain) (isa ?AGENT TerroristGroup) (negativeVestedInterest ?AGENT Bahrain)))
+
+(test_Qs "TQA65"
+  "During the temporal extent of the Iran-Iraq War, did Iran ever attack using ballistic missiles?"
+  (thereExists ?ACT 
+                         (thereExists ?FORCE 
+                             (and 
+                                 (performedBy ?ACT Iran) 
+                                 (isa ?ACT AttackOnTangible) 
+                                 (isa ?FORCE BallisticMissile) 
+                                 (instrument-Generic ?ACT ?FORCE) 
+                                 (temporallySubsumes Iran-IraqWar ?ACT)))))
+
+(test_Qs "TQB5"
+  "What amount of Saudi Arabia's gross domestic product (GDP) comes from export of oil?"
+  (and 
+                         (isa ?AMOUNT Money) 
+                         (exportAmountDuring SaudiArabia PetroleumProduct ?TIME ?AMOUNT)))
+
+(test_Qs "TQB7"
+  "What amount of Saudi Arabia's export of oil is transported through the Petroline?"
+  (exportThroughAmountDuring SaudiArabia PetroleumProduct PetrolinePipeline ?TIME ?AMOUNT))
+
+(test_Qs "TQB25"
+  "What goods are transported to the Mediterranean Sea via pipeline?"
+  (thereExists ?TRAN 
+                         (thereExists ?DEST 
+                             (and 
+                                 (pathTerminus ?TRAN RedSea) 
+                                 (primaryFunction ?TRAN 
+                                     (TransportFn ?PROD) conveyor-Stationary)))))
+
+(test_Qs "TQB37"
+  "What dissident group opposing the government of Iran exists within Iran?"
+  (and 
+                         (residenceOfOrganization ?AGENT Iran) 
+                         (isa ?AGENT DissidentGroup) 
+                         (hasStatusWithAgent ?AGENT Iran DissidentStatus) 
+                         (negativeVestedInterest ?AGENT Iran)))
+
+(test_Qs "TQB42"
+  "After Day 20, what rewards would Iran expect in successful terrorist attacks against Kuwait's agriculture sector?"
+  (implies 
+                         (and 
+                             (performedBy ?ACT Iran) 
+                             (isa ?ACT TerroristAttack) 
+                             (damages ?ACT 
+                                 (IndustryOfRegionFn AgriculturalEconomicSector Kuwait)) 
+                             (startsAfterStartingOf ?ACT 
+                                 (DateInSituationFn CalendarDay 20 HPKBScenarioConflict))) 
+                         (or 
+                             (and 
+                                 (goals Iran ?PROP) 
+                                 (increasesCausally ?ACT ?PROP likelihood)) 
+                             (and 
+                                 (goals Iran 
+                                     (not ?PROP)) 
+                                 (decreasesCausally ?ACT ?PROP likelihood)))))
+
+(test_Qs "TQB43"
+  "During Days 1 through 16 in the Scenario, would Iran's conducting an air strike against Saudi Arabia be considered an escalation of the conflict with Saudi Arabia?"
+  (implies 
+                         (and 
+                             (isa ?ACT AerialAttack) 
+                             (performedBy ?ACT Iran) 
+                             (maleficiary ?ACT SaudiArabia) 
+                             (temporallySubsumes 
+                                 (TimeIntervalInclusiveFn 
+                                     (DateInSituationFn CalendarDay 1 HPKBScenarioConflict) 
+                                     (DateInSituationFn CalendarDay 16 HPKBScenarioConflict)) ?ACT)) 
+                         (increasesImmediatelyCausally ?ACT HPKBScenarioConflict conflictLevel)))
+
+(test_Qs "TQB49"
+  "What terrorist group opposing the government of Egypt exists within Egypt?"
+  (and 
+                         (residenceOfOrganization ?AGENT Egypt) 
+                         (isa ?AGENT TerroristGroup) 
+                         (negativeVestedInterest ?AGENT Egypt)))
+
+(test_Qs "TQB52"
+  "What rewards would Iran expect in establishing a coalition of states against the Gulf Cooperation Council (GCC)?"
+  (implies 
+                         (and 
+                             (performedBy ?ACT Iran) 
+                             (isa ?ACT FoundingAnOrganization) 
+                             (isa ?ORG Coalition-International) 
+                             (considersAsEnemy ?ORG GulfCooperationCouncil) 
+                             (outputsCreated ?ACT ?ORG)) 
+                         (or 
+                             (and 
+                                 (goals Iran ?PROP) 
+                                 (increasesCausally ?ACT ?PROP likelihood)) 
+                             (and 
+                                 (goals Iran 
+                                     (not ?PROP)) 
+                                 (decreasesCausally ?ACT ?PROP likelihood)))))
+
+(test_Qs "TQB53"
+  "What risks would Iran face in damaging the Petroline?"
+  (implies 
+                         (and 
+                             (performedBy ?ACT Iran) 
+                             (isa ?ACT AttackOnTangible) 
+                             (damages ?ACT PetrolinePipeline)) 
+                         (or 
+                             (and 
+                                 (goals Iran ?PROP) 
+                                 (decreasesCausally ?ACT ?PROP likelihood)) 
+                             (and 
+                                 (goals Iran 
+                                     (not ?PROP)) 
+                                 (increasesCausally ?ACT ?PROP likelihood)))))
+
+(test_Qs "TQB62"
+  "What are the goals of the International Criminal Police Organization (INTERPOL)?"
+  (statementOfPurpose INTERPOL ?PURPOSE))
+
+(test_Qs "TQB66a"
+  "What countries militarily opposed Kuwait during the Persian Gulf War?"
+  (thereExists ?ACTION 
+                         (and 
+                             (isa ?ACTION MilitaryEvent) 
+                             (performedBy ?ACTION ?COUNTRY) 
+                             (maleficiary ?ACTION Kuwait) 
+                             (isa ?COUNTRY IndependentCountry) 
+                             (different ?COUNTRY Kuwait) 
+                             (temporallySubsumes PersianGulfWar ?ACTION))))
+
+(test_Qs "TQB67a"
+  "What countries militarily opposed Saudi Arabia during the Persian Gulf War?"
+  (and 
+                         (isa ?COUNTRY IndependentCountry) 
+                         (opponentsInConflict ?COUNTRY SaudiArabia PersianGulfWar)))
+
+(test_Qs "TQB85"
+  "Has Iraq ever attacked using ballistic missiles?"
+  (thereExists ?ACT 
+                         (thereExists ?FORCE 
+                             (and 
+                                 (performedBy ?AC#$T Iraq) 
+                                 (isa ?ACT AttackOnTangible) 
+                                 (isa ?FORCE BallisticMissile) 
+                                 (instrument-Generic ?ACT ?FORCE)))))
+
+(test_Qs "TQB107"
+  "In the Scenario, what is the number of dead caused by the truck bomb attack on the oil field during Day 25?"
+  (thereExists ?ACT 
+                         (and 
+                             (subEvents HPKBScenarioConflict ?ACT) 
+                             (isa ?ACT AttackOnTangible) 
+                             (temporallySubsumes 
+                                 (DateInSituationFn CalendarDay 25 HPKBScenarioConflict) ?ACT) 
+                             (deathToll ?ACT Person ?NUM) 
+                             (thereExists ?FORCE 
+                                 (and 
+                                     (isa ?FORCE TruckBomb) 
+                                     (instrument-Generic ?ACT ?FORCE))))))
+
+(test_Qs "TQB129"
+  "Is Oman near the Persian Gulf?"
+  (near Oman PersianGulf))
+
+(test_Qs "TQC1"
+  "What major oil refineries are in Libya?"
+  (and 
+                                            (isa ?X OilRefinery) 
+                                            (inRegion ?X Libya)))
+
+; TQC101a: no KIF formula supplied in the source; no assertion invented.
+; English: What major oil refineries are in Algeria?
+
+(test_Qs "TQC103"
+  "During Day 23, how does the United States of America respond to the weapons of mass destruction attack by Iran?"
+  (thereExists ?ACT 
+                         (and 
+                             (subEvents HPKBScenarioConflict ?ACT) 
+                             (isa ?ACT AttackOnTangible) 
+                             (thereExists ?FORCE 
+                                 (and 
+                                     (instrument-Generic ?ACT ?FORCE) 
+                                     (isa ?FORCE WeaponOfMassDestruction))) 
+                             (inReactionTo ?RESP ?ACT) 
+                             (deliberateActors ?ACT Iran) 
+                             (deliberateActors ?RESP UnitedStatesOfAmerica) 
+                             (temporallySubsumes 
+                                 (DateInSituationFn CalendarDay 23 HPKBScenarioConflict) ?RESP))))
+
+(test_Qs "TQC106"
+  "In the Scenario, what is the illness caused by the weapons of mass destruction attack during Day 22?"
+  (thereExists ?ACT 
+                         (and 
+                             (isa ?ACT AttackOnTangible) 
+                             (temporallySubsumes 
+                                 (DateInSituationFn CalendarDay 22 HPKBScenarioConflict) ?ACT) 
+                             (thereExists ?WEAPON 
+                                 (and 
+                                     (instrument-Generic ?ACT ?WEAPON) 
+                                     (isa ?WEAPON WeaponOfMassDestruction))) 
+                             (thereExists ?NUMBER 
+                                 (casualtyCountByAilment ?ACT ?ILLNESS ?NUMBER)))))
+
+(test_Qs "TQC108"
+  "In the Scenario, what does United States of America claim to play the role of weapon in the weapons of mass destruction attack during Day 22?"
+  (thereExists ?ACT 
+                         (thereExists ?COMM 
+                             (thereExists ?FORCE 
+                                 (thereExists ?USAGENT 
+                                     (and 
+                                         (subEvents HPKBScenarioConflict ?ACT) 
+                                         (isa ?ACT AttackOnTangible) 
+                                         (instrument-Generic ?ACT ?FORCE) 
+                                         (isa ?FORCE WeaponOfMassDestruction) 
+                                         (isa ?COMM Communicating) 
+                                         (or 
+                                             (senderOfInfo ?COMM UnitedStatesOfAmerica) 
+                                             (and 
+                                                 (senderOfInfo ?COMM ?USAGENT) 
+                                                 (hasAgents UnitedStatesOfAmerica ?USAGENT))) 
+                                         (infoTransferred ?COMM 
+                                             (thereExists ?FORCE2 
+                                                 (and 
+                                                     (instrument-Generic ?ACT ?FORCE2) 
+                                                     (isa ?FORCE2 ?FORCE-TYPE))))))))))
+
+(test_Qs "TQC111"
+  "In the Scenario, what kinds of objects play the role of weapon in a weapons of mass destruction attack during Day 22?"
+  (thereExists ?ACT 
+                         (thereExists ?ACTOR 
+                             (and 
+                                 (temporallySubsumes 
+                                     (DateInSituationFn CalendarDay 22 HPKBScenarioConflict) ?ACT) 
+                                 (assertedFormula 
+                                     (isa ?ACTOR ?KIND)) 
+                                 (not 
+                                     (quotedCollection ?KIND)) 
+                                 (instrument-Generic ?ACT ?ACTOR) 
+                                 (isa ?ACTOR MilitaryHardware) 
+                                 (subEvents HPKBScenarioConflict ?ACT) 
+                                 (isa ?ACT AttackOnTangible) 
+                                 (thereExists ?FORCE 
+                                     (and 
+                                         (instrument-Generic ?ACT ?FORCE) 
+                                         (isa ?FORCE WeaponOfMassDestruction)))))))
+
+(test_Qs "TQC112"
+  "Would a chemical weapons attack make sense as a foreign policy tool for Kuwait?"
+  (viabilityOfAsForeignPolicyTool Kuwait ChemicalAttack ?ATTRIB))
+
+(test_Qs "TQC115"
+  "How might an attack by Iran on Saudi Arabia using biological weapons affect the world's economic stability?"
+  (implies 
+                         (and 
+                             (isa ?ATTACK BiologicalAttack) 
+                             (maleficiary ?ATTACK SaudiArabia) 
+                             (performedBy ?ATTACK Iran)) 
+                         (holdsIn (STIF ?ATTACK) 
+                             (economicStability 
+                                 (EconomicSystemFn PlanetEarth) ?STABILITYRATE))))
+
+(test_Qs "TQC117"
+  "Could chemical weapons play the role of weapon in a bombing mission?"
+  (#$typeBehaviorCapable ChemicalWeapon BombingMission deviceUsed))
+
+(test_Qs "TQD101b"
+  "During Day 19, what actors compete regarding the well-being of their citizens?"
+  (thereExists ?PROTECT-ACTION 
+                         (thereExists ?SAFETY-GOAL 
+                             (and 
+                                 (isa ?PROTECT-ACTION Action) 
+                                 (performedBy ?PROTECT-ACTION ?AGENT) 
+                                 (goalCategoryForAgent ?AGENT ?SAFETY-GOAL CitizenSafetyGoal) 
+                                 (causes-PropProp 
+                                     (goals ?AGENT ?SAFETY-GOAL) 
+                                     (performedBy ?PROTECT-ACTION ?AGENT)) 
+                                 (temporallySubsumes 
+                                     (DateInSituationFn CalendarDay 19 HPKBScenarioConflict) ?PROTECT-ACTION)))))
+
+(test_Qs "TQD102"
+  "During Day 16, does Iran have as an interest weapons of mass destruction?"
+  (thereExists ?WEAPON-TYPE 
+                         (thereExists ?DEVELOPER 
+                             (or 
+                                 (and 
+                                     (expertRegarding ?DEVELOPER ?WEAPON-TYPE) 
+                                     (genls ?WEAPON-TYPE WeaponOfMassDestruction) 
+                                     (holdsIn (DateInSituationFn CalendarDay 16 HPKBScenarioConflict) 
+                                         (givesSupportToAgent Iran ?DEVELOPER 
+                                             (HighAmountFn EconomicSupport)))) 
+                                 (holdsIn (DateInSituationFn CalendarDay 16 HPKBScenarioConflict) 
+                                     (goals Iran 
+                                         (relationInstanceExists possesses Iran WeaponOfMassDestruction)))))))
+
+(test_Qs "TQE128"
+  "What relationship exists between Al Qaida and Osama bin Laden?"
+  (thereExists ?AL-QAIDA-RELATED-TO-BIN-LADEN 
+                         (or 
+                             (?AL-QAIDA-RELATED-TO-BIN-LADEN AlQaida OsamaBinLaden) 
+                             (?BIN-LADEN-RELATED-TO-AL-QAIDA OsamaBinLaden AlQaida) 
+                             (?AL-QAIDA-RELATED-TO-BIN-LADEN AlQaida OsamaBinLaden ?DEGREE) 
+                             (?BIN-LADEN-RELATED-TO-AL-QAIDA OsamaBinLaden AlQaida ?DEGREE) 
+                             (?AL-QAIDA-RELATED-TO-BIN-LADEN AlQaida ?DEGREE OsamaBinLaden) 
+                             (?BIN-LADEN-RELATED-TO-AL-QAIDA OsamaBinLaden ?DEGREE AlQaida) 
+                             (?AL-QAIDA-RELATED-TO-BIN-LADEN ?DEGREE AlQaida OsamaBinLaden) 
+                             (?BIN-LADEN-RELATED-TO-AL-QAIDA ?DEGREE OsamaBinLaden AlQaida))))
+
+(test_Qs "TQE203"
+  "During 2 August 1990 in the 1990-1 Persian Gulf War, what military actions occur in Kuwait?"
+  (and 
+                         (isa ?ACT MilitaryEvent) 
+                         (subEvents PersianGulfWar ?ACT) 
+                         (eventPartiallyOccursAt ?ACT Kuwait) 
+                         (happeningOnDate ?ACT 
+                             (DayFn 2 
+                                 (MonthFn August 
+                                     (YearFn 1990))))))
+
+(test_Qs "TQF128c"
+  "What relationship exists between PFLP-GC and Iran?"
+  (thereExists ?IRAN-RELATION-TO-PFLP-GC 
+                         (or 
+                             (?PFLP-GC-RELATED-TO-IRAN PFLP-GeneralCommand Iran) 
+                             (?IRAN-RELATION-TO-PFLP-GC Iran PFLP-GeneralCommand) 
+                             (?PFLP-GC-RELATED-TO-IRAN PFLP-GeneralCommand Iran ?DEGREE) 
+                             (?IRAN-RELATED-TO-PFLP-GC Iran PFLP-GeneralCommand ?DEGREE) 
+                             (?PFLP-GC-RELATED-TO-IRAN PFLP-GeneralCommand ?OTHER Iran) 
+                             (?IRAN-RELATED-TO-PFLP-GC Iran ?OTHER PFLP-GeneralCommand) 
+                             (?PFLP-GC-RELATED-TO-IRAN ?OTHER PFLP-GeneralCommand Iran) 
+                             (?IRAN-RELATED-TO-PFLP-GC ?OTHER Iran PFLP-GeneralCommand))))
+
+(test_Qs "TQF253c"
+  "What are ways to attack using biological weapons?"
+  (typeBehaviorCapable ?BIOLOGICAL-WEAPON-TYPE BiologicalAttack ?BIOLOGICAL-ATTACK-METHOD))

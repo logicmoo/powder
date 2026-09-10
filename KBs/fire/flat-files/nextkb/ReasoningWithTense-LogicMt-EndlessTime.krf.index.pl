@@ -1,0 +1,9 @@
+kb_index_header(index_header{count:2,digest:'443a780150b1ea768aeda0ec666111067a63f29c3f76f1d6518071e4aada7f36',normalizedDigest:'157918ab44c5ed000c827e7d7b46305c95583c914df4651a2d1ad6502516f80d',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ReasoningWithTense-LogicMt-EndlessTime.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ReasoningWithTense-LogicMt-EndlessTime.krf',sourceHash:'16d2ad5fc55a6b6d4d65b517d9bade0cb7816af89d4487deccc05169700a369e'}).
+kb_index_data(index{constants:[-(x_genlPreds,2),-(x_hasAlwaysBeen,1),-(x_was,1),-(x_willAlwaysBe,1),-(x_willBe,1)],entries:[entry(a65b1276f597de,signature(x_genlPreds,2),'x_ReasoningWithTense-LogicMt-EndlessTime','c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ReasoningWithTense-LogicMt-EndlessTime.krf',3,[x_genlPreds,x_hasAlwaysBeen,x_was]),entry(a65b1276f597df,signature(x_genlPreds,2),'x_ReasoningWithTense-LogicMt-EndlessTime','c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ReasoningWithTense-LogicMt-EndlessTime.krf',4,[x_genlPreds,x_willAlwaysBe,x_willBe])],predicates:[-(signature(x_genlPreds,2),2)],rankedConstants:[-(2,x_genlPreds),-(1,x_willBe),-(1,x_willAlwaysBe),-(1,x_was),-(1,x_hasAlwaysBeen)],rankedPredicates:[-(2,signature(x_genlPreds,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ReasoningWithTense-LogicMt-EndlessTime.krf'}).
+xc_indexed_constant(a65b1276f597de,x_genlPreds).
+xc_indexed_constant(a65b1276f597de,x_hasAlwaysBeen).
+xc_indexed_constant(a65b1276f597de,x_was).
+xc_indexed_constant(a65b1276f597df,x_genlPreds).
+xc_indexed_constant(a65b1276f597df,x_willAlwaysBe).
+xc_indexed_constant(a65b1276f597df,x_willBe).
+kb_index_footer(2,'443a780150b1ea768aeda0ec666111067a63f29c3f76f1d6518071e4aada7f36','0afa86e2e7566c7c5f2bb80aa3ac51f7c95b83068cd2ff8fe816e20c7891d223').

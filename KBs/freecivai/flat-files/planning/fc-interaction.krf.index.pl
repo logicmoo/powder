@@ -1,0 +1,15 @@
+kb_index_header(index_header{count:1,digest:'29a5fe13afdc6f0471775a38eaad9b46fc4ba6f78d4aa6488031e8d39cd029a2',normalizedDigest:'420099c4340ef13cc0fc37a8f62503bc20b0c15296dfb43023a6eaaf2a8b42bb',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/freecivai/flat-files/planning/fc-interaction.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/freecivai/flat-files/planning/fc-interaction.krf',sourceHash:'7d070bd496e990d908bb36c0d77de34aa57369b0cc2116ac86c7ff14024660b7'}).
+kb_index_data(index{constants:[-('x_Freeciv-TheGame',1),-(x_TheList,1),-(x_achieve,1),-(x_actionSequence,1),-(x_and,1),-(x_assimilateRequest,1),-(x_doLaunchGui,1),-(x_doStartGame,1),-(x_isa,1),-(x_methodForAction,1),-(x_preconditionForMethod,1),-(x_subexpressionMatching,1)],entries:[entry(a65b12826fa398,signature(x_preconditionForMethod,2),x_FreecivMt,'c:/snet/petta/repos/openworld_dr/KBs/freecivai/flat-files/planning/fc-interaction.krf',22,['x_Freeciv-TheGame',x_TheList,x_achieve,x_actionSequence,x_and,x_assimilateRequest,x_doLaunchGui,x_doStartGame,x_isa,x_methodForAction,x_preconditionForMethod,x_subexpressionMatching])],predicates:[-(signature(x_preconditionForMethod,2),1)],rankedConstants:[-(1,x_subexpressionMatching),-(1,x_preconditionForMethod),-(1,x_methodForAction),-(1,x_isa),-(1,x_doStartGame),-(1,x_doLaunchGui),-(1,x_assimilateRequest),-(1,x_and),-(1,x_actionSequence),-(1,x_achieve),-(1,x_TheList),-(1,'x_Freeciv-TheGame')],rankedPredicates:[-(1,signature(x_preconditionForMethod,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/freecivai/flat-files/planning/fc-interaction.krf'}).
+xc_indexed_constant(a65b12826fa398,'x_Freeciv-TheGame').
+xc_indexed_constant(a65b12826fa398,x_TheList).
+xc_indexed_constant(a65b12826fa398,x_achieve).
+xc_indexed_constant(a65b12826fa398,x_actionSequence).
+xc_indexed_constant(a65b12826fa398,x_and).
+xc_indexed_constant(a65b12826fa398,x_assimilateRequest).
+xc_indexed_constant(a65b12826fa398,x_doLaunchGui).
+xc_indexed_constant(a65b12826fa398,x_doStartGame).
+xc_indexed_constant(a65b12826fa398,x_isa).
+xc_indexed_constant(a65b12826fa398,x_methodForAction).
+xc_indexed_constant(a65b12826fa398,x_preconditionForMethod).
+xc_indexed_constant(a65b12826fa398,x_subexpressionMatching).
+kb_index_footer(1,'29a5fe13afdc6f0471775a38eaad9b46fc4ba6f78d4aa6488031e8d39cd029a2',a6d358295400adcfa51a9c4406b9babbe682a43ecf304cb0ca353f72f2e46e92).

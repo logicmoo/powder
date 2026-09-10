@@ -1,0 +1,12 @@
+kb_index_header(index_header{count:3,digest:'857ec32b3df418f89305326bf837483a1c696492f599b3ef7d1778846d0d758c',normalizedDigest:'25383032c8ea394d83e934dba9a3c39ad82ed9c3fc5f1533c298389c7ec0033f',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/freecivai/flat-files/fc-specialist.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/freecivai/flat-files/fc-specialist.krf',sourceHash:ae3599ee7853d47d5f7c2bf3196bd7d2a378be00c9c102345ea7bf7aa137fc57}).
+kb_index_data(index{constants:[-('x_FreeCiv-ObjectType',2),-('x_FreeCiv-Specialist',3),-(x_SecondOrderCollection,1),-(x_genls,1),-(x_isa,1),-(x_lookupGenls,1)],entries:[entry(a65b128224f029,signature(x_isa,2),x_FreecivMt,'c:/snet/petta/repos/openworld_dr/KBs/freecivai/flat-files/fc-specialist.krf',7,['x_FreeCiv-Specialist',x_SecondOrderCollection,x_isa]),entry(a65b128224f02a,signature(x_genls,2),x_FreecivMt,'c:/snet/petta/repos/openworld_dr/KBs/freecivai/flat-files/fc-specialist.krf',8,['x_FreeCiv-ObjectType','x_FreeCiv-Specialist',x_genls]),entry(a65b128224f02b,signature(x_lookupGenls,2),x_FreecivMt,'c:/snet/petta/repos/openworld_dr/KBs/freecivai/flat-files/fc-specialist.krf',9,['x_FreeCiv-ObjectType','x_FreeCiv-Specialist',x_lookupGenls])],predicates:[-(signature(x_genls,2),1),-(signature(x_isa,2),1),-(signature(x_lookupGenls,2),1)],rankedConstants:[-(3,'x_FreeCiv-Specialist'),-(2,'x_FreeCiv-ObjectType'),-(1,x_lookupGenls),-(1,x_isa),-(1,x_genls),-(1,x_SecondOrderCollection)],rankedPredicates:[-(1,signature(x_lookupGenls,2)),-(1,signature(x_isa,2)),-(1,signature(x_genls,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/freecivai/flat-files/fc-specialist.krf'}).
+xc_indexed_constant(a65b128224f029,'x_FreeCiv-Specialist').
+xc_indexed_constant(a65b128224f029,x_SecondOrderCollection).
+xc_indexed_constant(a65b128224f029,x_isa).
+xc_indexed_constant(a65b128224f02a,'x_FreeCiv-ObjectType').
+xc_indexed_constant(a65b128224f02a,'x_FreeCiv-Specialist').
+xc_indexed_constant(a65b128224f02a,x_genls).
+xc_indexed_constant(a65b128224f02b,'x_FreeCiv-ObjectType').
+xc_indexed_constant(a65b128224f02b,'x_FreeCiv-Specialist').
+xc_indexed_constant(a65b128224f02b,x_lookupGenls).
+kb_index_footer(3,'857ec32b3df418f89305326bf837483a1c696492f599b3ef7d1778846d0d758c','128ad5304f14e9ddf23ca7610625c49b3790d9d6b5720b53a69253de9fb0021d').

@@ -1,0 +1,11 @@
+kb_index_header(index_header{count:2,digest:'444fd641d51b7927b58ef46c2ef06a72bfe2e4979dcbaa387e831d4bdbc2a454',normalizedDigest:f09a5338c5bff8ebc37c64fc1b2e8fbb4feebb6745e2418ce1cde770bdfaa505,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/example.kif.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/example.kif',sourceHash:'91987c00da6222cd1e2995e89411a71acce1c6ec11ac651c0e58c202ed1555e1'}).
+kb_index_data(index{constants:[-(x_BinaryPredicate,1),-(x_equiv,1),-(x_forAll,1),-(x_holds,1),-(x_implies,1),-(x_instance,1),-(x_inverse,1),-(x_subclass,1)],entries:[entry(a65b1269e40f7b,signature(x_implies,2),x_exampleMt,'c:/snet/petta/repos/openworld_dr/KBs/example.kif',2,[x_equiv,x_forAll,x_holds,x_implies,x_inverse]),entry(a65b1269e40f7c,signature(x_instance,3),x_exampleMt,'c:/snet/petta/repos/openworld_dr/KBs/example.kif',10,[x_BinaryPredicate,x_instance,x_subclass])],predicates:[-(signature(x_implies,2),1),-(signature(x_instance,3),1)],rankedConstants:[-(1,x_subclass),-(1,x_inverse),-(1,x_instance),-(1,x_implies),-(1,x_holds),-(1,x_forAll),-(1,x_equiv),-(1,x_BinaryPredicate)],rankedPredicates:[-(1,signature(x_instance,3)),-(1,signature(x_implies,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/example.kif'}).
+xc_indexed_constant(a65b1269e40f7b,x_equiv).
+xc_indexed_constant(a65b1269e40f7b,x_forAll).
+xc_indexed_constant(a65b1269e40f7b,x_holds).
+xc_indexed_constant(a65b1269e40f7b,x_implies).
+xc_indexed_constant(a65b1269e40f7b,x_inverse).
+xc_indexed_constant(a65b1269e40f7c,x_BinaryPredicate).
+xc_indexed_constant(a65b1269e40f7c,x_instance).
+xc_indexed_constant(a65b1269e40f7c,x_subclass).
+kb_index_footer(2,'444fd641d51b7927b58ef46c2ef06a72bfe2e4979dcbaa387e831d4bdbc2a454','9a5b048e0a8c4c064f458a9a115d14a43b0aefb3f6c9db47e47ea1735276ef36').

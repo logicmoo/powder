@@ -1,0 +1,16 @@
+kb_index_header(index_header{count:5,digest:'25665d1bbd169148cda87152d67f3f8922a79350cd6f12616d7d2530ea3bae89',normalizedDigest:'6eb88e8d460e4e59759727e7290438d0e0051520c07b689541fd36ba3f198a8b',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AccountingMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AccountingMt.krf',sourceHash:'079076039602f20406c44068167b7b2271792fe6b373cd2e9246f3e99d9040df'}).
+kb_index_data(index{constants:[-(x_SetTheFormat,2),-(x_SingleEntry,1),-(x_argFormat,3),-(x_assets,1),-(x_bookValue,2),-(x_comment,1),-(x_paidForIn,1),-(x_priceToBookRatio,1),-(x_strictlyFunctionalInArgs,1)],entries:[entry(a65b126bc475b0,signature(x_argFormat,3),x_AccountingMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AccountingMt.krf',3,[x_SetTheFormat,x_argFormat,x_paidForIn]),entry(a65b126bc475b1,signature(x_argFormat,3),x_AccountingMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AccountingMt.krf',4,[x_SingleEntry,x_argFormat,x_bookValue]),entry(a65b126bc475b2,signature(x_argFormat,3),x_AccountingMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AccountingMt.krf',5,[x_SetTheFormat,x_argFormat,x_assets]),entry(a65b126bc475b3,signature(x_strictlyFunctionalInArgs,2),x_AccountingMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AccountingMt.krf',6,[x_bookValue,x_strictlyFunctionalInArgs]),entry(a65b126bc475b4,signature(x_comment,2),x_AccountingMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AccountingMt.krf',7,[x_comment,x_priceToBookRatio])],predicates:[-(signature(x_argFormat,3),3),-(signature(x_comment,2),1),-(signature(x_strictlyFunctionalInArgs,2),1)],rankedConstants:[-(3,x_argFormat),-(2,x_bookValue),-(2,x_SetTheFormat),-(1,x_strictlyFunctionalInArgs),-(1,x_priceToBookRatio),-(1,x_paidForIn),-(1,x_comment),-(1,x_assets),-(1,x_SingleEntry)],rankedPredicates:[-(3,signature(x_argFormat,3)),-(1,signature(x_strictlyFunctionalInArgs,2)),-(1,signature(x_comment,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AccountingMt.krf'}).
+xc_indexed_constant(a65b126bc475b0,x_SetTheFormat).
+xc_indexed_constant(a65b126bc475b0,x_argFormat).
+xc_indexed_constant(a65b126bc475b0,x_paidForIn).
+xc_indexed_constant(a65b126bc475b1,x_SingleEntry).
+xc_indexed_constant(a65b126bc475b1,x_argFormat).
+xc_indexed_constant(a65b126bc475b1,x_bookValue).
+xc_indexed_constant(a65b126bc475b2,x_SetTheFormat).
+xc_indexed_constant(a65b126bc475b2,x_argFormat).
+xc_indexed_constant(a65b126bc475b2,x_assets).
+xc_indexed_constant(a65b126bc475b3,x_bookValue).
+xc_indexed_constant(a65b126bc475b3,x_strictlyFunctionalInArgs).
+xc_indexed_constant(a65b126bc475b4,x_comment).
+xc_indexed_constant(a65b126bc475b4,x_priceToBookRatio).
+kb_index_footer(5,'25665d1bbd169148cda87152d67f3f8922a79350cd6f12616d7d2530ea3bae89','4e696931fb1bed40b22d8e681cc5a3d8c91bcdaae7e95b948efb17f6ad8275ef').

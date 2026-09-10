@@ -1,0 +1,14 @@
+kb_index_header(index_header{count:1,digest:'096d333883a3ae7f80d54e01b2fb8a5bac2bc2bd12c56f5d6ce0604560484448',normalizedDigest:f71a325f282798197205c8892ec87e3bbf38e0dc6038b2709d95518df43e951a,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/ea/v8/kbfiles/semtranses/Handmade-Semtranses.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/ea/v8/kbfiles/semtranses/Handmade-Semtranses.krf',sourceHash:c7cc87500d7ce000ccb26398f7906f902101dd69b52340b2b5fa320174a2d9dc}).
+kb_index_data(index{constants:[-(x_FNQuantSemtrans,1),-('x_Many-TheWord',1),-(x_Quantified_mass,1),-(x_TheList,1),-(x_WHFocus,1),-(x_WHQuestionFn,1),-(x_and,1),-(x_bindingTemplate,1),-(x_frame,1),-(x_groupPatterns,1),-(x_how_many,1)],entries:[entry(a65b126992f279,signature(x_FNQuantSemtrans,6),x_FrameNetSemTransMt,'c:/snet/petta/repos/openworld_dr/KBs/ea/v8/kbfiles/semtranses/Handmade-Semtranses.krf',15,[x_FNQuantSemtrans,'x_Many-TheWord',x_Quantified_mass,x_TheList,x_WHFocus,x_WHQuestionFn,x_and,x_bindingTemplate,x_frame,x_groupPatterns,x_how_many])],predicates:[-(signature(x_FNQuantSemtrans,6),1)],rankedConstants:[-(1,x_how_many),-(1,x_groupPatterns),-(1,x_frame),-(1,x_bindingTemplate),-(1,x_and),-(1,x_WHQuestionFn),-(1,x_WHFocus),-(1,x_TheList),-(1,x_Quantified_mass),-(1,'x_Many-TheWord'),-(1,x_FNQuantSemtrans)],rankedPredicates:[-(1,signature(x_FNQuantSemtrans,6))],source:'c:/snet/petta/repos/openworld_dr/KBs/ea/v8/kbfiles/semtranses/Handmade-Semtranses.krf'}).
+xc_indexed_constant(a65b126992f279,x_FNQuantSemtrans).
+xc_indexed_constant(a65b126992f279,'x_Many-TheWord').
+xc_indexed_constant(a65b126992f279,x_Quantified_mass).
+xc_indexed_constant(a65b126992f279,x_TheList).
+xc_indexed_constant(a65b126992f279,x_WHFocus).
+xc_indexed_constant(a65b126992f279,x_WHQuestionFn).
+xc_indexed_constant(a65b126992f279,x_and).
+xc_indexed_constant(a65b126992f279,x_bindingTemplate).
+xc_indexed_constant(a65b126992f279,x_frame).
+xc_indexed_constant(a65b126992f279,x_groupPatterns).
+xc_indexed_constant(a65b126992f279,x_how_many).
+kb_index_footer(1,'096d333883a3ae7f80d54e01b2fb8a5bac2bc2bd12c56f5d6ce0604560484448','7519fd49450dbbf20b904cfa7bef5ad2288e34c59b7c160fb78a512cfc8c4aa6').

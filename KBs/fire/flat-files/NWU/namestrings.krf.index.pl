@@ -1,0 +1,17 @@
+kb_index_header(index_header{count:7,digest:'0e8c142efdf915fc0dc130c0719f267f91083197ad0cafb25eaa7c52aca019fd',normalizedDigest:ac5bc9d1e90df774a22fc0e594784315520260a354ea5ee3403f804423f8e237,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/namestrings.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/namestrings.krf',sourceHash:e9e22007e10aa03406b4a57f8864ffb9389aec0452f5ca8f80641d2f6862cc74}).
+kb_index_data(index{constants:[-(x_Cell,1),-(x_CellNucleus,1),-(x_Chloroplast,1),-(x_Cytoplasm,1),-(x_DNAMolecule,1),-(x_Membrane,1),-(x_Mitochondrion,1),-(x_nameString,7)],entries:[entry(a65b126b70eb21,signature(x_nameString,2),x_UniversalVocabularyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/namestrings.krf',17,[x_Cell,x_nameString]),entry(a65b126b70eb22,signature(x_nameString,2),x_UniversalVocabularyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/namestrings.krf',18,[x_Membrane,x_nameString]),entry(a65b126b70eb23,signature(x_nameString,2),x_UniversalVocabularyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/namestrings.krf',19,[x_Chloroplast,x_nameString]),entry(a65b126b70eb24,signature(x_nameString,2),x_UniversalVocabularyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/namestrings.krf',20,[x_Cytoplasm,x_nameString]),entry(a65b126b70eb25,signature(x_nameString,2),x_UniversalVocabularyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/namestrings.krf',21,[x_DNAMolecule,x_nameString]),entry(a65b126b70eb26,signature(x_nameString,2),x_UniversalVocabularyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/namestrings.krf',22,[x_Mitochondrion,x_nameString]),entry(a65b126b70eb27,signature(x_nameString,2),x_UniversalVocabularyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/namestrings.krf',23,[x_CellNucleus,x_nameString])],predicates:[-(signature(x_nameString,2),7)],rankedConstants:[-(7,x_nameString),-(1,x_Mitochondrion),-(1,x_Membrane),-(1,x_DNAMolecule),-(1,x_Cytoplasm),-(1,x_Chloroplast),-(1,x_CellNucleus),-(1,x_Cell)],rankedPredicates:[-(7,signature(x_nameString,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/namestrings.krf'}).
+xc_indexed_constant(a65b126b70eb21,x_Cell).
+xc_indexed_constant(a65b126b70eb21,x_nameString).
+xc_indexed_constant(a65b126b70eb22,x_Membrane).
+xc_indexed_constant(a65b126b70eb22,x_nameString).
+xc_indexed_constant(a65b126b70eb23,x_Chloroplast).
+xc_indexed_constant(a65b126b70eb23,x_nameString).
+xc_indexed_constant(a65b126b70eb24,x_Cytoplasm).
+xc_indexed_constant(a65b126b70eb24,x_nameString).
+xc_indexed_constant(a65b126b70eb25,x_DNAMolecule).
+xc_indexed_constant(a65b126b70eb25,x_nameString).
+xc_indexed_constant(a65b126b70eb26,x_Mitochondrion).
+xc_indexed_constant(a65b126b70eb26,x_nameString).
+xc_indexed_constant(a65b126b70eb27,x_CellNucleus).
+xc_indexed_constant(a65b126b70eb27,x_nameString).
+kb_index_footer(7,'0e8c142efdf915fc0dc130c0719f267f91083197ad0cafb25eaa7c52aca019fd','82485be7a0eacc3bb9d35ef2e971cc6619a1fe763728f20cb54bf2ae05d1f476').

@@ -1,0 +1,12 @@
+kb_index_header(index_header{count:3,digest:'68a914431381c370ff071de7a1d20bc3e06fa3dc60691554a5b40ebbf7b0edbf',normalizedDigest:'835139a8d540159d2029b8795109948c12b298efb15937c94888d30eead93042',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/BordersMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/BordersMt.krf',sourceHash:f59c77854c5af271ef839bd8da86204d3f6f667c32b1713d72299ea533cc5af8}).
+kb_index_data(index{constants:[-(x_SetTheFormat,2),-(x_SingleEntry,1),-(x_argFormat,3),-(x_borderOf,2),-(x_hasAsBoundary,1)],entries:[entry(a65b12707d8e26,signature(x_argFormat,3),x_BordersMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/BordersMt.krf',3,[x_SetTheFormat,x_argFormat,x_hasAsBoundary]),entry(a65b12707d8e27,signature(x_argFormat,3),x_BordersMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/BordersMt.krf',4,[x_SetTheFormat,x_argFormat,x_borderOf]),entry(a65b12707d8e28,signature(x_argFormat,3),x_BordersMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/BordersMt.krf',5,[x_SingleEntry,x_argFormat,x_borderOf])],predicates:[-(signature(x_argFormat,3),3)],rankedConstants:[-(3,x_argFormat),-(2,x_borderOf),-(2,x_SetTheFormat),-(1,x_hasAsBoundary),-(1,x_SingleEntry)],rankedPredicates:[-(3,signature(x_argFormat,3))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/BordersMt.krf'}).
+xc_indexed_constant(a65b12707d8e26,x_SetTheFormat).
+xc_indexed_constant(a65b12707d8e26,x_argFormat).
+xc_indexed_constant(a65b12707d8e26,x_hasAsBoundary).
+xc_indexed_constant(a65b12707d8e27,x_SetTheFormat).
+xc_indexed_constant(a65b12707d8e27,x_argFormat).
+xc_indexed_constant(a65b12707d8e27,x_borderOf).
+xc_indexed_constant(a65b12707d8e28,x_SingleEntry).
+xc_indexed_constant(a65b12707d8e28,x_argFormat).
+xc_indexed_constant(a65b12707d8e28,x_borderOf).
+kb_index_footer(3,'68a914431381c370ff071de7a1d20bc3e06fa3dc60691554a5b40ebbf7b0edbf','79cf086f241d4aa60ad28bf60e5dc75764134921683b4e66af15f61bcaf6a3b1').

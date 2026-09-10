@@ -310,7 +310,7 @@
 (relationAllExistsCount anatomicalParts CanineAnimal Paw 4)
 (relationAllExistsCount anatomicalParts EquineAnimal Tail-BodyPart 1)
 (relationAllExistsCount anatomicalParts FelidaeFamily Tail-BodyPart 1)
-(relationAllExistsCount anatomicalParts CanineAnimal Tail-BodyPart 1)'
+(relationAllExistsCount anatomicalParts CanineAnimal Tail-BodyPart 1)
 (relationAllExistsCount anatomicalParts Biped Shoulder 2)
 (relationAllExistsCount anatomicalParts Primate Arm 2)
 (relationAllExistsCount anatomicalParts Primate Hand 2)

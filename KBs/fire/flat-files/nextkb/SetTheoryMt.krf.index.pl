@@ -1,0 +1,13 @@
+kb_index_header(index_header{count:2,digest:'6802b15db02f090e6690f7d91c741e403b898cacfb913edc4944dab42cd698c1',normalizedDigest:a9a672c3d838dc7fb28fa5b481ce79585d9b2ebd946a207ae551fb4b88d7bbc2,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/SetTheoryMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/SetTheoryMt.krf',sourceHash:'41582361721637c2023f9651f5233aaf0718a594adf0d9c48a4a22fa85bf0037'}).
+kb_index_data(index{constants:[-('x_Set-Mathematical',1),-(x_and,2),-(x_elementOf,1),-(x_equals,1),-(x_implies,2),-(x_isa,1),-(x_subsetOf,2)],entries:[entry(a65b127718bfef,signature(x_implies,2),x_SetTheoryMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/SetTheoryMt.krf',3,[x_and,x_elementOf,x_implies,x_subsetOf]),entry(a65b127718bff0,signature(x_implies,2),x_SetTheoryMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/SetTheoryMt.krf',4,['x_Set-Mathematical',x_and,x_equals,x_implies,x_isa,x_subsetOf])],predicates:[-(signature(x_implies,2),2)],rankedConstants:[-(2,x_subsetOf),-(2,x_implies),-(2,x_and),-(1,x_isa),-(1,x_equals),-(1,x_elementOf),-(1,'x_Set-Mathematical')],rankedPredicates:[-(2,signature(x_implies,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/SetTheoryMt.krf'}).
+xc_indexed_constant(a65b127718bfef,x_and).
+xc_indexed_constant(a65b127718bfef,x_elementOf).
+xc_indexed_constant(a65b127718bfef,x_implies).
+xc_indexed_constant(a65b127718bfef,x_subsetOf).
+xc_indexed_constant(a65b127718bff0,'x_Set-Mathematical').
+xc_indexed_constant(a65b127718bff0,x_and).
+xc_indexed_constant(a65b127718bff0,x_equals).
+xc_indexed_constant(a65b127718bff0,x_implies).
+xc_indexed_constant(a65b127718bff0,x_isa).
+xc_indexed_constant(a65b127718bff0,x_subsetOf).
+kb_index_footer(2,'6802b15db02f090e6690f7d91c741e403b898cacfb913edc4944dab42cd698c1','80aef8fd0735b5bf6ad85ca5e75a4eb32e84ec97d8f0d79a871c0fc716a9c730').

@@ -1,0 +1,14 @@
+kb_index_header(index_header{count:3,digest:'22e6555371251a339aade31f81bb4531010750b7ffe9b9bed415c38cbe9f7f1f',normalizedDigest:'6285a01b6a1ea91e45ef04fd7a6e68c8715a14e615cb598d931cd0021a91d354',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/OrganizationProductMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/OrganizationProductMt.krf',sourceHash:f93cb619bba9044691bd2d851f0580b2868534ffb3662eaab354b9f7d6f8ad08}).
+kb_index_data(index{constants:[-(x_Afghanistan,1),-(x_Opium,1),-(x_ProductionOfFn,1),-(x_SetTheFormat,2),-(x_SubcollectionOccursAtFn,1),-(x_argFormat,2),-(x_genls,1),-(x_madeBy,2)],entries:[entry(a65b12760e22d5,signature(x_argFormat,3),x_OrganizationProductMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/OrganizationProductMt.krf',3,[x_SetTheFormat,x_argFormat,x_madeBy]),entry(a65b12760e22d6,signature(x_argFormat,3),x_OrganizationProductMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/OrganizationProductMt.krf',4,[x_SetTheFormat,x_argFormat,x_madeBy]),entry(a65b12760e22d7,signature(x_genls,2),x_OrganizationProductMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/OrganizationProductMt.krf',5,[x_Afghanistan,x_Opium,x_ProductionOfFn,x_SubcollectionOccursAtFn,x_genls])],predicates:[-(signature(x_argFormat,3),2),-(signature(x_genls,2),1)],rankedConstants:[-(2,x_madeBy),-(2,x_argFormat),-(2,x_SetTheFormat),-(1,x_genls),-(1,x_SubcollectionOccursAtFn),-(1,x_ProductionOfFn),-(1,x_Opium),-(1,x_Afghanistan)],rankedPredicates:[-(2,signature(x_argFormat,3)),-(1,signature(x_genls,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/OrganizationProductMt.krf'}).
+xc_indexed_constant(a65b12760e22d5,x_SetTheFormat).
+xc_indexed_constant(a65b12760e22d5,x_argFormat).
+xc_indexed_constant(a65b12760e22d5,x_madeBy).
+xc_indexed_constant(a65b12760e22d6,x_SetTheFormat).
+xc_indexed_constant(a65b12760e22d6,x_argFormat).
+xc_indexed_constant(a65b12760e22d6,x_madeBy).
+xc_indexed_constant(a65b12760e22d7,x_Afghanistan).
+xc_indexed_constant(a65b12760e22d7,x_Opium).
+xc_indexed_constant(a65b12760e22d7,x_ProductionOfFn).
+xc_indexed_constant(a65b12760e22d7,x_SubcollectionOccursAtFn).
+xc_indexed_constant(a65b12760e22d7,x_genls).
+kb_index_footer(3,'22e6555371251a339aade31f81bb4531010750b7ffe9b9bed415c38cbe9f7f1f',cc82636509644b4c728b12838262a9142dfe0ca59943e2687ad42199b5961935).

@@ -1,0 +1,15 @@
+kb_index_header(index_header{count:4,digest:'6c8f77ad3db7c05d6bca67b99adf94ae46f574690e2d97563584320674aabf1f',normalizedDigest:bc7d265ec5ee68a43ca6015bd256245210f84b029170bff9ade41d611de2aa1d,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ComputerHardwareMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ComputerHardwareMt.krf',sourceHash:'2dec96a5c26a7fa081f38ec4ccc60c34691bf1d8c7b71295b7f51cb31d6f5db7'}).
+kb_index_data(index{constants:[-(x_CISCArchitecture,1),-(x_CPUMemoryRegister,1),-(x_ComputerInformationStorageMedia,1),-(x_EAXRegister,1),-(x_InformationManagementUse,1),-(x_MagneticTape,1),-(x_PersonalComputer,1),-(x_RISCArchitecture,1),-(x_disjointWith,1),-(x_genls,3)],entries:[entry(a65b1271073cc2,signature(x_disjointWith,2),x_ComputerHardwareMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ComputerHardwareMt.krf',3,[x_CISCArchitecture,x_RISCArchitecture,x_disjointWith]),entry(a65b1271073cc3,signature(x_genls,2),x_ComputerHardwareMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ComputerHardwareMt.krf',4,[x_ComputerInformationStorageMedia,x_MagneticTape,x_genls]),entry(a65b1271073cc4,signature(x_genls,2),x_ComputerHardwareMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ComputerHardwareMt.krf',5,[x_InformationManagementUse,x_PersonalComputer,x_genls]),entry(a65b1271073cc5,signature(x_genls,2),x_ComputerHardwareMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ComputerHardwareMt.krf',6,[x_CPUMemoryRegister,x_EAXRegister,x_genls])],predicates:[-(signature(x_disjointWith,2),1),-(signature(x_genls,2),3)],rankedConstants:[-(3,x_genls),-(1,x_disjointWith),-(1,x_RISCArchitecture),-(1,x_PersonalComputer),-(1,x_MagneticTape),-(1,x_InformationManagementUse),-(1,x_EAXRegister),-(1,x_ComputerInformationStorageMedia),-(1,x_CPUMemoryRegister),-(1,x_CISCArchitecture)],rankedPredicates:[-(3,signature(x_genls,2)),-(1,signature(x_disjointWith,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ComputerHardwareMt.krf'}).
+xc_indexed_constant(a65b1271073cc2,x_CISCArchitecture).
+xc_indexed_constant(a65b1271073cc2,x_RISCArchitecture).
+xc_indexed_constant(a65b1271073cc2,x_disjointWith).
+xc_indexed_constant(a65b1271073cc3,x_ComputerInformationStorageMedia).
+xc_indexed_constant(a65b1271073cc3,x_MagneticTape).
+xc_indexed_constant(a65b1271073cc3,x_genls).
+xc_indexed_constant(a65b1271073cc4,x_InformationManagementUse).
+xc_indexed_constant(a65b1271073cc4,x_PersonalComputer).
+xc_indexed_constant(a65b1271073cc4,x_genls).
+xc_indexed_constant(a65b1271073cc5,x_CPUMemoryRegister).
+xc_indexed_constant(a65b1271073cc5,x_EAXRegister).
+xc_indexed_constant(a65b1271073cc5,x_genls).
+kb_index_footer(4,'6c8f77ad3db7c05d6bca67b99adf94ae46f574690e2d97563584320674aabf1f',a328e5abf268a360334114b843676dc945d5e75a431506891f00ec1e36b45df2).

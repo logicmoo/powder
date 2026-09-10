@@ -1,0 +1,13 @@
+kb_index_header(index_header{count:3,digest:f316fc0676d2a8c95c5b55a782a3c8dd888d0c573be300fa211604babff25a04,normalizedDigest:'6c236282fd9ad2998c58e930f0594fa73933fa99edc2b810e5e734708de5aa80',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/executive/self-model.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/executive/self-model.krf',sourceHash:'8168a4e85db8c5edc23baabc3ae312688ea26537dae05e11e62a061ef147eca6'}).
+kb_index_data(index{constants:[-(x_LearnSelfModelFn,2),-(x_PendingStatus,1),-(x_SelfModelMt,1),-('x_SelfToken-Indexical',3),-(x_goalStatus,1),-(x_learnedModelTopic,1),-(x_learningGoalForCompanion,1)],entries:[entry(a65b125d2b7a3e,signature(x_learnedModelTopic,2),x_SelfModelMt,'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/executive/self-model.krf',28,[x_SelfModelMt,'x_SelfToken-Indexical',x_learnedModelTopic]),entry(a65b125d2b7a3f,signature(x_learningGoalForCompanion,1),x_SelfModelMt,'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/executive/self-model.krf',33,[x_LearnSelfModelFn,'x_SelfToken-Indexical',x_learningGoalForCompanion]),entry(a65b125d2b7a40,signature(x_goalStatus,2),x_SelfModelMt,'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/executive/self-model.krf',34,[x_LearnSelfModelFn,x_PendingStatus,'x_SelfToken-Indexical',x_goalStatus])],predicates:[-(signature(x_goalStatus,2),1),-(signature(x_learnedModelTopic,2),1),-(signature(x_learningGoalForCompanion,1),1)],rankedConstants:[-(3,'x_SelfToken-Indexical'),-(2,x_LearnSelfModelFn),-(1,x_learningGoalForCompanion),-(1,x_learnedModelTopic),-(1,x_goalStatus),-(1,x_SelfModelMt),-(1,x_PendingStatus)],rankedPredicates:[-(1,signature(x_learningGoalForCompanion,1)),-(1,signature(x_learnedModelTopic,2)),-(1,signature(x_goalStatus,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/companions/v1/flat-files/executive/self-model.krf'}).
+xc_indexed_constant(a65b125d2b7a3e,x_SelfModelMt).
+xc_indexed_constant(a65b125d2b7a3e,'x_SelfToken-Indexical').
+xc_indexed_constant(a65b125d2b7a3e,x_learnedModelTopic).
+xc_indexed_constant(a65b125d2b7a3f,x_LearnSelfModelFn).
+xc_indexed_constant(a65b125d2b7a3f,'x_SelfToken-Indexical').
+xc_indexed_constant(a65b125d2b7a3f,x_learningGoalForCompanion).
+xc_indexed_constant(a65b125d2b7a40,x_LearnSelfModelFn).
+xc_indexed_constant(a65b125d2b7a40,x_PendingStatus).
+xc_indexed_constant(a65b125d2b7a40,'x_SelfToken-Indexical').
+xc_indexed_constant(a65b125d2b7a40,x_goalStatus).
+kb_index_footer(3,f316fc0676d2a8c95c5b55a782a3c8dd888d0c573be300fa211604babff25a04,f638b75c85687a67986b8e9dd573f318d2baeb83167f8e38afa61744bd32ca74).

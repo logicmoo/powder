@@ -1,0 +1,17 @@
+kb_index_header(index_header{count:4,digest:f36af3681aea89f216e53501acb30e8ae71448da139566b1b9a26d42f123540f,normalizedDigest:'90d2ac6eace27576afc133202a0a9ea23b9bbbad790173c5a0da6cd7d12ebde0',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ServiceMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ServiceMt.krf',sourceHash:'27d419c1401aa087a21b60f8d1a46400cbaa193c122a6675443256198e73e192'}).
+kb_index_data(index{constants:[-(x_PresentTenseVersionFn,2),-(x_SetTheFormat,4),-(x_argFormat,4),-(x_recipientOfService,4)],entries:[entry(a65b127717061e,signature(x_argFormat,3),x_ServiceMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ServiceMt.krf',3,[x_SetTheFormat,x_argFormat,x_recipientOfService]),entry(a65b127717061f,signature(x_argFormat,3),x_ServiceMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ServiceMt.krf',4,[x_SetTheFormat,x_argFormat,x_recipientOfService]),entry(a65b1277170620,signature(x_argFormat,3),x_ServiceMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ServiceMt.krf',5,[x_PresentTenseVersionFn,x_SetTheFormat,x_argFormat,x_recipientOfService]),entry(a65b1277170621,signature(x_argFormat,3),x_ServiceMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ServiceMt.krf',6,[x_PresentTenseVersionFn,x_SetTheFormat,x_argFormat,x_recipientOfService])],predicates:[-(signature(x_argFormat,3),4)],rankedConstants:[-(4,x_recipientOfService),-(4,x_argFormat),-(4,x_SetTheFormat),-(2,x_PresentTenseVersionFn)],rankedPredicates:[-(4,signature(x_argFormat,3))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ServiceMt.krf'}).
+xc_indexed_constant(a65b127717061e,x_SetTheFormat).
+xc_indexed_constant(a65b127717061e,x_argFormat).
+xc_indexed_constant(a65b127717061e,x_recipientOfService).
+xc_indexed_constant(a65b127717061f,x_SetTheFormat).
+xc_indexed_constant(a65b127717061f,x_argFormat).
+xc_indexed_constant(a65b127717061f,x_recipientOfService).
+xc_indexed_constant(a65b1277170620,x_PresentTenseVersionFn).
+xc_indexed_constant(a65b1277170620,x_SetTheFormat).
+xc_indexed_constant(a65b1277170620,x_argFormat).
+xc_indexed_constant(a65b1277170620,x_recipientOfService).
+xc_indexed_constant(a65b1277170621,x_PresentTenseVersionFn).
+xc_indexed_constant(a65b1277170621,x_SetTheFormat).
+xc_indexed_constant(a65b1277170621,x_argFormat).
+xc_indexed_constant(a65b1277170621,x_recipientOfService).
+kb_index_footer(4,f36af3681aea89f216e53501acb30e8ae71448da139566b1b9a26d42f123540f,'8d9e1a7ea5cc6c023189c0d61f091ed949aa4261b9e0f2f217869f35fee1baa0').

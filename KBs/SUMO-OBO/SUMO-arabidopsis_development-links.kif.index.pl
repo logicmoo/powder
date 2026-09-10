@@ -1,0 +1,12 @@
+kb_index_header(index_header{count:3,digest:e3f324bb33d60e41482a170642f9d77d2cc9096367f79d063bc0c528df1f896e,normalizedDigest:'030c6f622ed8ea31fa9518c76edc7c3733b08ebc9c0a8ac4be5bf573b68a3fe1',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-arabidopsis_development-links.kif.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-arabidopsis_development-links.kif',sourceHash:'5aab16c0d7d359b85d201236bd06dc1193a9fdb214a300521876eab7360277b8'}).
+kb_index_data(index{constants:[-(x_Seed,1),-(x_arabidopsis_development,3),-(x_parts,1),-(x_subset,1),-(x_subsumedExternalConcept,2),-(x_synonymousExternalConcept,1)],entries:[entry(a65b1253c5d960,signature(x_synonymousExternalConcept,3),'x_SUMO-arabidopsis_development-linksMt','c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-arabidopsis_development-links.kif',1,[x_arabidopsis_development,x_parts,x_synonymousExternalConcept]),entry(a65b1253c5d961,signature(x_subsumedExternalConcept,3),'x_SUMO-arabidopsis_development-linksMt','c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-arabidopsis_development-links.kif',2,[x_Seed,x_arabidopsis_development,x_subsumedExternalConcept]),entry(a65b1253c5d962,signature(x_subsumedExternalConcept,3),'x_SUMO-arabidopsis_development-linksMt','c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-arabidopsis_development-links.kif',3,[x_arabidopsis_development,x_subset,x_subsumedExternalConcept])],predicates:[-(signature(x_subsumedExternalConcept,3),2),-(signature(x_synonymousExternalConcept,3),1)],rankedConstants:[-(3,x_arabidopsis_development),-(2,x_subsumedExternalConcept),-(1,x_synonymousExternalConcept),-(1,x_subset),-(1,x_parts),-(1,x_Seed)],rankedPredicates:[-(2,signature(x_subsumedExternalConcept,3)),-(1,signature(x_synonymousExternalConcept,3))],source:'c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-arabidopsis_development-links.kif'}).
+xc_indexed_constant(a65b1253c5d960,x_arabidopsis_development).
+xc_indexed_constant(a65b1253c5d960,x_parts).
+xc_indexed_constant(a65b1253c5d960,x_synonymousExternalConcept).
+xc_indexed_constant(a65b1253c5d961,x_Seed).
+xc_indexed_constant(a65b1253c5d961,x_arabidopsis_development).
+xc_indexed_constant(a65b1253c5d961,x_subsumedExternalConcept).
+xc_indexed_constant(a65b1253c5d962,x_arabidopsis_development).
+xc_indexed_constant(a65b1253c5d962,x_subset).
+xc_indexed_constant(a65b1253c5d962,x_subsumedExternalConcept).
+kb_index_footer(3,e3f324bb33d60e41482a170642f9d77d2cc9096367f79d063bc0c528df1f896e,dc0166d17ca170d15c090570cfd3c56f722cd0fd23e22093393177146c3c4f5d).

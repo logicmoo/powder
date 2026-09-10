@@ -1,0 +1,11 @@
+kb_index_header(index_header{count:3,digest:'2aed9527ea1fe815b56b2cc3168ae0e36679a34b16d396f6d91911c3d43bc771',normalizedDigest:'72d875b32a783fa081adb793028adf83943730a85c1d0f6365176cdbce96fac3',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/ea/v8/kbfiles/general-queries.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/ea/v8/kbfiles/general-queries.krf',sourceHash:'051eb7b7bd0046c47fcaf8e4519d70f7ede0039b46e2a0e815f6901a472edce0'}).
+kb_index_data(index{constants:[-(x_EAGeneralQueriesMt,2),-(x_EAReferenceResolutionMt,1),-(x_EAStructuralRulesMt,1),-(x_genlMt,2),-(x_queryForInterpretation,1),-(x_resolveUnresolvedReferences,1)],entries:[entry(a65b1262539a6b,signature(x_genlMt,2),x_EAGeneralQueriesMt,'c:/snet/petta/repos/openworld_dr/KBs/ea/v8/kbfiles/general-queries.krf',15,[x_EAGeneralQueriesMt,x_EAReferenceResolutionMt,x_genlMt]),entry(a65b1262539a6c,signature(x_genlMt,2),x_EAGeneralQueriesMt,'c:/snet/petta/repos/openworld_dr/KBs/ea/v8/kbfiles/general-queries.krf',16,[x_EAGeneralQueriesMt,x_EAStructuralRulesMt,x_genlMt]),entry(a65b1262539a6d,signature(x_queryForInterpretation,2),x_EAGeneralQueriesMt,'c:/snet/petta/repos/openworld_dr/KBs/ea/v8/kbfiles/general-queries.krf',27,[x_queryForInterpretation,x_resolveUnresolvedReferences])],predicates:[-(signature(x_genlMt,2),2),-(signature(x_queryForInterpretation,2),1)],rankedConstants:[-(2,x_genlMt),-(2,x_EAGeneralQueriesMt),-(1,x_resolveUnresolvedReferences),-(1,x_queryForInterpretation),-(1,x_EAStructuralRulesMt),-(1,x_EAReferenceResolutionMt)],rankedPredicates:[-(2,signature(x_genlMt,2)),-(1,signature(x_queryForInterpretation,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/ea/v8/kbfiles/general-queries.krf'}).
+xc_indexed_constant(a65b1262539a6b,x_EAGeneralQueriesMt).
+xc_indexed_constant(a65b1262539a6b,x_EAReferenceResolutionMt).
+xc_indexed_constant(a65b1262539a6b,x_genlMt).
+xc_indexed_constant(a65b1262539a6c,x_EAGeneralQueriesMt).
+xc_indexed_constant(a65b1262539a6c,x_EAStructuralRulesMt).
+xc_indexed_constant(a65b1262539a6c,x_genlMt).
+xc_indexed_constant(a65b1262539a6d,x_queryForInterpretation).
+xc_indexed_constant(a65b1262539a6d,x_resolveUnresolvedReferences).
+kb_index_footer(3,'2aed9527ea1fe815b56b2cc3168ae0e36679a34b16d396f6d91911c3d43bc771',fa12406aa46285c1862c18d49aea36bce36f060ed3fd0da84a8889069356640c).

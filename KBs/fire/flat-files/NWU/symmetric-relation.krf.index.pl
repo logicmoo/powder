@@ -1,0 +1,17 @@
+kb_index_header(index_header{count:5,digest:'9888223001374f90c9c430f6a8a6849216a432288e7e2ecac95c1d86019ee05c',normalizedDigest:b114b37db47914e485d6fd3d978c3a4e605d10fa1eff0b7a0a9244e93717420f,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/symmetric-relation.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/symmetric-relation.krf',sourceHash:f8494f5b5f6cdaa5c8190ebdf1da5125353d767d028c9f366f27ae87bfd7c8cb}).
+kb_index_data(index{constants:[-(x_Collection,1),-(x_Relation,1),-(x_RelationTypeByLogicalFeature,1),-(x_SymmetricBinaryPredicate,1),-(x_SymmetricRelation,5),-(x_comment,1),-(x_genls,2),-(x_isa,2)],entries:[entry(a65b126b7254f2,signature(x_isa,2),x_BaseKB,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/symmetric-relation.krf',17,[x_Collection,x_SymmetricRelation,x_isa]),entry(a65b126b7254f3,signature(x_isa,2),x_BaseKB,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/symmetric-relation.krf',18,[x_RelationTypeByLogicalFeature,x_SymmetricRelation,x_isa]),entry(a65b126b7254f4,signature(x_genls,2),x_BaseKB,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/symmetric-relation.krf',19,[x_Relation,x_SymmetricRelation,x_genls]),entry(a65b126b7254f5,signature(x_comment,2),x_BaseKB,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/symmetric-relation.krf',20,[x_SymmetricRelation,x_comment]),entry(a65b126b7254f6,signature(x_genls,2),x_BaseKB,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/symmetric-relation.krf',24,[x_SymmetricBinaryPredicate,x_SymmetricRelation,x_genls])],predicates:[-(signature(x_comment,2),1),-(signature(x_genls,2),2),-(signature(x_isa,2),2)],rankedConstants:[-(5,x_SymmetricRelation),-(2,x_isa),-(2,x_genls),-(1,x_comment),-(1,x_SymmetricBinaryPredicate),-(1,x_RelationTypeByLogicalFeature),-(1,x_Relation),-(1,x_Collection)],rankedPredicates:[-(2,signature(x_isa,2)),-(2,signature(x_genls,2)),-(1,signature(x_comment,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/symmetric-relation.krf'}).
+xc_indexed_constant(a65b126b7254f2,x_Collection).
+xc_indexed_constant(a65b126b7254f2,x_SymmetricRelation).
+xc_indexed_constant(a65b126b7254f2,x_isa).
+xc_indexed_constant(a65b126b7254f3,x_RelationTypeByLogicalFeature).
+xc_indexed_constant(a65b126b7254f3,x_SymmetricRelation).
+xc_indexed_constant(a65b126b7254f3,x_isa).
+xc_indexed_constant(a65b126b7254f4,x_Relation).
+xc_indexed_constant(a65b126b7254f4,x_SymmetricRelation).
+xc_indexed_constant(a65b126b7254f4,x_genls).
+xc_indexed_constant(a65b126b7254f5,x_SymmetricRelation).
+xc_indexed_constant(a65b126b7254f5,x_comment).
+xc_indexed_constant(a65b126b7254f6,x_SymmetricBinaryPredicate).
+xc_indexed_constant(a65b126b7254f6,x_SymmetricRelation).
+xc_indexed_constant(a65b126b7254f6,x_genls).
+kb_index_footer(5,'9888223001374f90c9c430f6a8a6849216a432288e7e2ecac95c1d86019ee05c','5fc4fa41ef35574cb9cb8b8546e1f2465ca6900cdd03904735860ab39695ed75').
