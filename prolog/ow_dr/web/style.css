@@ -203,6 +203,11 @@ main:focus { outline: none; }
 .provenance-section { margin-top: 32px; }
 .provenance-section > p { margin-top: 12px; font-size: .86rem; }
 .context-list { list-style: none; padding: 0; display: grid; gap: 10px; margin-bottom: 30px; }
+.microtheory-directory { margin: 24px 0; }
+.microtheory-directory .context-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface); }
+.microtheory-directory .mt-reference { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.microtheory-directory .selected-context { border-color: var(--accent); }
+.context-count { color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .source-lines { padding: 0; margin: 24px 0; list-style: none; background: var(--surface); border: 1px solid var(--line); }
 .source-lines li { display: flex; gap: 18px; padding: 3px 15px 3px 0; min-width: 0; font-size: .83rem; }
 .source-lines .line-number { flex: 0 0 64px; text-align: right; user-select: none; padding: 0 10px; color: var(--muted); border-right: 1px solid var(--soft-line); text-decoration: none; font-variant-numeric: tabular-nums; }

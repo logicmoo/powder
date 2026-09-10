@@ -18,6 +18,7 @@ test('real browser exercises the API contract, source transactions, rendering an
   let generation = 1;
   let active = ['KBs/alpha/a.kif', 'KBs/tinyKB.kif'];
   let failNextLoad = false;
+  let failContextList = false;
   let compilerDiagnostics = {};
   const requests = [];
   const file = path => ({ type: 'file', name: path.split('/').at(-1), path, lineCount: 40, sizeBytes: 1200, count: 3 });
@@ -37,6 +38,11 @@ test('real browser exercises the API contract, source transactions, rendering an
     [compoundC, app('ContextFn', symbol('A & B'), app('nested', symbol('C')))],
   ]);
   const normalizedMT = value => value === sourceA ? compoundA : value === sourceB ? compoundB : value;
+  const allContexts = [
+    ...['x_B', 'x_A'].map(mt => ({ mt, mtExpression: { type: 'symbol', value: mt }, count: 2 })),
+    ...[...mtExpressions].map(([mt, mtExpression]) => ({ mt, mtExpression, count: 1 })),
+    ...Array.from({ length: 401 }, (_, i) => ({ mt: `x_Unseen${i}Mt`, mtExpression: symbol(`Unseen${i}Mt`), count: 1 })),
+  ];
   const compoundAssertions = [compoundA, compoundB, compoundA].map((mt, index) => ({
     ...assertions[index], id: `a60a241820225${index}`, mt, mtExpression: mtExpressions.get(mt),
     properties: [{ name: 'microtheory', value: mt }],
@@ -106,6 +112,9 @@ test('real browser exercises the API contract, source transactions, rendering an
             const mt = normalizedMT(url.searchParams.get('mt'));
             return json({ mt, mtExpression: mtExpressions.get(mt), ...page(allAssertions.filter(item => item.mt === mt), url) });
           }
+          case '/api/microtheories':
+            return failContextList ? json({ error: { code: 'catalog_failed', message: 'Context list unavailable' } }, 503)
+              : json({ generation, items: active.length ? allContexts : [], total: active.length ? allContexts.length : 0 });
           case '/api/assertion': return json(allAssertions.find(item => item.id === url.searchParams.get('id')) ?? assertions[0]);
           case '/api/source': {
             const line = Number(url.searchParams.get('line') || 10);
@@ -164,6 +173,16 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.body.innerText.includes("Logos")'), false);
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".sidebar")).position'), 'sticky');
     await noOverflow();
+    await route('#/microtheories');
+    assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), allContexts.length);
+    assert.ok(await evaluate('document.querySelector(\'li[data-mt="x_Unseen400Mt"]\') !== null'));
+    assert.equal(requests.filter(request => request.path === '/api/microtheories').at(-1).params.limit, undefined);
+    failContextList = true;
+    await evaluate('location.hash = "#/microtheories?retry=1"');
+    await wait('document.querySelector(".microtheory-directory .error-panel") !== null && document.querySelector("main").getAttribute("aria-busy") === "false"');
+    assert.ok(await evaluate('document.querySelector(".microtheory-directory .error-panel").textContent.includes("Context list unavailable")'));
+    assert.equal(await evaluate('document.querySelector(".microtheory-directory .empty-state")'), null);
+    failContextList = false;
     if (process.env.LOGOS_SCREENSHOTS) {
       const image = await cdp('Page.captureScreenshot');
       await writeFile(join(here, '.browser-check-desktop.png'), Buffer.from(image.data, 'base64'));
@@ -260,6 +279,8 @@ test('real browser exercises the API contract, source transactions, rendering an
     await evaluate('document.querySelector(".mt-block > summary .mt-link").click()');
     await wait(`document.querySelector('h1')?.textContent === ${JSON.stringify(sourceA)}`);
     assert.equal(requests.filter(request => request.path === '/api/microtheory').at(-1).params.mt, compoundA);
+    assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), allContexts.length);
+    assert.equal(await evaluate('new URLSearchParams(document.querySelector(".microtheory-directory [aria-current=page]").hash.split("?")[1]).get("mt")'), compoundA);
     assert.ok(await evaluate('document.querySelector(".mt-block").open'));
     await evaluate('document.querySelector(".page-heading .button").click()');
     await wait('document.querySelector("textarea") !== null');
@@ -275,7 +296,6 @@ test('real browser exercises the API contract, source transactions, rendering an
     await route(`#/assertion?id=${compoundAssertions[1].id}`);
     assert.ok(!(await evaluate('document.body.textContent')).includes('mt:x_'));
     await route(`#/query?mt=${encodeURIComponent(compoundC)}`);
-    assert.equal(requests.filter(request => request.path === '/api/microtheory').at(-1).params.mt, compoundC);
     assert.equal(await evaluate('document.querySelector(\'input[name="mt"]\').value'), '(ContextFn |A & B| (nested C))');
     await evaluate('document.querySelector("textarea").value = "(isa ?X Dog)"; document.querySelector(".query-form").requestSubmit()');
     await wait('document.querySelectorAll(".solution").length === 1');
@@ -345,6 +365,9 @@ test('real browser exercises the API contract, source transactions, rendering an
     await route('#/overview');
     assert.ok(await evaluate('document.querySelector(".empty-state").textContent.includes("Choose KB Sources")'));
     assert.deepEqual(active, []);
+    await route('#/microtheories');
+    assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), 0);
+    assert.ok(await evaluate('document.querySelector(".microtheory-directory").textContent.includes("No microtheories loaded")'));
     assert.deepEqual(exceptions, []);
   } finally {
     if (browserSession) await browserSession.close();

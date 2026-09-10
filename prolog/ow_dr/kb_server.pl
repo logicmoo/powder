@@ -19,6 +19,7 @@
 :- http_handler(root(api/predicates), endpoint(predicates), []).
 :- http_handler(root(api/term), endpoint(term), []).
 :- http_handler(root(api/microtheory), endpoint(microtheory), []).
+:- http_handler(root(api/microtheories), endpoint(microtheories), []).
 :- http_handler(root(api/assertion), endpoint(assertion), []).
 :- http_handler(root(api/kb/catalog), endpoint(catalog), []).
 :- http_handler(root(api/kb/load), endpoint(load), [method(post)]).
@@ -89,10 +90,14 @@ action(term,Request,Reply) :-
        page(Items,Offset,Limit,P),Reply=P.put(term,Term))).
 action(microtheory,Request,Reply) :-
     http_parameters(Request,[mt(MtKey,[atom])]),paging(Request,Offset,Limit),
-    context_from_key(MtKey,Mt),term_ast(Mt,[],MtExpression),
+    context_input(MtKey,Mt),context_key(Mt,CanonicalKey),term_ast(Mt,[],MtExpression),
     with_mutex(openworld_store,
       (kb_store:mt_assertions(Mt,Items),
-       page(Items,Offset,Limit,P),Reply=P.put(_{mt:MtKey,mtExpression:MtExpression}))).
+       page(Items,Offset,Limit,P),Reply=P.put(_{mt:CanonicalKey,mtExpression:MtExpression}))).
+action(microtheories,_,Reply) :-
+    with_mutex(openworld_store,
+      (kb_store:microtheories(Items),length(Items,Total),kb_store:generation(Generation),
+       Reply=_{items:Items,total:Total,generation:Generation})).
 action(assertion,Request,Reply) :-
     http_parameters(Request,[id(Id,[atom])]),
     with_mutex(openworld_store,

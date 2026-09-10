@@ -1,7 +1,7 @@
 :- module(kb_store, [load_sources/3, unload_source/3, status/1, active_modules/1,
                     assertion/2, assertions/1, terms/1, predicates/1,
                     generation/1, source_info/2, query_text/5,
-                    term_assertions/2, mt_assertions/2, term_exists/1]).
+                    term_assertions/2, mt_assertions/2, term_exists/1, microtheories/1]).
 :- use_module(kb_paths).
 :- use_module(kb_runtime, []).
 :- use_module(kb_compile, []).
@@ -18,10 +18,12 @@
 :- dynamic generation/1, source_info/2, source_module/3, assertion/2.
 :- dynamic term_rank/1, predicate_rank/1.
 :- dynamic generation_timing/1.
+:- dynamic microtheory_catalog/1.
 :- dynamic term_count/2, constant_locator/2, mt_locator/2, ordered_assertions/1, current_counts/1.
 generation(0).
 term_rank([]).
 predicate_rank([]).
+microtheory_catalog([]).
 generation_timing(_{loadSeconds:0}).
 ordered_assertions([]).
 current_counts(_{assertions:0,terms:0,predicates:0,microtheories:0}).
@@ -182,6 +184,10 @@ mt_assertions(Mt,Items) :-
 term_exists(Term) :- term_count(Term,_).
 terms(Terms) :- term_rank(Terms).
 predicates(Predicates) :- predicate_rank(Predicates).
+microtheories(Items) :- microtheory_catalog(Items).
+
+microtheory_item(Mt-Count,_{mt:Key,mtExpression:Expression,count:Count}) :-
+    context_key(Mt,Key),term_ast(Mt,[],Expression).
 
 rebuild_rankings :-
     findall(C,(assertion(_,Data),member(C,Data.constants)),Constants),
@@ -200,7 +206,9 @@ rebuild_rankings :-
     keysort(SourcePairs,SourceSorted),pairs_values(SourceSorted,Ids),
     retractall(ordered_assertions(_)),assertz(ordered_assertions(Ids)),
     length(Ids,Count),length(Terms,TermCount),length(Predicates,PredicateCount),
-    findall(Mt,mt_locator(Mt,_),Mts),sort(Mts,Unique),length(Unique,MtCount),
+    findall(Mt,mt_locator(Mt,_),Mts),msort(Mts,SortedMts),clumped(SortedMts,MtCounts),
+    maplist(microtheory_item,MtCounts,Contexts),length(Contexts,MtCount),
+    retractall(microtheory_catalog(_)),assertz(microtheory_catalog(Contexts)),
     retractall(current_counts(_)),
     assertz(current_counts(_{assertions:Count,terms:TermCount,predicates:PredicateCount,microtheories:MtCount})).
 

@@ -247,7 +247,7 @@ Original files and their compiled/index companions are not deleted on unload.
 ## APIs and browser
 
 Read endpoints: `/api/status`, `/api/search`, `/api/predicates`, `/api/term`,
-`/api/microtheory`, `/api/assertion`, `/api/kb/catalog`, `/api/source`,
+`/api/microtheory`, `/api/microtheories`, `/api/assertion`, `/api/kb/catalog`, `/api/source`,
 `/api/mappings`, and `/api/version`.
 Mutation/query endpoints: `POST /api/kb/load`, `/api/kb/unload`, `/api/query`.
 Load/unload requests carry the expected `generation`; conflicts return HTTP 409.
@@ -258,6 +258,10 @@ The browser provides linked S-expressions, MT groups, term-role views, provenanc
 draft source-tree selection, loaded-file removal, bounded queries, and the
 Markdown-backed mapping table. Approximate mappings remain labelled proposals,
 not authoritative ontology identities.
+The Microtheories page lists every indexed context with its assertion count,
+including compound contexts, and retains the full list while a context is open.
+`GET /api/microtheories` returns the entire generation's catalog without a result
+cap; assertion pages within each context remain paginated.
 
 Web assets are served without stale caching. Content-version polling refreshes
 HTML/CSS/JavaScript/Markdown changes and pauses while hidden. Backend Prolog

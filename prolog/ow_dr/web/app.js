@@ -287,6 +287,7 @@ function searchForm(routeName, q = '', placeholder = 'Name, symbol, or fragment'
 
 function setStatus(status) {
   if (state.status && status.generation < state.status.generation) return;
+  if (state.status && status.generation !== state.status.generation) state.contexts.clear();
   state.status = status;
   for (const file of status.files ?? []) {
     const path = canonicalPath(file.path);
@@ -462,14 +463,51 @@ function contextSuggestions() {
     [...state.contexts.keys()].filter(mt => !mt.startsWith('mt:')).sort().map(mt => element('option', { value: symbolLabel(mt) })));
 }
 
-function microtheoriesPage() {
-  return element('div', {}, heading('Microtheories', 'Context is assertion metadata, not an extra argument. No context inheritance is assumed.'),
-    contextForm(),
-    state.contexts.size
-      ? element('section', {}, element('h2', {}, 'Recently encountered contexts'),
-        element('ul', { className: 'context-list' }, [...state.contexts].sort(([a], [b]) => a.localeCompare(b)).map(([mt, expression]) => element('li', {}, mtLink(mt, expression)))))
-      : empty('Open a context by name', 'Or follow a microtheory link above any group of assertions. These pages include its full paginated assertion list.'),
-    element('p', { className: 'muted' }, `${number(state.status?.counts?.microtheories)} microtheories are currently indexed.`));
+async function microtheoryDirectory(route, signal) {
+  try {
+    const data = await api('microtheories', {}, { signal });
+    if (!Array.isArray(data.items) || data.items.length !== data.total) {
+      throw new APIError('The server did not return the complete microtheory list.', 'incomplete_context_list');
+    }
+    const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+    const contexts = data.items.map(item => ({ ...item, label: contextLabel(item.mt, item.mtExpression) }))
+      .sort((a, b) => collator.compare(a.label, b.label) || (a.mt < b.mt ? -1 : a.mt > b.mt ? 1 : 0));
+    for (const item of contexts) rememberContext(item.mt, item.mtExpression);
+    return element('section', { className: 'microtheory-directory', 'aria-label': 'All indexed microtheories', 'data-generation': data.generation },
+      element('h2', {}, `All indexed microtheories (${number(data.total)})`),
+      contexts.length ? element('ul', { className: 'context-list' }, contexts.map(item => {
+        const reference = mtLink(item.mt, item.mtExpression);
+        const selected = item.mt === route.params.get('mt');
+        if (selected) reference.querySelector('.mt-link').setAttribute('aria-current', 'page');
+        return element('li', { className: selected ? 'selected-context' : '', 'data-mt': item.mt }, reference,
+          element('span', { className: 'context-count' }, `${number(item.count)} assertions`));
+      })) : empty('No microtheories loaded', 'Load KB Sources to populate the context list.',
+        link('Choose KB Sources', 'sources', {}, 'button secondary')));
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    return element('section', { className: 'microtheory-directory', 'aria-label': 'All indexed microtheories' },
+      element('h2', {}, 'All indexed microtheories'), errorPanel(error));
+  }
+}
+
+async function microtheoriesPage(route, signal) {
+  const directory = await microtheoryDirectory(route, signal);
+  return element('div', {}, heading('Microtheories', 'Choose any indexed context below. No context inheritance is assumed.'),
+    contextForm(), directory);
+}
+
+async function microtheoryPage(route, signal) {
+  const [directory, detail] = await Promise.all([
+    microtheoryDirectory(route, signal),
+    termPage(route, signal).catch(error => {
+      if (error.name === 'AbortError') throw error;
+      return element('div', {}, heading('Microtheories', 'Choose another context below.'), errorPanel(error));
+    }),
+  ]);
+  const before = detail.children[1] ?? null;
+  detail.insertBefore(contextForm(), before);
+  detail.insertBefore(directory, before);
+  return detail;
 }
 
 async function assertionPage(route, signal) {
@@ -888,7 +926,7 @@ async function mappingsPage(route, signal) {
 
 const pages = {
   overview, search: searchPage, predicates: searchPage, term: termPage,
-  microtheory: termPage, microtheories: microtheoriesPage,
+  microtheory: microtheoryPage, microtheories: microtheoriesPage,
   assertion: assertionPage, source: sourcePage, sources: sourcesPage,
   query: queryPage, mappings: mappingsPage,
 };
@@ -949,6 +987,13 @@ function startLiveReload() {
       if (tracker.observe(result.version)) {
         location.reload();
         return;
+      }
+      if (['microtheory', 'microtheories'].includes(parseRoute(location.hash).name)) {
+        const status = await api('status', {}, { signal: requestController.signal });
+        if (status.generation !== state.status?.generation) {
+          setStatus(status);
+          await renderRoute();
+        }
       }
       target.textContent = 'Interface live refresh enabled';
       target.title = 'Web assets and mappings refresh automatically. Prolog changes require an explicit server restart.';
