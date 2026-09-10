@@ -125,7 +125,12 @@ register_native(File, Module) :-
            (
             assertz(native_handle(Module, Absolute, Id, Ref)),
             (native_signature(Module,Absolute,Name,Arity)->true;
-             assertz(native_signature(Module,Absolute,Name,Arity))))).
+             assertz(native_signature(Module,Absolute,Name,Arity))),
+            import_shared_predicate(Module,Name,Arity))).
+
+import_shared_predicate(Module,Name,Arity) :-
+    kb_forms:export(Name/Arity),
+    (current_predicate(Module:Name/Arity)->true;Module:import(kb_forms:Name/Arity)).
 
 source_metadata(Module,File,Id,Metadata) :-
     findall(Term,
