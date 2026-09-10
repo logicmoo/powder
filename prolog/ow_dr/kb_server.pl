@@ -8,6 +8,7 @@
 :- use_module(kb_reload).
 :- use_module(kb_prolog).
 :- use_module(kb_questions).
+:- use_module(kb_urls).
 :- use_module(library(http/thread_httpd)).
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_parameters)).
@@ -19,25 +20,42 @@
 :- use_module(library(error)).
 :- dynamic server_port/1.
 :- dynamic prolog_access_token/1.
-:- http_handler(root(api/status), endpoint(status), []).
-:- http_handler(root(api/search), endpoint(search), []).
-:- http_handler(root(api/predicates), endpoint(predicates), []).
-:- http_handler(root(api/term), endpoint(term), []).
-:- http_handler(root(api/microtheory), endpoint(microtheory), []).
-:- http_handler(root(api/microtheories), endpoint(microtheories), []).
-:- http_handler(root(api/assertion), endpoint(assertion), []).
-:- http_handler(root(api/kb/catalog), endpoint(catalog), []).
-:- http_handler(root(api/kb/load), endpoint(load), [method(post)]).
-:- http_handler(root(api/kb/unload), endpoint(unload), [method(post)]).
-:- http_handler(root(api/query), endpoint(query), [method(post)]).
-:- http_handler(root(api/source), endpoint(source), []).
-:- http_handler(root(api/mappings), endpoint(mappings), []).
-:- http_handler(root(api/version), endpoint(version), []).
-:- http_handler(root(api/app/reload), endpoint(reload_application), [method(post)]).
-:- http_handler(root(api/prolog/access), endpoint(prolog_access), []).
-:- http_handler(root(api/prolog/query), endpoint(prolog_query), [method(post)]).
-:- http_handler(root('api/test-questions'), endpoint(test_questions), []).
-:- http_handler(root(.), static, [prefix]).
+:- dynamic registered_route/1.
+
+api_route(status,status,[]).
+api_route(search,search,[]).
+api_route(predicates,predicates,[]).
+api_route(term,term,[]).
+api_route(microtheory,microtheory,[]).
+api_route(microtheories,microtheories,[]).
+api_route(assertion,assertion,[]).
+api_route('kb/catalog',catalog,[]).
+api_route('kb/load',load,[method(post)]).
+api_route('kb/unload',unload,[method(post)]).
+api_route(query,query,[method(post)]).
+api_route(source,source,[]).
+api_route(mappings,mappings,[]).
+api_route(version,version,[]).
+api_route('app/reload',reload_application,[method(post)]).
+api_route('prolog/access',prolog_access,[]).
+api_route('prolog/query',prolog_query,[method(post)]).
+api_route('test-questions',test_questions,[]).
+
+register_routes :-
+    forall(retract(registered_route(Path)),http_delete_handler(Path)),
+    forall(api_route(Name,Action,Options),
+      (api_path(Name,Path),register_route(Path,endpoint(Action),Options))),
+    api_base(API),register_route(API,unknown_api,[prefix]),
+    app_base(Base),register_route(Base,static,[prefix]),
+    app_mount(Mount),register_route(Mount,canonical_mount,[]).
+register_route(Path,Handler,Options) :-
+    http_handler(Path,Handler,Options),assertz(registered_route(Path)).
+:- initialization(register_routes).
+
+canonical_mount(Request) :- app_base(Base),http_redirect(moved,Base,Request).
+unknown_api(Request) :-
+    memberchk(path(Path),Request),
+    reply_json_dict(_{error:_{code:not_found,message:"Unknown powder API route",path:Path}},[status(404)]).
 
 start_server(Port) :-
     must_be(integer,Port),between(1,65535,Port),
@@ -231,7 +249,8 @@ mapping_target(predicate_application(Target,_,_),Target).
 
 static(Request) :-
     memberchk(path(Path),Request),
-    (Path=='/'->Name='index.html';atom_concat('/',Name,Path)),
+    app_base(Base),
+    (Path==Base->Name='index.html';atom_concat(Base,Name,Path)),
     ( web_name(Name) ->
       app_dir(App),directory_file_path(App,web,Web),directory_file_path(Web,Name,File),
       asset_options(Name,MimeOptions),
@@ -242,7 +261,7 @@ web_name(Name) :-
     atom(Name),file_base_name(Name,Name),
     \+sub_atom(Name,_,_,_,'\\'),\+sub_atom(Name,_,_,_,'..'),
     file_name_extension(_,Ext,Name),
-    (memberchk(Ext,[html,css,js,mjs]);Name=='settings.json').
+    (memberchk(Ext,[html,css,js,mjs]);memberchk(Name,['settings.json','paths.json'])).
 asset_options(Name,[mime_type('application/javascript')]) :-
     file_name_extension(_,Ext,Name),memberchk(Ext,[js,mjs]), !.
 asset_options(_,[]).

@@ -7,6 +7,7 @@
 :- use_module(kb_server).
 :- use_module(kb_paths).
 :- use_module(kb_messages).
+:- use_module(kb_urls).
 :- initialization(kb_reload:remember_loaded_code).
 :- initialization(main, main).
 
@@ -17,7 +18,8 @@ run(Args) :-
     (Selected=[]->default_source(Source),Sources=[Source];reverse(Selected,Sources)),
     load_sources(Sources,any,Status),
     start_server(Port),
-    format('powder - Paraconsistent Open World Defeasible Epistemic Reasoner~nReady: http://localhost:~d/~n',[Port]),
+    app_base(Base),
+    format('powder - Paraconsistent Open World Defeasible Epistemic Reasoner~nReady: http://localhost:~d~w~n',[Port,Base]),
     format('Generation ~d; ~d assertions.~n',[Status.generation,Status.counts.assertions]),
     thread_get_message(stop),stop_server.
 arguments([],Port,Port,Sources,Sources).

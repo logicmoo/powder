@@ -23,7 +23,7 @@ swipl .\prolog\ow_dr\app.pl -- --port=8080 KBs\Merge.kif
 swipl .\prolog\ow_dr\app.pl -- --kb-source=KBs\tinyKB.kif --kb-source=KBs\example.kif
 ```
 
-The default address is **http://localhost:3050/**, bound to the loopback interface.
+The default address is **http://localhost:3050/swish/powder/**, bound to the loopback interface.
 All selected inputs must finish compilation and loading before startup is
 announced. An invalid source or a busy compiler prevents startup.
 
@@ -279,14 +279,24 @@ Original files and their compiled/index companions are not deleted on unload.
 
 ## APIs and browser
 
-Read endpoints: `/api/status`, `/api/search`, `/api/predicates`, `/api/term`,
-`/api/microtheory`, `/api/microtheories`, `/api/assertion`, `/api/kb/catalog`, `/api/source`,
-`/api/mappings`, and `/api/version`.
-Mutation/query endpoints: `POST /api/kb/load`, `/api/kb/unload`, `/api/query`.
-Application maintenance: `POST /api/app/reload` with an empty JSON object.
-Stored questions: `GET /api/test-questions` (`q`, `offset`, `limit`).
-Full local Prolog: `GET /api/prolog/access` obtains the local capability;
-`POST /api/prolog/query` requires it in `X-Powder-Local-Token`.
+The application is mounted at `/swish/powder/`; every REST endpoint is under
+`/swish/powder/api/`. The shared `web/paths.json` supplies the mount to both
+Prolog route registration and the browser client.
+
+Read endpoints: `status`, `search`, `predicates`, `term`, `microtheory`,
+`microtheories`, `assertion`, `kb/catalog`, `source`, `mappings`, and `version`.
+Mutation/query endpoints: `POST kb/load`, `kb/unload`, and `query`.
+Application maintenance: `POST app/reload` with an empty JSON object.
+Stored questions: `GET test-questions` (`q`, `offset`, `limit`).
+Full local Prolog: `GET prolog/access` obtains the local capability;
+`POST prolog/query` requires it in `X-Powder-Local-Token`.
+All names in this paragraph are relative to `/swish/powder/api/`.
+
+Examples: `/swish/powder/#/query`, `/swish/powder/#/settings`, and
+`/swish/powder/api/status`. `/swish/powder` redirects to its trailing-slash form.
+Powder does not claim `/`, the parent `/swish/`, or sibling applications, and
+does not alias the old `/api/` or `/powder/` locations. Unknown API paths return
+JSON 404 responses, never the SPA page. This mount does not install SWISH.
 Load/unload requests carry the expected `generation`; conflicts return HTTP 409.
 Pagination uses `offset` and `limit` (1-400), defaulting to 400. Queries default
 to 400 results, accept 1-1000 results, and retain the existing 30-second timeout
@@ -304,7 +314,7 @@ Markdown-backed mapping table. Approximate mappings remain labelled proposals,
 not authoritative ontology identities.
 The Microtheories page lists every indexed context with its assertion count,
 including compound contexts, and retains the full list while a context is open.
-`GET /api/microtheories` returns the entire generation's catalog without a result
+`GET /swish/powder/api/microtheories` returns the entire generation's catalog without a result
 cap; assertion pages within each context remain paginated.
 
 Web assets are served without stale caching. Content-version polling refreshes

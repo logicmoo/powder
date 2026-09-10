@@ -86,8 +86,9 @@ test(question_selection_serialization_is_inert) :-
 test(real_http_requires_token_and_captures_output) :-
     tcp_socket(Socket),tcp_bind(Socket,'127.0.0.1':Port),tcp_close_socket(Socket),
     setup_call_cleanup(kb_server:start_server(Port),
-      (format(atom(AccessURL),'http://127.0.0.1:~d/api/prolog/access',[Port]),
-       format(atom(QueryURL),'http://127.0.0.1:~d/api/prolog/query',[Port]),
+      (kb_urls:api_path('prolog/access',AccessPath),kb_urls:api_path('prolog/query',QueryPath),
+       format(atom(AccessURL),'http://127.0.0.1:~d~w',[Port,AccessPath]),
+       format(atom(QueryURL),'http://127.0.0.1:~d~w',[Port,QueryPath]),
        http_get(AccessURL,Access,[json_object(dict)]),
        http_post(QueryURL,json(_{query:"write(visible), X=ok.",limit:2,timeout:3}),Denied,
          [json_object(dict),status_code(DeniedStatus)]),

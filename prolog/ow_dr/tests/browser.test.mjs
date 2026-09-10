@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON, supportedSource } from '../web/model.js';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, validateSettings } from '../web/settings.js';
+import { APP_BASE, apiPath, appPath } from '../web/paths.js';
 
 const file = (path, attributes = {}) => ({ type: 'file', path, name: path.split('/').at(-1), sizeBytes: 1024, ...attributes });
 const nodes = [
@@ -114,6 +115,13 @@ test('URL state preserves filters and safely bounds pagination', () => {
   assert.equal(positiveInteger('1.5', 3), 3);
 });
 
+test('shared mount keeps app assets and API requests below the nested powder subtree', () => {
+  assert.equal(APP_BASE, '/swish/powder/');
+  assert.equal(apiPath('status'), '/swish/powder/api/status');
+  assert.equal(apiPath('prolog/query'), '/swish/powder/api/prolog/query');
+  assert.equal(appPath('settings.json'), '/swish/powder/settings.json');
+});
+
 test('400 defaults and validated preferences persist and drive page limits', () => {
   let stored = null;
   const storage = { getItem: () => stored, setItem: (_, value) => { stored = value; } };
@@ -178,14 +186,14 @@ test('live-reload tracker seeds without refreshing and ignores missing versions'
 test('JSON client submits exact concrete paths with optimistic generation and no caching', async () => {
   let request;
   const status = { generation: 8, files: [] };
-  const response = await requestJSON('/api/kb/load', {
+  const response = await requestJSON(apiPath('kb/load'), {
     method: 'POST', body: { files: [], generation: 7 },
     fetch: async (url, options) => {
       request = { url, options };
       return { ok: true, status: 200, json: async () => status };
     },
   });
-  assert.equal(request.url, '/api/kb/load');
+  assert.equal(request.url, '/swish/powder/api/kb/load');
   assert.equal(request.options.cache, 'no-store');
   assert.equal(request.options.credentials, 'same-origin');
   assert.equal(request.options.headers['Content-Type'], 'application/json');
@@ -194,7 +202,7 @@ test('JSON client submits exact concrete paths with optimistic generation and no
 });
 
 test('JSON client presents structured busy/stale errors without treating them as success', async () => {
-  await assert.rejects(requestJSON('/api/kb/load', {
+  await assert.rejects(requestJSON(apiPath('kb/load'), {
     fetch: async () => ({ ok: false, status: 409, json: async () => ({ error: { code: 'stale_generation', message: 'Refresh before replacing this generation.' } }) }),
   }), error => error instanceof APIError && error.code === 'stale_generation' && error.status === 409 && error.message.includes('Refresh'));
 });
@@ -209,7 +217,7 @@ test('JSON errors retain 15 actionable issues and aggregate counts without succe
   const payload = { code: 'compile_failed', message: '15 source(s) failed to compile.', counts, issues,
     results: Array.from({ length: 42 }, (_, index) => ({ source: `cached-${index}`, status: 'cache_hit' })),
   };
-  await assert.rejects(requestJSON('/api/kb/load', {
+  await assert.rejects(requestJSON(apiPath('kb/load'), {
     fetch: async () => ({ ok: false, status: 422, json: async () => ({ error: payload }) }),
   }), error => {
     assert.deepEqual(error.counts, counts);
@@ -242,10 +250,10 @@ test('only failed, busy and unspecified issues are displayed, never cached or ge
 });
 
 test('JSON client differentiates network errors, invalid responses and cancellation', async () => {
-  await assert.rejects(requestJSON('/api/status', { fetch: async () => { throw new Error('offline'); } }), { code: 'connection_failed' });
-  await assert.rejects(requestJSON('/api/status', {
+  await assert.rejects(requestJSON(apiPath('status'), { fetch: async () => { throw new Error('offline'); } }), { code: 'connection_failed' });
+  await assert.rejects(requestJSON(apiPath('status'), {
     fetch: async () => ({ ok: false, status: 500, json: async () => { throw new Error('html'); } }),
   }), { code: 'invalid_response', status: 500 });
   const abort = new DOMException('Aborted', 'AbortError');
-  await assert.rejects(requestJSON('/api/query', { fetch: async () => { throw abort; } }), error => error === abort);
+  await assert.rejects(requestJSON(apiPath('query'), { fetch: async () => { throw abort; } }), error => error === abort);
 });

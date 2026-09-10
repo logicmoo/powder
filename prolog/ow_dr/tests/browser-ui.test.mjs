@@ -5,6 +5,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchChromium } from './chromium.mjs';
+import { APP_BASE, apiPath } from '../web/paths.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const browser = process.env.LOGOS_CHROME;
@@ -22,6 +23,7 @@ test('real browser exercises the API contract, source transactions, rendering an
   let failCodeReload = false;
   let compilerDiagnostics = {};
   const requests = [];
+  const apiRequests = name => requests.filter(request => request.path === apiPath(name));
   const file = path => ({ type: 'file', name: path.split('/').at(-1), path, lineCount: 40, sizeBytes: 1200, count: 3 });
   const expression = app('implies', app('and', app('isa', variable('?X'), symbol('Dog')), app('relatedTo', variable('?X'), symbol('Fido'))), app('isa', variable('?X'), symbol('Animal')));
   const assertions = ['x_A', 'x_B', 'x_A'].map((mt, index) => ({
@@ -103,7 +105,8 @@ test('real browser exercises the API contract, source transactions, rendering an
           response.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
           response.end(JSON.stringify(value));
         };
-        switch (url.pathname) {
+        const mountedPath = url.pathname.startsWith(APP_BASE) ? `/${url.pathname.slice(APP_BASE.length)}` : null;
+        switch (mountedPath) {
           case '/api/status': return json(status());
           case '/api/kb/catalog': return json({ root: 'KBs', generation, active, nodes: [
             { type: 'directory', path: 'KBs/alpha', name: 'alpha', children: [file('KBs/alpha/a.kif'), file('KBs/alpha/b.krf'), file('KBs/alpha/c.metta')] },
@@ -173,8 +176,8 @@ test('real browser exercises the API contract, source transactions, rendering an
             generation++;
             return json(status());
           default: {
-            const asset = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-            if (!['index.html', 'app.js', 'style.css', 'render.js', 'model.js', 'diagnostics.js', 'settings.js', 'settings.json'].includes(asset)) { response.writeHead(404); response.end(); return; }
+            const asset = mountedPath === '/' ? 'index.html' : mountedPath?.slice(1);
+            if (!['index.html', 'app.js', 'style.css', 'render.js', 'model.js', 'diagnostics.js', 'settings.js', 'settings.json', 'paths.js', 'paths.json'].includes(asset)) { response.writeHead(404); response.end(); return; }
             response.writeHead(200, { 'Content-Type': asset.endsWith('.html') ? 'text/html' : asset.endsWith('.css') ? 'text/css' : asset.endsWith('.json') ? 'application/json' : 'text/javascript', 'Cache-Control': 'no-store' });
             response.end(await readFile(join(here, '..', 'web', asset)));
           }
@@ -185,7 +188,7 @@ test('real browser exercises the API contract, source transactions, rendering an
       }
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const base = `http://127.0.0.1:${server.address().port}`;
+    const base = `http://127.0.0.1:${server.address().port}${APP_BASE}`;
     browserSession = await launchChromium(browser);
     const { send: cdp, evaluate, wait, route, exceptions } = browserSession;
     const noOverflow = async () => assert.equal(await evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'), true, 'No horizontal page overflow');
@@ -201,7 +204,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     await route('#/microtheories');
     assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), allContexts.length);
     assert.ok(await evaluate('document.querySelector(\'li[data-mt="x_Unseen400Mt"]\') !== null'));
-    assert.equal(requests.filter(request => request.path === '/api/microtheories').at(-1).params.limit, undefined);
+    assert.equal(apiRequests('microtheories').at(-1).params.limit, undefined);
     failContextList = true;
     await evaluate('location.hash = "#/microtheories?retry=1"');
     await wait('document.querySelector(".microtheory-directory .error-panel") !== null && document.querySelector("main").getAttribute("aria-busy") === "false"');
@@ -228,7 +231,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     failNextLoad = true;
     await evaluate('document.querySelector(".source-actions .button").click()');
     await wait('document.querySelector("#notice").textContent.includes("Fixture compile failure")');
-    assert.deepEqual(requests.filter(request => request.path === '/api/kb/load').at(-1).body,
+    assert.deepEqual(apiRequests('kb/load').at(-1).body,
       { files: ['KBs/alpha/a.kif', 'KBs/alpha/b.krf', 'KBs/tinyKB.kif'], generation: 1 });
     assert.deepEqual(active, ['KBs/alpha/a.kif', 'KBs/tinyKB.kif']);
     assert.equal(await evaluate(`${directory}.indeterminate`), true);
@@ -292,7 +295,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     await route('#/query?mt=x_A');
     await evaluate(`document.querySelector('textarea').value = '(isa ?X Dog)'; document.querySelector('.query-form').requestSubmit()`);
     await wait('document.querySelectorAll(".solution").length === 1');
-    assert.equal(requests.filter(request => request.path === '/api/query').at(-1).body.mt, 'x_A');
+    assert.equal(apiRequests('query').at(-1).body.mt, 'x_A');
     assert.ok(await evaluate('document.querySelector(".proof").textContent.includes("Bound slots 0 → 1")'));
     await route('#/term?term=x_compoundDemo');
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".mt-block > summary .mt-link")).map(link => new URLSearchParams(link.hash.split("?")[1]).get("mt"))'),
@@ -303,7 +306,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.ok(!(await evaluate('document.body.textContent')).includes('mt:x_'));
     await evaluate('document.querySelector(".mt-block > summary .mt-link").click()');
     await wait(`document.querySelector('h1')?.textContent === ${JSON.stringify(sourceA)}`);
-    assert.equal(requests.filter(request => request.path === '/api/microtheory').at(-1).params.mt, compoundA);
+    assert.equal(apiRequests('microtheory').at(-1).params.mt, compoundA);
     assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), allContexts.length);
     assert.equal(await evaluate('new URLSearchParams(document.querySelector(".microtheory-directory [aria-current=page]").hash.split("?")[1]).get("mt")'), compoundA);
     assert.ok(await evaluate('document.querySelector(".mt-block").open'));
@@ -312,11 +315,11 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelector(\'input[name="mt"]\').value'), sourceA);
     await evaluate('document.querySelector("textarea").value = "(isa ?X Dog)"; document.querySelector(".query-form").requestSubmit()');
     await wait('document.querySelectorAll(".solution").length === 1');
-    assert.equal(requests.filter(request => request.path === '/api/query').at(-1).body.mt, compoundA);
+    assert.equal(apiRequests('query').at(-1).body.mt, compoundA);
     assert.equal(await evaluate('new URLSearchParams(location.hash.split("?")[1]).get("mt")'), compoundA);
     await evaluate(`document.querySelector('input[name="mt"]').value = ${JSON.stringify(sourceB)}; document.querySelector('input[name="mt"]').dispatchEvent(new Event('input', { bubbles: true })); document.querySelector(".query-form").requestSubmit()`);
     await wait('document.querySelectorAll(".solution").length === 1');
-    assert.equal(requests.filter(request => request.path === '/api/query').at(-1).body.mt, sourceB);
+    assert.equal(apiRequests('query').at(-1).body.mt, sourceB);
     assert.equal(await evaluate('new URLSearchParams(document.querySelector(".solution .mt-link").hash.split("?")[1]).get("mt")'), compoundB);
     await route(`#/assertion?id=${compoundAssertions[1].id}`);
     assert.ok(!(await evaluate('document.body.textContent')).includes('mt:x_'));
@@ -324,10 +327,10 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelector(\'input[name="mt"]\').value'), '(ContextFn |A & B| (nested C))');
     await evaluate('document.querySelector("textarea").value = "(isa ?X Dog)"; document.querySelector(".query-form").requestSubmit()');
     await wait('document.querySelectorAll(".solution").length === 1');
-    assert.equal(requests.filter(request => request.path === '/api/query').at(-1).body.mt, compoundC);
+    assert.equal(apiRequests('query').at(-1).body.mt, compoundC);
     await evaluate('document.querySelector(".context-input-help button").click(); document.querySelector("textarea").value = "(compoundQuery ?X)"; document.querySelector(".query-form").requestSubmit()');
     await wait('document.querySelectorAll(".solution").length === 2');
-    assert.equal(requests.filter(request => request.path === '/api/query').at(-1).body.mt, '');
+    assert.equal(apiRequests('query').at(-1).body.mt, '');
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".solution .mt-link")).map(link => new URLSearchParams(link.hash.split("?")[1]).get("mt"))'), [compoundA, compoundB]);
     await route('#/microtheories');
     assert.ok(!(await evaluate('document.body.textContent')).includes('mt:x_'));
@@ -372,7 +375,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.ok(await evaluate('document.querySelector(".settings-feedback[role=alert]").textContent.includes("not saved")'));
     await evaluate('document.querySelector(\'input[name="pageSize"]\').value = "125"; document.querySelector(\'input[name="queryLimit"]\').value = "350"; document.querySelector(".settings-form").requestSubmit()');
     await route('#/search');
-    assert.equal(requests.filter(request => request.path === '/api/search').at(-1).params.limit, '125');
+    assert.equal(apiRequests('search').at(-1).params.limit, '125');
     await route('#/query');
     assert.equal(await evaluate('document.querySelector(\'input[name="limit"]\').value'), '350');
     await cdp('Page.reload');
@@ -384,8 +387,8 @@ test('real browser exercises the API contract, source transactions, rendering an
     const beforeReload = { generation, active: [...active] };
     await evaluate('const button = document.querySelector(".application-reload button"); button.click(); button.click()');
     await wait('document.querySelector(".reload-feedback").textContent.includes("Reloaded 1")');
-    assert.equal(requests.filter(request => request.path === '/api/app/reload').length, 1);
-    assert.deepEqual(requests.filter(request => request.path === '/api/app/reload')[0].body, {});
+    assert.equal(apiRequests('app/reload').length, 1);
+    assert.deepEqual(apiRequests('app/reload')[0].body, {});
     assert.equal(generation, beforeReload.generation);
     assert.deepEqual(active, beforeReload.active);
     failCodeReload = true;
@@ -401,15 +404,15 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelector(\'input[name="queryLimit"]\').value'), '350');
     await route('#/query');
     await wait('document.querySelectorAll(\'select[name="storedQuestion"] option\').length === 406');
-    const executionsBefore = requests.filter(request => request.path === '/api/prolog/query').length;
+    const executionsBefore = apiRequests('prolog/query').length;
     await evaluate('const select = document.querySelector(\'select[name="storedQuestion"]\'); select.value = "question-404"; select.dispatchEvent(new Event("change", { bubbles: true }))');
     assert.equal(await evaluate('document.querySelector("textarea").value'), 'member(V1, [one,two]).');
-    assert.equal(requests.filter(request => request.path === '/api/prolog/query').length, executionsBefore);
+    assert.equal(apiRequests('prolog/query').length, executionsBefore);
     await evaluate('document.querySelector(\'[data-query-mode="prolog"]\').click()');
     await wait('document.querySelector(".prolog-results") !== null');
     assert.ok(await evaluate('document.querySelector(".prolog-output").textContent.includes("captured output")'));
-    assert.equal(requests.filter(request => request.path === '/api/prolog/query').at(-1).token, 'fixture-local-token');
-    assert.equal(requests.filter(request => request.path === '/api/prolog/query').at(-1).body.mt, compoundA);
+    assert.equal(apiRequests('prolog/query').at(-1).token, 'fixture-local-token');
+    assert.equal(apiRequests('prolog/query').at(-1).body.mt, compoundA);
     await evaluate('document.querySelector("textarea").value = "throw(test_exception)."; document.querySelector(\'[data-query-mode="prolog"]\').click()');
     await wait('document.querySelector(".prolog-results[role=alert]") !== null');
     assert.ok(await evaluate('document.querySelector(".prolog-results").textContent.includes("test_exception")'));
@@ -445,6 +448,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), 0);
     assert.ok(await evaluate('document.querySelector(".microtheory-directory").textContent.includes("No microtheories loaded")'));
     assert.deepEqual(exceptions, []);
+    assert.deepEqual(requests.filter(request => !request.path.startsWith(APP_BASE)).map(request => request.path), []);
   } finally {
     if (browserSession) await browserSession.close();
     if (server) {

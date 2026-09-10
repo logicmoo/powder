@@ -2,6 +2,7 @@ import { assertionRoles, contextExpression, contextInputText, contextLabel, expr
 import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON } from './model.js';
 import { collectDiagnostics, diagnosticCounts, diagnosticMessages, diagnosticProperty, mappingRowsOf, splitMappingRows } from './diagnostics.js';
 import { DEFAULT_SETTINGS, MAXIMUMS, loadSettings, saveSettings } from './settings.js';
+import { apiPath } from './paths.js';
 
 const $ = selector => document.querySelector(selector);
 const content = $('#content');
@@ -55,7 +56,7 @@ function api(path, params = {}, options = {}) {
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
   }
-  return requestJSON(`/api/${path}${query.size ? `?${query}` : ''}`, options);
+  return requestJSON(`${apiPath(path)}${query.size ? `?${query}` : ''}`, options);
 }
 
 function showNotice(message, isError = false) {

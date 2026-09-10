@@ -4,6 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchChromium } from './chromium.mjs';
+import { APP_BASE } from '../web/paths.js';
 
 const base = process.env.OPENWORLD_TEST_URL;
 const executable = process.env.LOGOS_CHROME;
@@ -13,6 +14,8 @@ test('live SWI backend and frontend agree, with optional explicit scratch-source
   skip: !base || !executable, timeout: 90000,
 }, async t => {
   const timings = {};
+  const applicationURL = new URL(APP_BASE, base).href;
+  const mountedURL = path => new URL(path.replace(/^\//u, ''), applicationURL).href;
   const failures = [];
   const check = async (label, action) => {
     try { await action(); }
@@ -20,7 +23,7 @@ test('live SWI backend and frontend agree, with optional explicit scratch-source
   };
   const request = async (path, body, expected = 200) => {
     const started = performance.now();
-    const response = await fetch(`${base}${path}`, {
+    const response = await fetch(mountedURL(path), {
       ...(body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     });
     timings[path] = Math.round((performance.now() - started) * 10) / 10;
@@ -61,7 +64,7 @@ test('live SWI backend and frontend agree, with optional explicit scratch-source
   for (const [path, mime] of [['/', /text\/html/iu], ['/style.css', /text\/css/iu], ['/app.js', /(?:text|application)\/javascript/iu],
     ['/render.js', /(?:text|application)\/javascript/iu], ['/model.js', /(?:text|application)\/javascript/iu],
     ['/diagnostics.js', /(?:text|application)\/javascript/iu]]) {
-    const response = await fetch(`${base}${path}`);
+    const response = await fetch(mountedURL(path));
     assert.equal(response.status, 200, `${path} serves`);
     assert.match(response.headers.get('content-type') ?? '', mime, `${path} MIME`);
     assert.match(response.headers.get('cache-control') ?? '', /no-store|no-cache/iu, `${path} is not stale-cached`);
@@ -72,7 +75,7 @@ test('live SWI backend and frontend agree, with optional explicit scratch-source
   const noOverflow = async () => assert.equal(await evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'), true, 'No horizontal page overflow');
   try {
     await send('Emulation.setDeviceMetricsOverride', { width: 1360, height: 950, deviceScaleFactor: 1, mobile: false });
-    await send('Page.navigate', { url: base });
+    await send('Page.navigate', { url: applicationURL });
     await wait('document.querySelector("h1")?.textContent === "Knowledge overview" && document.querySelector("main").getAttribute("aria-busy") === "false"');
     assert.equal(await evaluate('document.title'), 'Knowledge overview · powder');
     await noOverflow();
