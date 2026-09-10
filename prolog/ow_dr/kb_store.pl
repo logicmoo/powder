@@ -157,8 +157,12 @@ primary_metadata(Id,Term,Primary) :- Term=..[Name,_,Value],Primary=..[Name,Id,Va
 join_assertion(Existing,Incoming,Joined) :-
     foldl(join_data_field(Incoming),[properties,mappingRows,notices,warnings,errors,aliases,contributions],Existing,Joined).
 join_data_field(Incoming,Key,Before,After) :-
-    get_dict(Key,Before,A),get_dict(Key,Incoming,B),append(A,B,All),list_to_set(All,Values),
+    get_dict(Key,Before,A),get_dict(Key,Incoming,B),append(A,B,All),unique_json_values(All,[],Values),
     After=Before.put(Key,Values).
+unique_json_values([],_,[]).
+unique_json_values([Value|Rest],Seen,Values) :-
+    (member(Existing,Seen),Value =@= Existing->unique_json_values(Rest,Seen,Values)
+    ;Values=[Value|Tail],unique_json_values(Rest,[Value|Seen],Tail)).
 
 refresh_assertions :-
     retractall(assertion(_,_)),retractall(constant_locator(_,_)),retractall(mt_locator(_,_)),
