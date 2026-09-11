@@ -1,7 +1,12 @@
 :- module(kb_server, [start_server/1, stop_server/0]).
 :- use_module(kb_paths).
+:- use_module(kb_urls).
 :- use_module(kb_store, []).
 :- use_module(kb_catalog).
+:- use_module(kb_statistics).
+:- use_module(kb_source_packs, []).
+:- use_module(kb_mt_graph, []).
+:- use_module(kb_term_navigation).
 :- use_module(kb_terms).
 :- use_module(kb_messages).
 :- use_module(kb_limits).
@@ -15,23 +20,76 @@
 :- use_module(library(crypto)).
 :- use_module(library(lists)).
 :- use_module(library(error)).
+:- use_module(library(time)).
 :- dynamic server_port/1.
-:- http_handler(root(api/status), endpoint(status), []).
-:- http_handler(root(api/search), endpoint(search), []).
-:- http_handler(root(api/predicates), endpoint(predicates), []).
-:- http_handler(root(api/term), endpoint(term), []).
-:- http_handler(root(api/microtheory), endpoint(microtheory), []).
-:- http_handler(root(api/microtheories), endpoint(microtheories), []).
-:- http_handler(root(api/assertion), endpoint(assertion), []).
-:- http_handler(root(api/kb/catalog), endpoint(catalog), []).
-:- http_handler(root(api/kb/load), endpoint(load), [method(post)]).
-:- http_handler(root(api/kb/unload), endpoint(unload), [method(post)]).
-:- http_handler(root(api/query), endpoint(query), [method(post)]).
-:- http_handler(root(api/source), endpoint(source), []).
-:- http_handler(root(api/mappings), endpoint(mappings), []).
-:- http_handler(root(api/version), endpoint(version), []).
-:- http_handler(root(api/app/reload), endpoint(reload_application), [method(post)]).
-:- http_handler(root(.), static, [prefix]).
+:- http_handler(openworld_dr(api/status), endpoint(status), []).
+:- http_handler(openworld_dr(api/search), endpoint(search), []).
+:- http_handler(openworld_dr(api/predicates), endpoint(predicates), []).
+:- http_handler(openworld_dr(api/term), endpoint(term), []).
+:- http_handler(openworld_dr(api/microtheory), endpoint(microtheory), []).
+:- http_handler(openworld_dr(api/microtheory/statistics), endpoint(mt_statistics), [method(get)]).
+:- http_handler(openworld_dr(api/microtheory/statistics/arities), endpoint(mt_statistics_arities), [method(get)]).
+:- http_handler(openworld_dr(api/microtheories), endpoint(microtheories), []).
+:- http_handler(openworld_dr(api/microtheories/inheritance), endpoint(loaded_inheritance), [method(get)]).
+:- http_handler(openworld_dr(api/assertion), endpoint(assertion), []).
+:- http_handler(openworld_dr(api/kb/catalog), endpoint(catalog), []).
+:- http_handler(openworld_dr('api/kb/file-info'), endpoint(file_information), [method(get)]).
+:- http_handler(openworld_dr(api/kb/dependencies), endpoint(dependencies), [method(get)]).
+:- http_handler(openworld_dr(api/kb/packs), endpoint(pack_list), [method(get)]).
+:- http_handler(openworld_dr(api/kb/pack), endpoint(pack_get), [method(get)]).
+:- http_handler(openworld_dr(api/kb/packs/create), endpoint(pack_create), [method(post)]).
+:- http_handler(openworld_dr(api/kb/packs/save), endpoint(pack_save), [method(post)]).
+:- http_handler(openworld_dr(api/kb/packs/resolve), endpoint(pack_resolve), [method(post)]).
+:- http_handler(openworld_dr(api/kb/packs/load), endpoint(pack_load), [method(post)]).
+:- http_handler(openworld_dr(api/kb/packs/providers/refresh), endpoint(pack_index), [method(post)]).
+:- http_handler(openworld_dr(api/kb/statistics), endpoint(statistics), [method(get)]).
+:- http_handler(openworld_dr(api/kb/statistics/detail), endpoint(statistics_detail), [method(get)]).
+:- http_handler(openworld_dr(api/kb/statistics/arities), endpoint(statistics_arities), [method(get)]).
+:- http_handler(openworld_dr(api/kb/statistics/directory), endpoint(directory_statistics), [method(get)]).
+:- http_handler(openworld_dr(api/kb/load), endpoint(load), [method(post)]).
+:- http_handler(openworld_dr(api/kb/unload), endpoint(unload), [method(post)]).
+:- http_handler(openworld_dr(api/query), endpoint(query), [method(post)]).
+:- http_handler(openworld_dr(api/source), endpoint(source), []).
+:- http_handler(openworld_dr(api/mappings), endpoint(mappings), []).
+:- http_handler(openworld_dr(api/version), endpoint(version), []).
+:- http_handler(openworld_dr(api/app/reload), endpoint(reload_application), [method(post)]).
+:- http_handler(openworld_dr(api), unknown_api, []).
+:- http_handler(openworld_dr('api/'), unknown_api, [prefix]).
+:- http_handler(openworld_dr(.), static, [prefix]).
+:- initialization(register_mount_redirect).
+
+register_mount_redirect :-
+    kb_urls:reload_base,
+    ignore(http_delete_handler(id(openworld_dr_mount))),
+    app_mount(Mount),http_handler(Mount,kb_server:redirect_mount,[id(openworld_dr_mount)]),
+    register_legacy_entry('/swish/openworld_dr',openworld_dr_previous_mount),
+    register_legacy_entry('/swish/openworld_dr/',openworld_dr_previous_entry),
+    ignore(http_delete_handler(id(openworld_dr_legacy_root))),
+    (foreign_root_handler->true;
+      http_handler('/',kb_server:legacy_root_redirect,[id(openworld_dr_legacy_root),priority(-10000)])), !.
+register_legacy_entry(Path,Id) :-
+    ignore(http_delete_handler(id(Id))),
+    app_base(Base),app_mount(Mount),
+    (Path==Base;Path==Mount;foreign_exact_handler(Path)), !.
+register_legacy_entry(Path,Id) :-
+    http_handler(Path,kb_server:legacy_entry_redirect(Path,Id),[id(Id)]), !.
+legacy_entry_redirect(Path,Id,Request) :-
+    (foreign_exact_handler(Path)->
+      ignore(http_delete_handler(id(Id))),http_dispatch(Request)
+    ;redirect_mount(Request)).
+foreign_exact_handler(Path) :-
+    http_current_handler(Found,Module:_),Found==Path,Module\==kb_server, !.
+foreign_root_handler :-
+    http_current_handler(Path,Module:Handler),Path=='/',
+    \+ (Module==kb_server,Handler==legacy_root_redirect), !.
+% Exact routes outrank prefix routes, including a host root registered later.
+legacy_root_redirect(Request) :-
+    (foreign_root_handler->
+      ignore(http_delete_handler(id(openworld_dr_legacy_root))),http_dispatch(Request)
+    ;redirect_mount(Request)).
+redirect_mount(Request) :- app_base(Base),http_redirect(moved,Base,Request).
+unknown_api(_) :-
+    reply_json_dict(_{error:_{code:not_found,message:"Unknown API route."}},[status(404)]).
 
 start_server(Port) :-
     must_be(integer,Port),between(1,65535,Port),
@@ -48,22 +106,31 @@ endpoint(Name,Request) :-
 
 valid_origin(Request) :-
     ( memberchk(origin(Origin),Request) ->
-      server_port(Port),
-      format(atom(Local),'http://localhost:~d',[Port]),
-      format(atom(IP),'http://127.0.0.1:~d',[Port]),
-      (memberchk(Origin,[Local,IP])->true;throw(error(forbidden_origin,_)))
+      (owned_origin(Origin)->true;throw(error(forbidden_origin,_)))
     ; true ).
+owned_origin(Origin) :-
+    server_port(Port),member(Host,[localhost,'127.0.0.1']),
+    format(atom(Expected),'http://~w:~d',[Host,Port]),Origin==Expected, !.
 
 api_error(Error) :-
     error_response(Error,Status,Code),
     (Error=error(application_reload_failed(Report),_),is_dict(Report)->
       Payload=_{code:Code,message:Report.message,issues:Report.issues}
+    ;Error=error(source_pack_unresolved(_),_)->
+      Payload=_{code:Code,message:"This pack has unresolved dependencies. Resolve, review and save its composition before loading."}
     ;Error=error(compile_incomplete(Summary),_)->
       compile_report(Summary,Report),
       Payload=_{code:Code,message:Report.message,issues:Report.issues,counts:Report.counts}
     ;message_to_string(Error,Message),Payload=_{code:Code,message:Message}),
     reply_json_dict(_{error:Payload},[status(Status)]).
 error_response(error(generation_conflict(_,_),_),409,generation_conflict) :- !.
+error_response(error(source_packs_conflict(_,_),_),409,pack_conflict) :- !.
+error_response(error(source_packs_changed_during_read,_),409,pack_conflict) :- !.
+error_response(error(source_packs_busy,_),409,pack_busy) :- !.
+error_response(error(source_pack_composition_not_saved,_),409,pack_not_saved) :- !.
+error_response(error(source_pack_source_changed(_),_),409,pack_source_changed) :- !.
+error_response(error(source_pack_cache_changed(_),_),409,pack_cache_changed) :- !.
+error_response(error(source_pack_unresolved(_),_),422,pack_unresolved) :- !.
 error_response(error(application_reload_busy,_),409,reload_busy) :- !.
 error_response(error(application_reload_failed(_),_),500,application_reload_failed) :- !.
 error_response(error(compile_incomplete(S),_),422,compile_failed) :- S.failures>0, !.
@@ -78,7 +145,8 @@ error_response(error(instantiation_error,_),400,invalid_input) :- !.
 error_response(error(source_error(_,_,_,_),_),400,invalid_expression) :- !.
 error_response(_,500,internal_error).
 
-action(status,_,Reply) :- with_mutex(openworld_store,kb_store:status(Reply)).
+action(status,_,Reply) :-
+    with_mutex(openworld_store,(kb_store:status(Status),status_file_information(Status,Reply))).
 action(reload_application,Request,Reply) :-
     body(Request,Body),
     (dict_pairs(Body,_,[])->true;throw(error(domain_error(empty_reload_request,Body),_))),
@@ -94,26 +162,114 @@ action(predicates,Request,Reply) :-
       (kb_store:predicates(All),filter_terms(Q,All,Items),
        page(Items,Offset,Limit,Reply))).
 action(term,Request,Reply) :-
+    http_parameters(Request,[term(Input,[atom])]),
+    compound_term_input(Input), !,
+    compound_context_input(Input,Context),
+    context_key(Context,Key),term_ast(Context,[],Expression),
+    with_mutex(openworld_store,
+      (kb_store:microtheories(Contexts),
+       (member(Item,Contexts),Item.mt==Key->
+         kb_store:generation(Generation),
+         Reply=_{resolvedAs:microtheory,term:Key,mt:Key,expression:Expression,
+           mtExpression:Expression,total:Item.count,generation:Generation}
+       ;throw(error(existence_error(indexed_non_atomic_term,Key),_))))).
+action(term,Request,Reply) :-
     http_parameters(Request,[term(Term,[atom])]),
     paging(Request,Offset,Limit),
+    http_parameters(Request,[section(Section,[atom,default(all)]),
+      arg(Arg,[integer,default(0)]),predicate(Predicate,[atom,default('')]),
+      mt(Mt,[atom,default('')])]),
     with_mutex(openworld_store,
       (kb_store:term_assertions(Term,Items),
-       page(Items,Offset,Limit,P),Reply=P.put(term,Term))).
+       term_navigation(Term,Items,Navigation),
+       filter_term_assertions(Term,Items,_{section:Section,arg:Arg,predicate:Predicate,mt:Mt},Filtered),
+       page(Filtered,Offset,Limit,P),kb_store:generation(Generation),
+       maplist(assertion_presentation,P.items,Presented),
+       Reply=P.put(_{term:Term,navigation:Navigation,generation:Generation,items:Presented}))).
 action(microtheory,Request,Reply) :-
     http_parameters(Request,[mt(MtKey,[atom])]),paging(Request,Offset,Limit),
     context_input(MtKey,Mt),context_key(Mt,CanonicalKey),term_ast(Mt,[],MtExpression),
     with_mutex(openworld_store,
       (kb_store:mt_assertions(Mt,Items),
-       page(Items,Offset,Limit,P),Reply=P.put(_{mt:CanonicalKey,mtExpression:MtExpression}))).
+       page(Items,Offset,Limit,P),maplist(assertion_presentation,P.items,Presented),
+       Reply=P.put(_{mt:CanonicalKey,mtExpression:MtExpression,items:Presented}))).
 action(microtheories,_,Reply) :-
     with_mutex(openworld_store,
       (kb_store:microtheories(Items),length(Items,Total),kb_store:generation(Generation),
        Reply=_{items:Items,total:Total,generation:Generation})).
+action(loaded_inheritance,_,Reply) :-
+    call_with_time_limit(15,kb_mt_graph:loaded_inheritance(Reply)).
+action(pack_list,Request,Reply) :-
+    paging(Request,Offset,Limit),kb_source_packs:list_packs(All),
+    page(All.packs,Offset,Limit,Page),maplist(pack_list_item,Page.items,Items),
+    Reply=_{revision:All.revision,packs:Items,total:Page.total,offset:Offset,limit:Limit}.
+action(pack_get,Request,Reply) :-
+    http_parameters(Request,[id(Id,[atom])]),kb_source_packs:get_pack(Id,Reply).
+action(pack_create,Request,Reply) :-
+    pack_body(Request,[name,roots,revision],Body),pack_path_batch(Body.roots),
+    kb_source_packs:create_pack(Body.name,Body.roots,Body.revision,Reply).
+action(pack_save,Request,Reply) :-
+    pack_body(Request,[pack,revision],Body),must_be(dict,Body.pack),
+    required_fields(Body.pack,[roots,choices,members]),
+    pack_path_batch(Body.pack.roots),pack_choice_batch(Body.pack.choices),
+    bounded_pack_list(Body.pack.members,1024),
+    kb_source_packs:save_pack(Body.pack,Body.revision,Reply).
+action(pack_resolve,Request,Reply) :-
+    pack_body(Request,[id,revision,choices],Body),pack_choice_batch(Body.choices),
+    call_with_time_limit(60,kb_source_packs:resolve_pack(Body.id,Body.revision,Body.choices,Reply)).
+action(pack_load,Request,Reply) :-
+    pack_body(Request,[id,revision,generation],Body),must_be(integer,Body.generation),
+    kb_source_packs:load_pack(Body.id,Body.revision,Body.generation,Loaded),
+    action(status,[],Status),Reply=Loaded.put(status,Status).
+action(pack_index,Request,Reply) :-
+    pack_body(Request,[selection],Body),
+    (memberchk(Body.selection,[all,"all"])->Selection=all;
+      pack_path_batch(Body.selection),Selection=Body.selection),
+    call_with_time_limit(120,kb_source_packs:refresh_provider_index(Selection,Reply)).
+action(mt_statistics,Request,Reply) :-
+    http_parameters(Request,[mt(Input,[atom]),section(Section,[atom,default(overview)]),
+      offset(Offset,[integer,default(0)]),limit(Limit,[integer,default(25)])]),
+    (atom_length(Input,Length),Length=<8192->true;
+      throw(error(domain_error(microtheory_key_length,Input),_))),
+    context_input(Input,Context),context_key(Context,Key),
+    microtheory_statistics(Key,Section,Offset,Limit,Reply).
+action(mt_statistics_arities,Request,Reply) :-
+    http_parameters(Request,[mt(Input,[atom]),symbol(Symbol,[atom]),
+      offset(Offset,[integer,default(0)]),limit(Limit,[integer,default(25)])]),
+    (atom_length(Input,Length),Length=<8192->true;
+      throw(error(domain_error(microtheory_key_length,Input),_))),
+    context_input(Input,Context),context_key(Context,Key),
+    microtheory_predicate_arities(Key,Symbol,Offset,Limit,Reply).
 action(assertion,Request,Reply) :-
     http_parameters(Request,[id(Id,[atom])]),
     with_mutex(openworld_store,
-      (kb_store:assertion(Id,Reply)->true;throw(error(existence_error(assertion,Id),_)))).
+      (kb_store:assertion(Id,Data)->assertion_presentation(Data,Reply);throw(error(existence_error(assertion,Id),_)))).
 action(catalog,_,Reply) :- catalog(Reply).
+action(dependencies,Request,Reply) :-
+    http_parameters(Request,[path(Path,[atom]),section(Section,[atom,default(summary)]),
+      offset(Offset,[integer,default(0)]),limit(Limit,[integer,default(25)])]),
+    source_dependencies(Path,Section,Offset,Limit,Reply).
+action(file_information,Request,Reply) :-
+    http_parameters(Request,[paths(Text,[atom])]),
+    (atom_length(Text,N),N=<65536->true;throw(error(domain_error(file_information_request_size,Text),_))),
+    catch(atom_json_term(Text,Paths,[]),_,throw(error(domain_error(file_information_paths_json,Text),_))),
+    file_information(Paths,Reply).
+action(statistics,Request,Reply) :-
+    http_parameters(Request,[paths(Text,[atom])]),
+    (atom_length(Text,N),N=<65536->true;throw(error(domain_error(statistics_request_size,Text),_))),
+    catch(atom_json_term(Text,Paths,[]),_,throw(error(domain_error(statistics_paths_json,Text),_))),
+    source_statistics(Paths,Reply).
+action(statistics_detail,Request,Reply) :-
+    http_parameters(Request,[path(Path,[atom]),section(Section,[atom,default(content)]),
+      mt(Mt,[atom,default('')]),offset(Offset,[integer,default(0)]),limit(Limit,[integer,default(50)])]),
+    source_statistics_detail(Path,Section,Mt,Offset,Limit,Reply).
+action(statistics_arities,Request,Reply) :-
+    http_parameters(Request,[path(Path,[atom]),symbol(Symbol,[atom]),mt(Mt,[atom,default('')]),
+      offset(Offset,[integer,default(0)]),limit(Limit,[integer,default(25)])]),
+    source_predicate_arities(Path,Symbol,Mt,Offset,Limit,Reply).
+action(directory_statistics,Request,Reply) :-
+    http_parameters(Request,[path(Path,[atom]),token(Token,[atom,default('')])]),
+    directory_statistics(Path,Token,Reply).
 action(load,Request,Reply) :-
     body(Request,Body),must_be(list,Body.files),must_be(integer,Body.generation),
     authorize_sources(Body.files,Paths),
@@ -154,7 +310,36 @@ body(Request,Body) :-
     (memberchk(content_length(Length),Request),Length>1048576 ->
       throw(error(domain_error(request_size,Length),_));true),
     http_read_json_dict(Request,Body),must_be(dict,Body).
+pack_body(Request,Fields,Body) :- body(Request,Body),required_fields(Body,Fields).
+required_fields(Body,Fields) :-
+    forall(member(Field,Fields),
+      (get_dict(Field,Body,_)->true;throw(error(domain_error(required_field,Field),_)))).
+bounded_pack_list(Items,Maximum) :-
+    must_be(list,Items),length(Items,Count),
+    (Count=<Maximum->true;throw(error(domain_error(source_pack_batch_limit(Maximum),Count),_))).
+pack_path_batch(Paths) :-
+    bounded_pack_list(Paths,1024),
+    forall(member(Path,Paths),(must_be(string,Path),string_length(Path,N),
+      (N=<4096->true;throw(error(domain_error(source_path_length,N),_))))).
+pack_choice_batch(Choices) :-
+    bounded_pack_list(Choices,1024),
+    forall(member(Choice,Choices),
+      (must_be(dict,Choice),required_fields(Choice,[symbol,files]),pack_path_batch(Choice.files))).
+pack_list_item(Pack,Item) :-
+    length(Pack.roots,Roots),length(Pack.members,Members),
+    Item=_{id:Pack.id,name:Pack.name,rootCount:Roots,memberCount:Members,
+      ready:Pack.resolution.ready,state:Pack.resolution.state}.
 field(Dict,Key,Default,Value) :- (get_dict(Key,Dict,V)->Value=V;Value=Default).
+compound_term_input(Input) :-
+    (sub_atom(Input,0,1,_,'(');sub_atom(Input,0,3,_,'mt:');
+     sub_atom(Input,0,2,_,'x_'),sub_atom(Input,_,1,_,'(')), !.
+compound_context_input(Input,Context) :-
+    (sub_atom(Input,0,2,_,'x_')->atom_concat('mt:',Input,Key),context_from_key(Key,Context)
+    ;context_input(Input,Context)).
+assertion_presentation(Data,Reply) :-
+    (kb_runtime:module_assertion(Data.module,Data.id,Semantic,_)->
+      (Semantic=(_ :- _)->Kind=rule;Kind=fact),Reply=Data.put(kind,Kind)
+    ;Reply=Data).
 paging(Request,Offset,Limit) :-
     setting_default(pageSize,Default),
     http_parameters(Request,[offset(Offset,[integer,default(0)]),limit(Limit,[integer,default(Default)])]),
@@ -197,9 +382,11 @@ mapping_target(predicate_application(Target,_,_),Target).
 
 static(Request) :-
     memberchk(path(Path),Request),
-    (Path=='/'->Name='index.html';atom_concat('/',Name,Path)),
+    app_base(Base),atom_concat(Base,Relative,Path),
+    (Relative==''->Name='index.html';Name=Relative),
     ( web_name(Name) ->
       app_dir(App),directory_file_path(App,web,Web),directory_file_path(Web,Name,File),
+      (exists_file(File)->true;throw(http_reply(not_found(Path)))),
       asset_options(Name,MimeOptions),
       append(MimeOptions,[cache(false),unsafe(true),headers([cache_control('no-store')])],Options),
       http_reply_file(File,Options,Request)
@@ -208,7 +395,9 @@ web_name(Name) :-
     atom(Name),file_base_name(Name,Name),
     \+sub_atom(Name,_,_,_,'\\'),\+sub_atom(Name,_,_,_,'..'),
     file_name_extension(_,Ext,Name),
-    (memberchk(Ext,[html,css,js,mjs]);Name=='settings.json').
+    (memberchk(Ext,[html,css,js,mjs]);memberchk(Name,['settings.json','paths.json'])).
 asset_options(Name,[mime_type('application/javascript')]) :-
     file_name_extension(_,Ext,Name),memberchk(Ext,[js,mjs]), !.
+asset_options(Name,[mime_type('application/json')]) :-
+    file_name_extension(_,json,Name), !.
 asset_options(_,[]).

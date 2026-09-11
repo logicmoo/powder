@@ -1,0 +1,67 @@
+.classic-toggle, .presentation-choice { display: inline-flex; align-items: center; gap: .5rem; min-height: 28px; cursor: pointer; }
+.classic-toggle { flex-shrink: 0; font-size: .85rem; }
+.presentation-fieldset { margin: 0 0 1.5rem; padding: 1rem 1.2rem; border: 1px solid var(--line, #aaa); min-width: 0; }
+.presentation-fieldset legend { padding: 0 .35rem; font-weight: 650; }
+.presentation-fieldset > .muted { margin-block: .7rem; max-width: 75ch; }
+.presentation-density { display: flex; align-items: center; gap: 1rem; margin-top: .6rem; }
+.presentation-field-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: .45rem 1.5rem; margin-block: 1rem; }
+.presentation-feedback { margin-top: .75rem; font-size: .85rem; }
+.presentation-feedback[role="alert"] { color: var(--danger, #a22d30); }
+.assertion-primary { display: flex; align-items: start; gap: .3rem; min-width: 0; }
+.assertion-primary > .expression { min-width: 0; flex: 1; }
+.assertion-ball { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; width: 24px; height: 24px; border-radius: 2px; }
+.assertion-ball-mark { display: block; width: 9px; height: 9px; border: 1px solid #475a20; border-radius: 50%; background: #879447; box-shadow: inset 2px 2px 0 #e6eac4, inset -1px -1px 0 #596c28; }
+.assertion-ball:hover { background: var(--accent-soft, #e6edfc); }
+.assertion-ball:focus-visible { outline: 2px solid var(--link, #0000ad); outline-offset: 1px; }
+.assertion-field { margin: .4rem 0 0 1.9rem; font-size: .82rem; }
+.assertion-field > .properties { margin: 0; }
+.assertion-field > .properties > dt, .assertion-field > .properties > dd { padding-block: .2rem; }
+.assertion-field .assertion-diagnostics { margin-top: 0; padding-top: .3rem; }
+.assertion-blocking-errors { margin-left: 1.9rem; }
+.assertion-group-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: .35rem .5rem; padding: .65rem .2rem .35rem; border-bottom: 1px solid var(--line, #aaa); }
+.mt-collapse { width: 24px; height: 24px; min-height: 24px; padding: 0; border: 1px solid var(--line, #aaa); background: var(--surface, white); color: inherit; }
+.shared-assertion-groups { margin-block: .5rem; }
+.shared-proof-steps { margin-block: .4rem; padding-left: 1.5rem; }
+.shared-proof-steps > li::marker { color: var(--muted, #555); font-size: .8rem; }
+.assertion-view[data-detail="true"] { padding-block: 1rem; }
+.assertion-view .assertion-properties { margin-block: .3rem; }
+.assertion-view .assertion-properties > summary { min-height: 24px; }
+.assertion-view .assertion-metadata { max-width: 100%; overflow-wrap: anywhere; }
+.expression a.expr-nat { font-weight: 900; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 2px; }
+.expression a.expr-nat:focus-visible { outline-offset: 2px; }
+.property-values { margin: 0; padding-left: 20px; }
+.context-filter-status { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.classic-mode .role-toolbar[data-viewpoint="false"] { display: none; }
+.viewpoint-controls { margin-bottom: 14px; }
+.viewpoint-controls > p { margin: 6px 0 12px; }
+.literal-query-button { margin-left: 5px; width: 24px; min-height: 24px; padding: 0; border: 1px solid var(--line); background: var(--surface); color: var(--link); font-weight: 700; }
+.literal-query-unavailable { margin-left: 6px; font-size: .72rem; color: var(--muted); }
+[data-field-mt="false"] [data-solution-field="mt"] { display: none; }
+.assertion-ball[data-marker="default"] .assertion-ball-mark { background: #bca82e; border-color: #766914; box-shadow: inset 2px 2px 0 #f9f0a3, inset -1px -1px 0 #7b6e21; }
+.assertion-ball[data-marker="monotonic"] .assertion-ball-mark { background: #eee; border-color: #777; box-shadow: inset 2px 2px 0 #fff, inset -1px -1px 0 #999; }
+.assertion-ball[data-marker="backward-rule"] .assertion-ball-mark { background: #8c54b6; border-color: #67368a; box-shadow: inset 2px 2px 0 #d4a4f2, inset -1px -1px 0 #67368a; }
+.assertion-ball[data-marker="false"] .assertion-ball-mark { background: #c74643; border-color: #8d2323; box-shadow: inset 2px 2px 0 #f4aaa6, inset -1px -1px 0 #8d2323; }
+
+[data-assertion-density="dense"] .assertion-view { padding: .18rem 0; border: 0; margin: 0; background: transparent; box-shadow: none; }
+[data-assertion-density="dense"] .assertion-view .expression { font-size: .87rem; line-height: 1.45; }
+[data-assertion-density="dense"] .assertion-view[data-detail="true"] { padding-block: .7rem; }
+[data-assertion-density="comfortable"] .assertion-view { padding: .85rem .4rem; margin: 0; border: 0; border-bottom: 1px solid var(--soft-line, #ddd); }
+[data-assertion-density="comfortable"] .assertion-primary { gap: .55rem; }
+
+[data-field-id="false"] .assertion-view:not([data-detail="true"]) [data-field="id"],
+[data-field-kind="false"] .assertion-view:not([data-detail="true"]) [data-field="kind"],
+[data-field-mt="false"] .assertion-view:not([data-detail="true"]) [data-field="mt"],
+[data-field-source="false"] .assertion-view:not([data-detail="true"]) [data-field="source"],
+[data-field-strength="false"] .assertion-view:not([data-detail="true"]) [data-field="strength"],
+[data-field-diagnostics="false"] .assertion-view:not([data-detail="true"]) [data-field="diagnostics"],
+[data-field-properties="false"] .assertion-view:not([data-detail="true"]) [data-field="properties"],
+[data-field-proof="false"] .assertion-view:not([data-detail="true"]) [data-field="proof"],
+[data-field-ruleutility="false"] .assertion-view:not([data-detail="true"]) [data-field="ruleUtility"],
+[data-field-mt="false"] .shared-assertion-groups:not([data-detail="true"]) .assertion-group-heading { display: none; }
+[data-field-mt="true"] .assertion-group[data-collapsed="true"] > .assertion-group-items,
+.shared-assertion-groups[data-detail="true"] .assertion-group[data-collapsed="true"] > .assertion-group-items { display: none; }
+
+@media (pointer: coarse) {
+  .assertion-ball { flex-basis: 30px; width: 30px; height: 30px; }
+  .classic-toggle, .presentation-choice { min-height: 40px; }
+}

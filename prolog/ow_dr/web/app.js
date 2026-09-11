@@ -1,7 +1,15 @@
-import { assertionRoles, contextExpression, contextInputText, contextLabel, expressionText, groupAssertions, renderExpression, routeHref, symbolLabel } from './render.js';
-import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON } from './model.js';
+import { assertionRoles, contextExpression, contextInputText, contextLabel, expressionText, renderExpression, routeHref, symbolLabel } from './render.js';
+import { APIError, FileMetadata, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, directoryStatisticsText, hierarchyExpansionBlock, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON, sourceFileStates, sourceStatisticsStamp, sourceStatisticsText, visibleSourceDirectories, visibleSourceFiles } from './model.js';
 import { collectDiagnostics, diagnosticCounts, diagnosticMessages, diagnosticProperty, mappingRowsOf, splitMappingRows } from './diagnostics.js';
 import { DEFAULT_SETTINGS, MAXIMUMS, loadSettings, saveSettings } from './settings.js';
+import { apiPath } from './paths.js';
+import { renderFileBadges, renderSourceFile } from './source-files.js';
+import { renderDecodedText } from './decoded-text.js';
+import { createPresentationStore, renderUISettings } from './presentation.js';
+import { createClassicLayout } from './classic-layout.js';
+import { createAssertionView } from './assertion-view.js';
+import { filterContextItems, pageTermNavigation, termContextModel } from './term-context.js';
+import { colorAssertionBalls } from './assertion-markers.js';
 
 const $ = selector => document.querySelector(selector);
 const content = $('#content');
@@ -11,10 +19,64 @@ const state = {
   status: null, catalog: null, selection: null, expanded: new Set(['KBs']),
   knownSources: new Set(), knownMappings: null, contexts: new Map(),
   mutation: false, routeController: null, queryController: null, view: 0,
+  literalQuery: null,
   settings: { ...DEFAULT_SETTINGS },
   query: { query: '', mt: '', limit: DEFAULT_SETTINGS.queryLimit, timeout: 3 },
+  fileMetadata: new FileMetadata(), fileViews: new Map(),
 };
+let fileInformationTimer, fileInformationBusy = false;
+const presentation = createPresentationStore({ onError: error => showNotice(`Display preferences could not be saved: ${error.message}`, true) });
+const classicLayout = createClassicLayout({ content, presentation, header: $('.workspace-header'), status: $('.workspace-footer'), mtLink });
+const assertionView = createAssertionView({ sourceLink, propertyList, diagnosticsPanel, mtLink, mappingLink });
 
+function updateClassicContext(panel, route) {
+  const context = panel.contextualData;
+  if (context?.term) {
+    const model = termContextModel(route, context.data, context.term);
+    classicLayout.setContext(model);
+    addLiteralQueryActions(model);
+  } else {
+    const entries = [...panel.querySelectorAll('h2, h3')].map(node => ({
+      label: node.textContent, onSelect: () => { node.scrollIntoView({ block: 'start' }); node.tabIndex = -1; node.focus({ preventScroll: true }); },
+    }));
+    classicLayout.setContext({
+      title: panel.querySelector('h1')?.textContent ?? 'Context index', coverage: 'page',
+      sections: [{ title: 'On this page', items: entries }],
+      emptyMessage: 'No sections in the current view.',
+    });
+  }
+  classicLayout.resize();
+}
+
+function addLiteralQueryActions(model) {
+  const actions = new Map();
+  const visit = item => {
+    if (item.querySpecs) actions.set(item.href, item.querySpecs);
+    (item.children ?? []).forEach(visit);
+  };
+  model.sections.forEach(section => section.items.forEach(visit));
+  for (const anchor of classicLayout.index.querySelectorAll('a[href]')) {
+    const specs = actions.get(anchor.getAttribute('href'));
+    if (!specs) continue;
+    if (!specs.length) {
+      const unavailable = element('span', { className: 'literal-query-unavailable',
+        title: 'No literal query: this term occurs only inside the argument, or no supported direct argument/arity is recorded.' }, 'Ask unavailable');
+      anchor.parentNode.append(unavailable);
+    }
+    for (const spec of specs) {
+      const query = expressionText(spec.expression, { pretty: false });
+      const run = button('+', event => {
+        event.preventDefault(); event.stopPropagation();
+        state.literalQuery = { query, mt: spec.mt, limit: spec.limit, timeout: spec.timeout };
+        const target = routeHref('query', state.literalQuery);
+        if (location.hash === target) renderRoute(); else location.hash = target;
+      }, 'literal-query-button');
+      run.title = `Run ${query}${spec.mt ? ` in ${contextLabel(spec.mt, state.contexts.get(spec.mt))}` : ' independently in each microtheory'}. Includes asserted and derivable answers; likelihood of additional answers is unknown.`;
+      run.setAttribute('aria-label', `Run bounded query ${query}`);
+      anchor.parentNode.append(run);
+    }
+  }
+}
 function element(tag, attributes = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attributes)) {
@@ -54,12 +116,12 @@ function api(path, params = {}, options = {}) {
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
   }
-  return requestJSON(`/api/${path}${query.size ? `?${query}` : ''}`, options);
+  return requestJSON(`${apiPath(path)}${query.size ? `?${query}` : ''}`, options);
 }
 
 function showNotice(message, isError = false) {
   const target = $('#notice');
-  target.replaceChildren(element('div', { className: 'notice-content' }, message),
+  target.replaceChildren(element('div', { className: 'notice-content' }, typeof message === 'string' ? renderDecodedText(message) : message),
     button('Dismiss', () => { target.hidden = true; }, 'text-button'));
   target.className = `notice${isError ? ' error-notice' : ''}`;
   target.setAttribute('role', isError ? 'alert' : 'status');
@@ -76,7 +138,7 @@ function errorPanel(error, retry = renderRoute) {
 
 function requestErrorDetails(error, { preserveSelection = false } = {}) {
   const report = element('div', { className: 'request-error-details' },
-    element('p', { className: 'failure-summary' }, apiErrorSummary(error)),
+    element('p', { className: 'failure-summary' }, renderDecodedText(apiErrorSummary(error))),
     preserveSelection && element('p', { className: 'state-protection' },
       'The active KB was not replaced by this request. Your draft selection is unchanged.'));
   const countLabels = { failed: 'failed', busy: 'busy', generated: 'generated', cacheHits: 'cache hits' };
@@ -86,6 +148,10 @@ function requestErrorDetails(error, { preserveSelection = false } = {}) {
       counts.map(([key, label]) => element('span', { 'data-count': key }, `${number(error.counts[key])} ${label}`))));
   }
   const issues = compilationIssues(error);
+  if (issues.length) {
+    state.fileMetadata.operation(issues);
+    queueMicrotask(refreshFileDisplays);
+  }
   if (issues.length) {
     report.append(element('details', { className: 'compile-issues', open: issues.length <= 3 },
       element('summary', {}, `Review ${number(issues.length)} source ${issues.length === 1 ? 'issue' : 'issues'}`),
@@ -97,12 +163,14 @@ function requestErrorDetails(error, { preserveSelection = false } = {}) {
         const location = `${issue.source || 'Unknown source'}${line ? `:${line}${column ? `:${column}` : ''}` : ''}`;
         const supplemental = collectDiagnostics(issue).filter(entry => entry.message !== message || entry.severity !== (busy ? 'warning' : 'error'));
         const reference = sourceLink(issue.source, line, location, column);
-        if (reference.tagName === 'A') reference.addEventListener('click', () => { reference.closest('.compile-issues').open = false; });
+        reference.addEventListener('click', event => {
+          if (event.target.closest('a.source-link')) reference.closest('.compile-issues').open = false;
+        });
         return element('li', { className: 'compile-issue', 'data-status': issue.status ?? 'failed' },
           element('div', { className: 'compile-issue-heading' },
             element('span', { className: `badge diagnostic-badge ${busy ? 'warning' : 'error'}` }, busy ? 'Busy' : 'Failed'),
             reference),
-          element('p', { className: 'compile-issue-message' }, message),
+          element('p', { className: 'compile-issue-message' }, renderDecodedText(message)),
           diagnosticsPanel(issue, { entries: supplemental, showOrigins: false }));
       }))));
   }
@@ -113,6 +181,14 @@ function displayProperty(value) {
   if (value === null) return 'null';
   if (typeof value === 'object') return JSON.stringify(value, null, 2);
   return String(value ?? '');
+}
+
+function propertyValue(value) {
+  if (typeof value === 'string') return renderDecodedText(value);
+  if (value?.type && ['symbol', 'variable', 'number', 'string', 'application', 'list', 'map', 'value', 'execute', 'empty'].includes(value.type)) return renderExpression(value);
+  if (Array.isArray(value)) return value.length ? element('ul', { className: 'property-values' }, value.map(part => element('li', {}, propertyValue(part)))) : element('span', {}, '[]');
+  if (value && typeof value === 'object') return propertyList(Object.entries(value).map(([name, part]) => ({ name, value: part })));
+  return element('span', {}, displayProperty(value));
 }
 
 function propertyList(properties, { context } = {}) {
@@ -127,21 +203,203 @@ function propertyList(properties, { context } = {}) {
       const rows = splitMappingRows(Array.isArray(property.value) ? property.value : []);
       value = element('span', {}, `${number(rows.ids.length)} mapping IDs · ${number(rows.markers.length)} diagnostic markers${rows.other.length ? ` · ${number(rows.other.length)} other annotations` : ''}`);
     } else if (property.name === 'microtheory' && context) value = mtLink(context.mt, context.mtExpression);
-    else value = property.value?.type ? renderExpression(property.value) : element('pre', {}, displayProperty(property.value));
+    else if (property.name === 'source_file' && typeof property.value === 'string') value = sourceLink(property.value, context?.line);
+    else value = propertyValue(property.value);
     list.append(element('dt', {}, property.name),
       element('dd', {}, value));
   }
   return list;
 }
 
-function sourceLink(path, line = 1, label, column) {
+function sourceLink(path, line = 1, label, column, { compact = true } = {}) {
   const normalized = canonicalPath(path);
   const safeLine = positiveInteger(line, 1, Number.MAX_SAFE_INTEGER, 1);
   const safeColumn = positiveInteger(column, undefined, Number.MAX_SAFE_INTEGER, 1);
   const text = label ?? `${path || 'Unknown source'}:${safeLine}${safeColumn ? `:${safeColumn}` : ''}`;
-  return normalized && state.knownSources.has(normalized)
+  const name = () => normalized && state.knownSources.has(normalized)
     ? link(text, 'source', { path: normalized, line: safeLine, column: safeColumn }, 'source-link')
     : element('span', { className: 'muted' }, text);
+  const original = typeof path === 'string' ? path : label;
+  if (typeof original !== 'string' || !/\.(?:kif|krf|meld|metta)(?::\d+(?::\d+)?)?$/i.test(original)) return name();
+  return sourceFileDisplay(normalized, name, { compact, displayPath: original });
+}
+
+function sourceFileDisplay(path, label, options = {}) {
+  const view = renderSourceFile(path, label, state.fileMetadata, { ...options, element,
+    changed: scheduleFileInformation,
+    properties: sourceFileProperties,
+    renderMT: mtLink,
+    retry: file => { state.fileMetadata.retry(file); scheduleFileInformation(); } });
+  state.fileViews.set(view.node, { ...view, path });
+  scheduleFileInformation();
+  return view.node;
+}
+
+function sourceFileProperties(path, target, refresh) {
+  if (!path) {
+    target.append(element('p', { className: 'muted' },
+      'This reference cannot be resolved inside the authorized KB source catalog. No source or cache was read.'));
+    return;
+  }
+  const own = target.closest('.source-file-display');
+  for (let parent = own?.parentElement?.closest('.source-file-display'); parent;
+    parent = parent.parentElement?.closest('.source-file-display')) {
+    if (parent.dataset.sourceFile === path) {
+      target.append(element('p', { className: 'muted' }, 'This source’s Properties are already open above.'),
+        button('Focus existing Properties', () => parent.querySelector(':scope > .source-properties-button').focus(), 'text-button'));
+      return;
+    }
+  }
+  target.append(fileDependencies(path));
+  target.append(sourceStatisticsDetails(path, state.routeController?.signal, snapshot => {
+    state.fileMetadata.statistics(path, snapshot); refresh();
+  }));
+}
+
+function fileDependencies(path) {
+  const summary = element('div', { className: 'dependency-summary' });
+  const tabs = element('nav', { className: 'statistics-tabs', 'aria-label': 'Dependency evidence sections' });
+  const body = element('div', { className: 'dependency-results' });
+  const panel = element('section', { className: 'file-dependencies', 'aria-label': 'Cache-only dependency evidence' },
+    element('h3', {}, 'Cache-only dependency evidence'),
+    element('p', { className: 'muted' }, 'Ordinary facts do not define predicates. Semantic rule heads and declaration subjects are separate local providers. Outbound means references without a recorded named local provider—not globally missing. This is static evidence; only <=== is executable at runtime.'),
+    element('p', { className: 'muted' }, 'On-demand reads are limited to a 64 MiB data cache and 15 seconds of analysis. Source text is not read, compiled or loaded.'),
+    summary, tabs, body, button('Refresh dependency evidence', () => load('summary', 0), 'text-button'));
+  const sections = [
+    ['summary', 'Coverage'], ['defined', 'Rule-defined symbols'], ['declared', 'Declared symbols'],
+    ['outbound_predicates', 'Outbound predicates/functions'], ['provided_mts', 'Content MTs'],
+    ['referenced_mts', 'Referenced MTs'], ['outbound_mts', 'Outbound MTs'],
+    ['predicate_references', 'All predicate/function references'], ['unresolved', 'Unresolved positions'],
+  ];
+  let request = 0, dialect;
+  const count = value => Number.isSafeInteger(value) && value >= 0 ? number(value) : 'unknown';
+  function evidence(row) {
+    const location = `${row.path ?? row.recordedPath ?? 'Unresolved source'}${Number.isSafeInteger(row.line) && row.line > 0 ? `:${row.line}` : ''}`;
+    return element('li', {},
+      sourceLink(row.path, row.line ?? 1, location),
+      element('span', { className: 'muted' }, [row.id, row.role, row.polarity, row.kind].filter(Boolean).join(' · ')),
+      row.variableNames?.length && element('span', { className: 'muted' },
+        `Variables: ${row.variableNames.join(', ')}${row.variableNameCount > row.variableNames.length ? ' (sample)' : ''}`),
+      row.canonical && element('code', { className: 'dependency-preview' }, row.canonical));
+  }
+  function rowView(row, section) {
+    if (section === 'unresolved') return evidence(row);
+    const name = row.symbol ? statisticsSymbol(row.symbol, dialect) : mtLink(row.key, row.mtExpression);
+    const detail = element('div');
+    const samples = element('details', { className: 'dependency-evidence' },
+      element('summary', {}, `${count(row.evidenceCount)} recorded evidence occurrences · ${row.evidence?.length ?? 0} samples`), detail);
+    let shown = false;
+    samples.addEventListener('toggle', () => {
+      if (samples.open && !shown) { shown = true; detail.append(element('ul', {}, (row.evidence ?? []).map(evidence))); }
+    });
+    return element('li', {}, name,
+      row.arities && element('span', { className: 'muted' },
+        `Arities: ${row.arities.length ? row.arities.map(arity => arity === null ? 'unknown' : arity).join(', ') : 'unknown'}${row.arityCount > row.arities.length ? ` (${row.arityCount} total; sample shown)` : ''}`),
+      row.polarities?.length && element('span', { className: 'badge' }, row.polarities.join(', ')),
+      samples);
+  }
+  async function load(section, offset) {
+    const current = ++request;
+    panel.setAttribute('aria-busy', 'true');
+    body.replaceChildren(element('p', { className: 'muted' }, 'Reading existing cache evidence… Source compilation and loading are not requested.'));
+    try {
+      const data = await api('kb/dependencies', { path, section, offset, limit: 25 }, { signal: state.routeController?.signal });
+      if (current !== request) return;
+      const snapshot = data.summary;
+      if (snapshot?.schema !== 'powder.file-dependencies.v1') throw new APIError('Unsupported dependency evidence response.', 'invalid_response');
+      dialect = snapshot.dialect;
+      if (!state.fileMetadata.dependencies(path, snapshot, data.generation)) throw new APIError('The active generation changed while evidence was read. Refresh to retry.', 'generation_changed');
+      for (const [node, view] of state.fileViews) if (node.isConnected && view.path === path) view.refresh();
+      const implied = snapshot.impliedMT;
+      summary.replaceChildren(element('p', { className: 'dependency-state', 'data-state': snapshot.status },
+        `Recorded snapshot: ${snapshot.status}. Unknown coverage is not an empty set.`),
+      element('ul', { className: 'statistics-notes' }, (snapshot.reasons ?? []).map(reason => element('li', {}, reason.message))),
+      element('p', { className: 'muted' },
+        `File-implied MT content: ${implied?.status === 'present' ? `${count(implied.contentAssertions)} recorded assertions` :
+          implied?.status === 'missing' ? 'no recorded content context' : 'unknown'}. A filename alone is not content evidence.`));
+      tabs.replaceChildren(...sections.map(([key, label]) => {
+        const control = button(key === 'summary' ? label : `${label}: ${count(snapshot.counts?.[key])}`, () => load(key, 0), 'button secondary');
+        control.setAttribute('aria-pressed', String(key === section));
+        control.disabled = key !== 'summary' && !Number.isSafeInteger(snapshot.counts?.[key]);
+        return control;
+      }));
+      if (section === 'summary') {
+        body.replaceChildren(propertyList(Object.entries(snapshot.coverage ?? {}).map(([name, value]) => ({ name, value }))));
+      } else {
+        body.replaceChildren(element('ul', { className: 'dependency-rows', 'data-section': section },
+          (data.items ?? []).map(row => rowView(row, section))));
+        if (!data.items?.length) body.append(element('p', { className: 'muted' },
+          data.total === null ? 'This evidence is unavailable, not zero.' : 'No named entries are recorded on this page. See the coverage limitations above.'));
+        if (Number.isSafeInteger(data.total)) {
+          const range = pageRange(data.total, offset, 25);
+          const previous = button('Previous evidence', () => load(section, range.previous), 'button secondary');
+          const next = button('Next evidence', () => load(section, range.next), 'button secondary');
+          previous.disabled = !range.hasPrevious; next.disabled = !range.hasNext;
+          body.append(element('nav', { className: 'pagination', 'aria-label': 'Dependency pagination' },
+            element('span', {}, `${number(range.start)}–${number(range.end)} of ${number(data.total)}`), previous, next));
+        }
+      }
+    } catch (error) {
+      if (current !== request) return;
+      body.replaceChildren(element('p', { className: 'statistics-error', role: 'status' },
+        error.name === 'AbortError' ? 'Reading was cancelled. Refresh to retry.' : error.message));
+    } finally { if (current === request) panel.setAttribute('aria-busy', 'false'); }
+  }
+  load('summary', 0);
+  return panel;
+}
+
+function scheduleFileInformation() {
+  if (!fileInformationTimer && !fileInformationBusy) fileInformationTimer = setTimeout(hydrateFileInformation, 0);
+}
+
+function refreshFileDisplays() {
+  for (const [node, view] of state.fileViews) {
+    if (!node.isConnected) state.fileViews.delete(node);
+    else view.refresh();
+  }
+  if (state.selection) {
+    const values = sourceFileStates(state.selection, (state.status?.files ?? []).map(file => file.path), state.fileMetadata);
+    for (const node of document.querySelectorAll('[data-directory-states-path]')) {
+      const path = node.dataset.directoryStatesPath;
+      if (values.has(path)) node.replaceWith(renderFileBadges(path, values.get(path), element));
+    }
+  }
+}
+
+async function hydrateFileInformation() {
+  fileInformationTimer = null;
+  if (fileInformationBusy) return;
+  const pending = new Set();
+  for (const [node, view] of state.fileViews) {
+    if (!node.isConnected) { state.fileViews.delete(node); continue; }
+    if (!view.path || !/\.(?:kif|krf|meld|metta)$/i.test(view.path) ||
+      !state.fileMetadata.needsInformation(view.path) ||
+      (!view.requested() && state.knownSources.has(view.path)) || !node.getClientRects().length) continue;
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom >= 0 && rect.top < window.innerHeight) pending.add(view.path);
+    if (pending.size === 16) break;
+  }
+  if (!pending.size) return;
+  const paths = [...pending];
+  fileInformationBusy = true;
+  try {
+    const reply = await api('kb/file-info', { paths: JSON.stringify(paths) });
+    if (reply.generation > (state.status?.generation ?? -1)) setStatus(await api('status'));
+    if (!state.fileMetadata.information(reply)) throw new Error('The KB changed while file states were read. Retry for the current generation.');
+    const received = new Set();
+    for (const file of reply.items ?? []) {
+      const path = canonicalPath(file.path);
+      if (path) { state.knownSources.add(path); received.add(path); }
+    }
+    state.fileMetadata.fail(paths.filter(path => !received.has(path)), 'The server returned no file metadata.');
+  } catch (error) {
+    state.fileMetadata.fail(paths, error.message);
+  } finally {
+    fileInformationBusy = false;
+    refreshFileDisplays();
+    scheduleFileInformation();
+  }
 }
 
 function rememberContext(mt, expression) {
@@ -187,7 +445,7 @@ function diagnosticsPanel(record, { status = false, entries: supplied, showOrigi
     return element('li', { className: `diagnostic diagnostic-${entry.severity}`, 'data-severity': entry.severity },
       element('div', { className: 'diagnostic-message-row' },
         element('span', { className: `badge diagnostic-badge ${entry.severity}` }, labels[entry.severity]),
-        element('p', { className: 'diagnostic-message' }, entry.message)),
+        element('p', { className: 'diagnostic-message' }, renderDecodedText(entry.message))),
       element('div', { className: 'diagnostic-provenance' },
         entry.source ? sourceLink(entry.source, entry.line, `${entry.severity === 'note' ? 'Source' : 'Review source'}: ${entry.source}${entry.line ? `:${entry.line}${entry.column ? `:${entry.column}` : ''}` : ''}`, entry.column) : null,
         !status && showOrigins && element('span', { className: 'muted' }, origins)));
@@ -200,48 +458,8 @@ function diagnosticsPanel(record, { status = false, entries: supplied, showOrigi
     element('h3', { className: 'diagnostic-summary' }, diagnosticSummary(entries)), list);
 }
 
-function assertionCard(assertion, term) {
-  const mapping = splitMappingRows(mappingRowsOf(assertion));
-  const roles = term ? assertionRoles(assertion.expression, term) : [];
-  const labels = { predicate: 'Predicate', argument: 'Argument', nested: 'Nested head' };
-  const footer = element('footer', { className: 'assertion-footer' },
-    sourceLink(assertion.source, assertion.line),
-    link(assertion.id, 'assertion', { id: assertion.id }, 'assertion-id'),
-    assertion.predicate && element('span', { className: 'muted', title: 'Semantic argument count; microtheory is metadata' },
-      `Arity ${assertion.predicate.arity}`));
-  if (mapping.ids.length) {
-    footer.append(element('span', { className: 'mapping-references' }, 'Mappings: ',
-      mapping.ids.flatMap((id, index) => [index ? ', ' : '', mappingLink(id)])));
-  }
-  const card = element('article', { className: 'assertion-card' },
-    roles.length > 0 && element('div', { className: 'role-labels' }, roles.map(role => element('span', {}, labels[role]))),
-    renderExpression(assertion.expression), diagnosticsPanel(assertion), footer);
-  if (mapping.other.length) {
-    card.append(element('details', { className: 'assertion-properties' },
-      element('summary', {}, 'Other mapping annotations'),
-      element('pre', { className: 'mapping-annotations' }, displayProperty(mapping.other))));
-  }
-  if (assertion.properties?.length) {
-    card.append(element('details', { className: 'assertion-properties' },
-      element('summary', {}, `Assertion properties (${assertion.properties.length})`), propertyList(assertion.properties, { context: assertion })));
-  }
-  return card;
-}
-
-function assertionGroups(items, { offset = 0, term } = {}) {
-  const container = element('div', { className: 'assertion-groups' });
-  groupAssertions(items).forEach((group, index) => {
-    const details = element('details', { className: 'mt-block', open: true });
-    const contextLink = mtLink(group.mt, group.mtExpression);
-    contextLink.addEventListener('click', event => event.stopPropagation());
-    details.append(
-      element('summary', {}, element('span', { className: 'context-label' }, 'Microtheory'),
-        contextLink, element('span', { className: 'muted block-count' },
-          `${number(group.items.length)} on this page${index === 0 && offset > 0 ? ' · continued view' : ''}`)),
-      ...group.items.map(assertion => assertionCard(assertion, term)));
-    container.append(details);
-  });
-  return container;
+function assertionGroups(items, options = {}) {
+  return colorAssertionBalls(assertionView.groups(items, options), items);
 }
 
 function updateRoute(values = {}, { replace = false } = {}) {
@@ -291,6 +509,7 @@ function setStatus(status) {
   if (state.status && status.generation < state.status.generation) return;
   if (state.status && status.generation !== state.status.generation) state.contexts.clear();
   state.status = status;
+  state.fileMetadata.status(status);
   for (const file of status.files ?? []) {
     const path = canonicalPath(file.path);
     if (path) state.knownSources.add(path);
@@ -301,6 +520,7 @@ function setStatus(status) {
 
 function rememberCatalog(catalog) {
   state.catalog = catalog;
+  state.fileMetadata.catalog(catalog);
   const visit = nodes => {
     for (const node of nodes ?? []) {
       const path = canonicalPath(node.path);
@@ -343,8 +563,8 @@ function loadedFiles(files, { compact = false } = {}) {
     remove.disabled = state.mutation;
     list.append(element('li', {},
       element('div', { className: 'file-information' },
-        sourceLink(file.path, 1, file.path),
-        element('span', { className: 'file-measure' }, `${fileMeasure(file)} · ${number(file.count)} assertions`)),
+        sourceLink(file.path, 1, file.path, undefined, { compact: false }),
+        Number.isSafeInteger(file.count) && element('span', { className: 'file-measure' }, `${number(file.count)} assertions`)),
       remove));
   }
   return list;
@@ -420,10 +640,19 @@ async function termPage(route, signal) {
   const isMT = route.name === 'microtheory';
   const value = route.params.get(isMT ? 'mt' : 'term');
   if (!value) throw new APIError(`Choose a ${isMT ? 'microtheory' : 'term'} to browse.`, 'missing_parameter');
+  const filters = isMT ? {} : Object.fromEntries(['section', 'arg', 'predicate', 'mt'].map(key => [key, route.params.get(key)]));
   const [data] = await Promise.all([
-    api(isMT ? 'microtheory' : 'term', { [isMT ? 'mt' : 'term']: value, offset: route.offset, limit: route.limit }, { signal }),
+    api(isMT ? 'microtheory' : 'term', { [isMT ? 'mt' : 'term']: value, offset: route.offset, limit: route.limit, ...filters }, { signal }),
     ensureMappingIds(signal).catch(error => { if (error.name === 'AbortError') throw error; }),
   ]);
+  if (!isMT && data.resolvedAs === 'microtheory') {
+    const params = new URLSearchParams({ mt: data.mt, limit: String(route.limit), offset: String(route.offset) });
+    const resolved = { ...route, name: 'microtheory', params };
+    history.replaceState(null, '', routeHref('microtheory', Object.fromEntries(params)));
+    const panel = await microtheoryPage(resolved, signal);
+    panel.resolvedRoute = resolved;
+    return panel;
+  }
   const contextKey = isMT ? data.mt ?? value : null;
   if (isMT) {
     rememberContext(contextKey, data.mtExpression);
@@ -433,22 +662,53 @@ async function termPage(route, signal) {
   const panel = element('div', {},
     heading(title, isMT ? 'Assertions in this microtheory, in source order.' : 'Assertions containing this semantic term. Follow a symbol to continue exploring.',
       isMT ? link('Query this context', 'query', { mt: contextKey }, 'button secondary') : null));
+  panel.contextualData = { route, data, term: isMT ? null : value, mt: contextKey };
   if (data.expression) panel.append(renderExpression(data.expression));
   let items = data.items ?? [];
+  let displayedData = data;
   if (!isMT) {
+    if (!data.navigation) {
+      items = filterContextItems(items, value, route.params);
+      if ((data.offset ?? 0) === 0 && data.total === data.items.length) displayedData = { ...data, total: items.length };
+    }
+    if (route.params.get('viewpoint') === '1') panel.append(viewpointControls(route, data, value));
     const role = route.params.get('role') ?? 'all';
     const roleFilter = selectField('Role on this page', 'role', role,
       [['all', 'All roles'], ['predicate', 'Top-level predicate'], ['argument', 'Argument'], ['nested', 'Nested predicate / function head']],
       event => updateRoute({ role: event.target.value }));
-    panel.append(element('div', { className: 'role-toolbar' }, roleFilter,
+    panel.append(element('div', { className: 'role-toolbar', 'data-viewpoint': String(route.params.get('viewpoint') === '1') }, roleFilter,
       element('span', { className: 'muted' }, 'Role filters apply to this page; pagination counts all occurrences.')));
     if (role !== 'all') items = items.filter(item => assertionRoles(item.expression, value).includes(role));
+    if (Object.values(filters).some(value => value && value !== 'all' && value !== '0')) {
+      panel.append(element('div', { className: 'context-filter-status' },
+        element('span', {}, `${number(displayedData.total)} matching assertions${!data.navigation && displayedData === data ? ' (page coverage)' : ''}`),
+        link('Clear viewpoint filters', 'term', { term: value }, 'text-button')));
+    }
   }
   panel.append(items.length
     ? assertionGroups(items, { offset: route.offset, term: isMT ? undefined : value })
     : empty('No assertions on this page', isMT ? 'This microtheory has no assertions at the current offset.' : 'Try another role or page, or load a source containing this term.'),
-  pagination(data, route));
+  pagination(displayedData, route));
   return panel;
+}
+
+function viewpointControls(route, data, term) {
+  const index = data.navigation ?? pageTermNavigation(term, data.items ?? []);
+  const contexts = new Map();
+  for (const predicate of index.predicates) for (const context of predicate.microtheories) contexts.set(context.mt, context);
+  const change = key => event => updateRoute({ [key]: event.target.value, offset: 0 });
+  return element('section', { className: 'viewpoint-controls', 'aria-label': 'Viewpoint filters' },
+    element('h2', {}, 'Viewpoint Filters'),
+    element('p', { className: 'muted' }, 'Filter stored assertions, not inferred answers. These controls do not execute a query.'),
+    element('div', { className: 'filter-grid' },
+      selectField('Assertion section', 'section', route.params.get('section') || 'all',
+        index.sections.map(section => [section.key, section.label]), change('section')),
+      selectField('Argument position', 'arg', route.params.get('arg') || '0',
+        [['0', 'Any position'], ...index.arguments.map(argument => [String(argument.position), `Arg ${argument.position}`])], change('arg')),
+      selectField('Predicate', 'predicate', route.params.get('predicate') || '',
+        [['', 'Any predicate'], ...index.predicates.map(predicate => [predicate.term, symbolLabel(predicate.term)])], change('predicate')),
+      selectField('Microtheory', 'mt', route.params.get('mt') || '',
+        [['', 'Any microtheory'], ...[...contexts.values()].map(context => [context.mt, contextLabel(context.mt, context.mtExpression)])], change('mt'))));
 }
 
 function contextForm() {
@@ -498,6 +758,160 @@ async function microtheoriesPage(route, signal) {
     contextForm(), directory);
 }
 
+function recordedMicrotheoryPanel(key, signal) {
+  const panel = element('section', { className: 'mt-inventory', 'aria-label': 'Recorded inheritance and inventory' },
+    element('h2', {}, 'Recorded inheritance & inventory'),
+    element('p', { className: 'muted' }, 'Explore saved genlMt relationships and the files behind each MT. This tree does not enable runtime inheritance or load any source.'));
+  let expandedCount = 0;
+  const nodeRequests = new WeakMap();
+  const count = value => Number.isSafeInteger(value) && value >= 0 ? number(value) : 'unavailable';
+  const reference = row => row.mtExpression ? mtLink(row.mt, row.mtExpression)
+    : link(typeof row.label === 'string' ? row.label : contextLabel(row.mt), 'microtheory', { mt: row.mt }, 'mt-link');
+  const load = (mt, section, offset = 0) => api('microtheory/statistics', { mt, section, offset, limit: 25 }, { signal });
+  const failure = (target, error, retry) => {
+    if (error.name !== 'AbortError') target.replaceChildren(
+      element('p', { className: 'statistics-error', role: 'alert' }, error.message), button('Retry statistics', retry, 'text-button'));
+  };
+  function pager(data, change) {
+    if (!Number.isSafeInteger(data.total)) return null;
+    const range = pageRange(data.total, data.offset, data.limit);
+    const previous = button('Previous', () => change(range.previous), 'button secondary');
+    const next = button('Next', () => change(range.next), 'button secondary');
+    previous.disabled = !range.hasPrevious; next.disabled = !range.hasNext;
+    return element('nav', { className: 'pagination', 'aria-label': 'Recorded inventory pagination' },
+      element('span', {}, `${number(range.start)}–${number(range.end)} of ${number(data.total)}`), previous, next);
+  }
+  function snapshotFiles(row) {
+    const roles = { content: 'Content contributor', referenced_only: 'Referenced only — no content',
+      declaration_only: 'Declaration only — no content', reference_unclassified: 'Reference recorded — content coverage unknown' };
+    return element('li', { 'data-file-role': row.role },
+      sourceLink(row.path, row.line ?? 1, row.path ?? row.recordedPath),
+      element('span', { className: 'badge source-role-badge' }, roles[row.role] ?? 'Unclassified file'),
+      row.role === 'content' && element('span', { className: 'muted' }, `${count(row.assertionCount)} assertions`));
+  }
+  function relationRow(row) {
+    return element('li', {},
+      statisticsSymbol(row.predicate),
+      element('span', { className: 'muted' }, row.position === 'asArg1' ? '(this MT, other)' : '(other, this MT)'),
+      reference(row), element('span', { className: 'muted' }, `${count(row.supportCount)} supports`),
+      (row.evidence ?? []).map(evidence => sourceLink(evidence.path, evidence.line ?? 1, evidence.path ?? evidence.recordedPath)));
+  }
+  function inventorySection(mt, section, label) {
+    const target = element('div', { className: 'mt-inventory-section-body' });
+    const disclosure = element('details', { className: 'mt-inventory-section', 'data-section': section },
+      element('summary', {}, label), target);
+    let loaded = false, sequence = 0;
+    async function show(offset = 0) {
+      const current = ++sequence;
+      target.setAttribute('aria-busy', 'true');
+      target.replaceChildren(element('p', { className: 'muted' }, 'Reading recorded inventory…'));
+      try {
+        const data = await load(mt, section, offset);
+        if (signal.aborted || current !== sequence) return;
+        if (!Array.isArray(data.items)) throw new APIError('This inventory section was not returned.');
+        let catalogWarning = null;
+        if (['files', 'relations'].includes(section) && !state.catalog) {
+          try { rememberCatalog(await api('kb/catalog', {}, { signal })); }
+          catch (error) {
+            if (error.name === 'AbortError') throw error;
+            catalogWarning = 'Source catalog unavailable; unresolved source paths are shown as text.';
+          }
+        }
+        if (signal.aborted || current !== sequence) return;
+        const rows = data.items.map(row => section === 'files' ? snapshotFiles(row) : section === 'relations' ? relationRow(row)
+          : statisticsPredicate(row, row.dialect, offset => api('microtheory/statistics/arities',
+            { mt, symbol: row.name, offset, limit: 25 }, { signal }), signal));
+        target.replaceChildren(rows.length ? element('ul', { className: 'statistics-rows' }, rows)
+          : element('p', { className: 'muted' }, data.total === null ? 'Coverage is unavailable, not zero.' : 'No entries were recorded on this page.'),
+        pager(data, show));
+        if (catalogWarning) target.append(element('p', { className: 'muted' }, catalogWarning));
+        if (['missing', 'unavailable'].includes(data.summary?.state)) target.append(
+          element('p', { className: 'muted' }, data.summary.messages?.[0]), button('Retry section', () => show(offset), 'text-button'));
+        loaded = true;
+      } catch (error) { failure(target, error, () => show(offset)); }
+      finally { if (current === sequence) target.setAttribute('aria-busy', 'false'); }
+    }
+    disclosure.addEventListener('toggle', () => { if (disclosure.open && !loaded) show(); });
+    return disclosure;
+  }
+  function neighbor(row, ancestors) {
+    const branch = element('div', { className: 'mt-inventory-branch', hidden: true });
+    const item = element('li', { className: 'mt-inventory-neighbor', 'data-recorded-mt': row.mt });
+    let started = false;
+    const blocked = hierarchyExpansionBlock(row.mt, ancestors, expandedCount);
+    const expand = button('+', () => {
+      const open = branch.hidden;
+      branch.hidden = !open; expand.textContent = open ? '−' : '+';
+      expand.setAttribute('aria-expanded', String(open));
+      if (open && !started) {
+        const reason = hierarchyExpansionBlock(row.mt, ancestors, expandedCount);
+        if (reason) branch.replaceChildren(element('p', { className: 'muted' }, reason));
+        else { started = true; expandedCount++; showNode(row.mt, branch, ancestors); }
+      }
+    }, 'expand-button');
+    expand.setAttribute('aria-expanded', 'false');
+    expand.setAttribute('aria-label', `Expand recorded MT ${row.label ?? contextLabel(row.mt)}`);
+    expand.disabled = Boolean(blocked) || row.catalogued === false;
+    item.append(element('div', { className: 'mt-inventory-neighbor-row' }, expand, reference(row),
+      element('span', { className: 'muted' }, `${count(row.assertionCount)} catalogued assertions · ${count(row.supportCount)} supports`)),
+    blocked && element('p', { className: 'muted cycle-notice' }, blocked),
+    row.catalogued === false && element('p', { className: 'muted' }, 'No snapshot catalog entry for this MT.'), branch);
+    return item;
+  }
+  function hierarchyGroup(mt, section, data, ancestors) {
+    const target = element('div', { className: 'mt-inventory-direction', 'data-direction': section });
+    const label = section === 'parents' ? 'Recorded parents · genlMt(this MT, parent)' : 'Recorded children · genlMt(child, this MT)';
+    let sequence = 0;
+    const draw = page => {
+      target.replaceChildren(element('h3', {}, label),
+        page.items?.length ? element('ul', { className: 'mt-inventory-neighbors' }, page.items.map(row => neighbor(row, ancestors)))
+          : element('p', { className: 'muted' }, page.total === null ? 'Hierarchy coverage unavailable.' : 'No relationships recorded.'),
+        pager(page, async function changePage(offset) {
+          const current = ++sequence;
+          target.setAttribute('aria-busy', 'true');
+          try { const result = await load(mt, section, offset); if (!signal.aborted && sequence === current) draw(result); }
+          catch (error) { failure(target, error, () => changePage(offset)); }
+          finally { if (sequence === current) target.setAttribute('aria-busy', 'false'); }
+        }));
+    };
+    draw(data);
+    return target;
+  }
+  async function showNode(mt, target, ancestors) {
+    const token = Symbol();
+    nodeRequests.set(target, token);
+    target.setAttribute('aria-busy', 'true');
+    target.replaceChildren(element('p', { className: 'muted' }, 'Reading recorded MT statistics…'));
+    try {
+      const data = await load(mt, 'overview');
+      if (signal.aborted || nodeRequests.get(target) !== token) return;
+      if (!data.summary || !data.parents || !data.children) throw new APIError('The recorded MT statistics response is incomplete.');
+      const summary = data.summary, counts = summary.counts ?? {};
+      const modified = typeof summary.inventoryModified === 'number' ? new Date(summary.inventoryModified * 1000).toLocaleString() : 'unavailable';
+      target.replaceChildren(element('div', { className: 'mt-inventory-node-summary' }, reference(summary),
+        element('p', {}, `${count(counts.assertions)} assertions · ${count(counts.predicateFunctions)} predicates/functions · ${count(counts.contentFiles)} content files · ${count(counts.referencedOnlyFiles)} referenced-only files`),
+        element('p', { className: 'statistics-stamp' }, `${sourceStatisticsStamp(summary)} · Inventory file modified: ${modified}`)));
+      if (!ancestors.length || ['missing', 'unavailable', 'partial'].includes(summary.state)) target.append(
+        element('ul', { className: 'statistics-notes' }, (summary.messages ?? []).map(message => element('li', {}, message))));
+      if (['missing', 'unavailable'].includes(summary.state)) {
+        target.append(button('Retry MT statistics', () => showNode(mt, target, ancestors), 'text-button'));
+        return;
+      }
+      target.append(inventorySection(mt, 'files', 'Files contributing content or references'),
+        inventorySection(mt, 'predicates', 'Recorded predicates/functions'),
+        inventorySection(mt, 'relations', 'Recorded MT relations and evidence'),
+        hierarchyGroup(mt, 'parents', data.parents, [...ancestors, mt]),
+        hierarchyGroup(mt, 'children', data.children, [...ancestors, mt]));
+    } catch (error) { if (nodeRequests.get(target) === token) failure(target, error, () => showNode(mt, target, ancestors)); }
+    finally { if (nodeRequests.get(target) === token) target.setAttribute('aria-busy', 'false'); }
+  }
+  const root = element('div', { className: 'mt-inventory-tree', 'data-recorded-mt': key });
+  const refresh = () => { expandedCount = 1; showNode(key, root, []); };
+  panel.append(button('Refresh recorded tree', refresh, 'text-button'), root);
+  refresh();
+  return panel;
+}
+
 async function microtheoryPage(route, signal) {
   const [directory, detail] = await Promise.all([
     microtheoryDirectory(route, signal),
@@ -509,6 +923,7 @@ async function microtheoryPage(route, signal) {
   const before = detail.children[1] ?? null;
   detail.insertBefore(contextForm(), before);
   detail.insertBefore(directory, before);
+  detail.insertBefore(recordedMicrotheoryPanel(route.params.get('mt'), signal), directory);
   return detail;
 }
 
@@ -522,13 +937,13 @@ async function assertionPage(route, signal) {
   const mapping = splitMappingRows(mappingRowsOf(assertion));
   return element('div', {},
     heading('Assertion detail', id, copyButton('Copy expression', expressionText(assertion.expression))),
-    assertionGroups([assertion]),
+    assertionGroups([assertion], { detail: true }),
     element('section', { className: 'provenance-section' }, element('h2', {}, 'Source provenance'),
       propertyList([
         { name: 'Assertion ID', value: assertion.id },
         { name: 'Original variable names', value: assertion.names ?? [] },
       ]),
-      element('p', {}, 'Original source: ', sourceLink(assertion.source, assertion.line)),
+      element('div', {}, 'Original source: ', sourceLink(assertion.source, assertion.line)),
       mapping.ids.length ? element('p', {}, 'Applied mapping IDs, in order: ',
         mapping.ids.flatMap((row, index) => [index ? ', ' : '', mappingLink(row)])) : element('p', { className: 'muted' }, 'No mapping-table rows applied.'),
       mapping.markers.length > 0 && element('p', { className: 'muted' }, `${number(mapping.markers.length)} mapping diagnostic markers are shown with the assertion diagnostics above; they are not mapping-table IDs.`)));
@@ -550,6 +965,7 @@ async function sourcePage(route, signal) {
       element('code', {}, text || ' ')));
   });
   return element('div', {}, heading(path, `Read-only source excerpt · line ${target}${column ? `, column ${column}` : ''}`),
+    sourceLink(path, target, 'Original source', column, { compact: false }),
     element('p', { className: 'muted' }, 'Source files cannot be edited from the browser. Use the offline compiler’s explicit editor repair mode.'),
     lines,
     element('nav', { className: 'pagination', 'aria-label': 'Source excerpt navigation' },
@@ -568,6 +984,7 @@ async function mutateSource(path, body, successMessage) {
   showNotice('Updating the active knowledge base. The previous generation remains available until this succeeds.');
   try {
     const status = await api(path, {}, { method: 'POST', body });
+    state.fileMetadata.clearOperations(body.files ?? []);
     setStatus(status);
     if (state.selection) state.selection.reset((status.files ?? []).map(file => file.path), status.generation);
     showNotice(successMessage);
@@ -591,11 +1008,167 @@ async function unloadSource(file) {
   if (success) await renderRoute();
 }
 
+function statisticsSymbol(name, dialect) {
+  if (typeof name !== 'string') return element('span', {}, 'Unknown symbol');
+  const label = dialect === 'metta' && ['=', 'x_='].includes(name) ? 'metta=' : symbolLabel(name);
+  return name.startsWith('x_') ? link(label, 'term', { term: name }) : element('span', {}, label);
+}
+
+function statisticsPredicate(item, dialect, loadArities, signal) {
+  const count = value => Number.isSafeInteger(value) && value >= 0 ? number(value) : 'unknown';
+  const arity = value => value === null ? 'unknown arity' : count(value);
+  const occurrences = row => `${count(row.headOccurrenceCount)} head occurrences · ${count(row.declarationReferenceCount)} declaration references`;
+  const arities = Array.isArray(item.arities) ? item.arities : [item.arity];
+  const more = Number.isSafeInteger(item.arityCount) && item.arityCount > arities.length
+    ? `, +${number(item.arityCount - arities.length)} more` : '';
+  const row = element('li', { 'data-statistics-symbol': item.name },
+    statisticsSymbol(item.name, dialect),
+    element('span', { className: 'muted' }, `Arity ${arities.map(arity).join(', ')}${more}`),
+    element('span', { className: 'muted' }, occurrences(item)),
+    item.mt && mtLink(item.mt));
+  if (!Number.isSafeInteger(item.arityBreakdownTotal)) return row;
+  const body = element('div');
+  const disclosure = element('details', { className: 'statistics-arity-breakdown' },
+    element('summary', {}, `Arity breakdown (${number(item.arityBreakdownTotal)} recorded rows)`), body);
+  let loaded = false, sequence = 0;
+  async function show(offset = 0) {
+    const current = ++sequence;
+    body.setAttribute('aria-busy', 'true');
+    body.replaceChildren(element('p', { className: 'muted' }, 'Reading arity occurrences…'));
+    try {
+      const data = await loadArities(offset);
+      if (signal.aborted || current !== sequence) return;
+      if (!Array.isArray(data.items) || data.items.length > 25 || !Number.isSafeInteger(data.total)) {
+        throw new APIError(data.summary?.messages?.[0] ?? 'Arity coverage is unavailable, not zero.');
+      }
+      const range = pageRange(data.total, offset, 25);
+      const previous = button('Previous arities', () => show(range.previous), 'button secondary');
+      const next = button('Next arities', () => show(range.next), 'button secondary');
+      previous.disabled = !range.hasPrevious; next.disabled = !range.hasNext;
+      body.replaceChildren(element('ul', { className: 'statistics-arity-rows' }, data.items.map(part =>
+        element('li', {}, element('span', {}, `Arity ${arity(part.arity)}`),
+          element('span', { className: 'muted' }, occurrences(part)), part.mt && mtLink(part.mt)))),
+      element('nav', { className: 'statistics-arity-pagination', 'aria-label': `Arity records for ${symbolLabel(item.name)}` },
+        element('span', { className: 'muted' }, `${number(range.start)}–${number(range.end)} of ${number(data.total)} recorded rows`),
+        previous, next));
+      loaded = true;
+    } catch (error) {
+      if (signal.aborted || current !== sequence || error.name === 'AbortError') return;
+      body.replaceChildren(errorPanel(error), button('Retry arity breakdown', () => show(offset), 'text-button'));
+    } finally {
+      if (current === sequence) body.setAttribute('aria-busy', 'false');
+    }
+  }
+  disclosure.addEventListener('toggle', () => { if (disclosure.open && !loaded) show(); });
+  row.append(disclosure);
+  return row;
+}
+
+function sourceStatisticsDetails(path, signal, onSummary) {
+  const body = element('div', { className: 'source-statistics-detail' });
+  const details = element('details', { className: 'source-statistics-disclosure' },
+    element('summary', { 'aria-label': `Statistics details for ${path}` }, 'Details'), body);
+  let section = 'content', mt = '', offset = 0, request = 0, loaded = false;
+  const choose = (next, context = '', start = 0) => {
+    section = next; mt = context; offset = start;
+    refresh();
+  };
+  async function refresh() {
+    const current = ++request;
+    body.setAttribute('aria-busy', 'true');
+    body.replaceChildren(element('p', { className: 'muted' }, 'Reading recorded statistics…'));
+    try {
+      const data = await api('kb/statistics/detail', { path, section, mt, offset, limit: 50 }, { signal });
+      if (signal.aborted || current !== request) return;
+      if (!data.summary || !Array.isArray(data.items)) throw new APIError('The statistics response is incomplete.');
+      onSummary(data.summary);
+      const summary = data.summary;
+      const header = element('div', {},
+        element('p', { className: 'statistics-stamp' }, sourceStatisticsStamp(summary)),
+        element('p', {}, sourceStatisticsText(summary)),
+        element('ul', { className: 'statistics-notes' }, (summary.messages ?? []).map(message => element('li', {}, message))));
+      const sections = [['content', 'MTs with content'], ['references', 'Referenced MTs'], ['predicates', 'Predicates/functions']];
+      const navigation = element('div', { className: 'statistics-tabs', role: 'group', 'aria-label': `Statistics view for ${path}` },
+        sections.map(([key, label]) => {
+          const control = button(label, () => choose(key), 'button secondary');
+          control.setAttribute('aria-pressed', String(key === section));
+          return control;
+        }));
+      const countText = value => Number.isSafeInteger(value) && value >= 0 ? number(value) : 'unknown';
+      const rows = element('ul', { className: 'statistics-rows' }, data.items.map(item => {
+        if (section === 'predicates') {
+          const context = mt;
+          return statisticsPredicate(item, summary.dialect, offset => api('kb/statistics/arities',
+            { path, symbol: item.name, mt: context, offset, limit: 25 }, { signal }), signal);
+        }
+        return element('li', {}, mtLink(item.key),
+          element('span', { className: 'muted' }, section === 'content'
+            ? `${countText(item.assertionCount)} assertions · ${countText(item.predicateFunctions)} recorded predicates/functions`
+            : `${countText(item.relationEndpointOccurrences)} recorded relation endpoint occurrences`),
+          section === 'content' && button('Show predicates/functions', () => choose('predicates', item.key), 'text-button'));
+      }));
+      body.replaceChildren(header, navigation);
+      if (mt) body.append(element('p', {}, 'In ', mtName(mt),
+        button('Show all content MTs', () => choose('predicates'), 'text-button')));
+      if (data.items.length) body.append(rows);
+      else body.append(element('p', { className: 'muted' }, data.total === null
+        ? 'This statistics section is unavailable, not empty.'
+        : 'No entries were recorded in this section on this page.'));
+      if (Number.isSafeInteger(data.total)) {
+        const range = pageRange(data.total, offset, 50);
+        const previous = button('Previous', () => choose(section, mt, range.previous), 'button secondary');
+        const next = button('Next', () => choose(section, mt, range.next), 'button secondary');
+        previous.disabled = !range.hasPrevious; next.disabled = !range.hasNext;
+        body.append(element('nav', { className: 'pagination', 'aria-label': `Statistics pages for ${path}` },
+          element('span', {}, `${number(range.start)}–${number(range.end)} of ${number(data.total)}`), previous, next));
+      }
+      body.append(element('p', { className: 'muted' }, 'Term and MT links browse the active KB only. Reading statistics does not load this file.'),
+        button('Refresh statistics', refresh, 'text-button'));
+      loaded = true;
+    } catch (error) {
+      if (error.name === 'AbortError' || current !== request) return;
+      body.replaceChildren(element('p', { className: 'statistics-error', role: 'alert' }, error.message),
+        button('Retry details', refresh, 'text-button'));
+    } finally {
+      if (current === request) body.setAttribute('aria-busy', 'false');
+    }
+  }
+  details.addEventListener('toggle', () => { if (details.open && !loaded) refresh(); });
+  return details;
+}
+
+function sourceStateBadges(path, states) {
+  return renderFileBadges(path, states, element);
+}
+
+async function sourcePacksPage(route, signal) {
+  const { sourcePacksPage: renderPacks } = await import('./source-packs.js');
+  return renderPacks({
+    api, element, button, link, heading, errorPanel,
+    file: path => sourceLink(path, 1, path, null, { compact: false }),
+    symbol: name => statisticsSymbol(name), mt: key => mtLink(key),
+    draftFiles: () => state.selection?.selectedFiles() ?? [],
+    generation: () => state.status.generation,
+    isBusy: () => state.mutation, setBusy: setMutation,
+    refreshFiles: () => queueMicrotask(() => { refreshFileDisplays(); scheduleFileInformation(); }),
+    refreshStatus: async () => { try { setStatus(await api('status')); } catch { /* Keep the last confirmed snapshot. */ } },
+    loaded: status => {
+      state.fileMetadata.clearOperations((status.files ?? []).map(file => file.path));
+      setStatus(status);
+      state.selection?.reset((status.files ?? []).map(file => file.path), status.generation);
+      refreshFileDisplays();
+    },
+    rememberId: id => history.replaceState(null, '', routeHref('packs', { id })),
+    reload: renderRoute,
+  }, route, signal);
+}
+
 async function sourcesPage(_route, signal) {
   const [catalog, status] = await Promise.all([
     api('kb/catalog', {}, { signal }), api('status', {}, { signal }),
   ]);
   setStatus(status);
+  if (state.status.generation < catalog.generation) setStatus(await api('status', {}, { signal }));
   rememberCatalog(catalog);
   if (!state.selection || !state.selection.dirty) {
     state.selection = new SourceSelection(catalog.nodes, catalog.active, catalog.generation);
@@ -608,8 +1181,101 @@ async function sourcesPage(_route, signal) {
     state.selection = updated;
   }
   const model = state.selection;
+  const fileStates = sourceFileStates(model, state.status.files.map(file => file.path), state.fileMetadata);
   const checkboxes = new Map();
   const counts = new Map();
+  const statisticsRows = new Map(), snapshots = new Map();
+  const directoryRows = new Map(), directorySnapshots = new Map();
+  let statisticsBusy = false;
+  let directoryBusy = false;
+  let directoryTurn = 0;
+  function showDirectoryStatistics(path, data) {
+    directorySnapshots.set(path, data);
+    const target = directoryRows.get(path);
+    const coverage = data.coverage ?? {};
+    const metric = key => Number.isSafeInteger(coverage[key]) ? number(coverage[key]) : '?';
+    const status = data.error ? 'Interrupted' : !data.done ? 'Collecting' : data.state === 'snapshot' ? 'Complete snapshot coverage' : 'Partial snapshot coverage';
+    const retry = button('Refresh directory statistics', () => {
+      directorySnapshots.delete(path); fetchVisibleDirectoryStatistics();
+    }, 'text-button');
+    retry.setAttribute('aria-label', `Refresh directory statistics for ${path}`);
+    const dates = [data.oldestSnapshotAt, data.newestSnapshotAt].filter(value => typeof value === 'number' && Number.isFinite(value));
+    const span = [...new Set(dates)].map(value => new Date(value * 1000).toLocaleString()).join(' – ') || 'unavailable';
+    target.dataset.state = data.state;
+    target.replaceChildren(element('div', { className: 'statistics-counts' }, directoryStatisticsText(data)),
+      element('div', { className: 'statistics-stamp' }, `${status} · ${metric('processedFiles')}/${metric('totalFiles')} descendant files · independent of selection`),
+      element('details', { className: 'directory-statistics-coverage' },
+        element('summary', {}, 'Coverage'),
+        element('p', {}, `${metric('snapshotFiles')} complete · ${metric('missingFiles')} missing · ${metric('partialFiles')} partial · ${metric('staleFiles')} stale · ${metric('unavailableFiles')} unavailable`),
+        element('p', {}, `Known counts: assertions ${metric('assertionFiles')}; content MTs ${metric('contentMTFiles')}; referenced MTs ${metric('referenceMTFiles')}; predicate/function symbols ${metric('predicateFiles')} files.`),
+        element('p', {}, `Snapshot dates: ${span}`),
+        coverage.manifestChanged && element('p', { className: 'statistics-error' }, 'Directory contents changed during aggregation. Refresh for a new manifest.'),
+        (data.messages ?? []).map(message => element('p', { className: 'muted' }, message))),
+      data.error && element('p', { className: 'statistics-error', role: 'alert' }, data.error),
+      data.done && retry);
+  }
+  async function fetchVisibleDirectoryStatistics() {
+    if (directoryBusy || signal.aborted) return;
+    directoryBusy = true;
+    try {
+      while (!signal.aborted) {
+        const unfinished = visibleSourceDirectories(model, state.expanded).filter(candidate => !directorySnapshots.get(candidate)?.done);
+        const active = unfinished.filter(candidate => directorySnapshots.get(candidate)?.token);
+        const waiting = unfinished.find(candidate => !directorySnapshots.get(candidate)?.token);
+        const candidates = active.length < 3 && waiting ? [...active, waiting] : active;
+        const path = candidates.length ? candidates[directoryTurn++ % candidates.length] : null;
+        if (!path) break;
+        const previous = directorySnapshots.get(path);
+        if (!previous) directoryRows.get(path).textContent = 'Aggregating all descendant inventories…';
+        try {
+          const data = await api('kb/statistics/directory', { path, token: previous?.token }, { signal });
+          if (signal.aborted) return;
+          if (data.path !== path || typeof data.done !== 'boolean' || typeof data.token !== 'string' || !data.token || !data.coverage || !data.counts) {
+            throw new APIError('The directory statistics response is incomplete.');
+          }
+          showDirectoryStatistics(path, data);
+        } catch (error) {
+          if (error.name === 'AbortError') return;
+          showDirectoryStatistics(path, { ...previous, state: 'partial', done: true, error: error.message });
+        }
+      }
+    } finally { directoryBusy = false; }
+  }
+  function showStatistics(path, snapshot) {
+    state.fileMetadata.statistics(path, snapshot);
+    const target = statisticsRows.get(path);
+    if (!target) return;
+    snapshots.set(path, snapshot);
+    target.dataset.state = snapshot.state;
+    const retry = button('Retry statistics', () => { snapshots.delete(path); fetchVisibleStatistics(); }, 'text-button');
+    retry.setAttribute('aria-label', `Retry statistics for ${path}`);
+    target.replaceChildren(element('span', { className: 'statistics-counts' }, sourceStatisticsText(snapshot)),
+      element('span', { className: 'statistics-stamp' }, sourceStatisticsStamp(snapshot)));
+    if (['missing', 'unavailable'].includes(snapshot.state)) target.append(
+      element('span', {}, snapshot.messages?.[0] ?? 'This file’s statistics could not be read.'), retry);
+  }
+  async function fetchVisibleStatistics() {
+    if (statisticsBusy || signal.aborted) return;
+    statisticsBusy = true;
+    try {
+      while (!signal.aborted) {
+        const paths = visibleSourceFiles(model, state.expanded).filter(path => !snapshots.has(path)).slice(0, 16);
+        if (!paths.length) break;
+        for (const path of paths) statisticsRows.get(path).textContent = 'Reading statistics…';
+        try {
+          const data = await api('kb/statistics', { paths: JSON.stringify(paths) }, { signal });
+          if (signal.aborted) return;
+          const returned = new Map((data.items ?? []).map(item => [item.path, item]));
+          for (const path of paths) showStatistics(path, returned.get(path) ?? {
+            state: 'unavailable', messages: ['The server did not return statistics for this file.'],
+          });
+        } catch (error) {
+          if (error.name === 'AbortError') return;
+          for (const path of paths) showStatistics(path, { state: 'unavailable', messages: [error.message] });
+        }
+      }
+    } finally { statisticsBusy = false; }
+  }
   const draftCount = element('span', { className: 'draft-count', 'aria-live': 'polite' });
   const statusNote = element('p', { className: 'muted draft-note' });
   const updateDraft = () => {
@@ -654,22 +1320,32 @@ async function sourcesPage(_route, signal) {
         expand.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} ${path}`);
         if (open) state.expanded.add(path);
         else state.expanded.delete(path);
+        if (open) { fetchVisibleStatistics(); fetchVisibleDirectoryStatistics(); scheduleFileInformation(); }
       }, 'expand-button');
       expand.setAttribute('aria-expanded', String(expanded));
       expand.setAttribute('aria-controls', children.id);
       expand.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} ${path}`);
       const count = element('span', { className: 'directory-count' });
       counts.set(path, count);
-      row.append(expand, checkbox, label, count);
-      item.append(row, children);
+      row.append(expand, checkbox, label, count, sourceStateBadges(path, fileStates.get(path)));
+      const aggregate = element('div', { className: 'source-statistics directory-statistics', 'data-directory-statistics-path': path },
+        'Directory totals load when this folder is visible, even while collapsed.');
+      directoryRows.set(path, aggregate);
+      item.append(row, aggregate, children);
     } else {
       row.append(element('span', { className: 'tree-spacer', 'aria-hidden': 'true' }, '·'),
-        checkbox, label, element('span', { className: 'file-measure' }, fileMeasure(record)));
-      item.append(row);
+        checkbox, sourceFileDisplay(path, label));
+      const statistics = element('div', { className: 'source-statistics-summary', 'data-statistics-path': path },
+        'Statistics load when this folder is expanded.');
+      statisticsRows.set(path, statistics);
+      item.append(row, element('div', { className: 'source-statistics' }, statistics,
+        sourceStatisticsDetails(path, signal, snapshot => showStatistics(path, snapshot))));
     }
     return item;
   };
   const tree = element('ul', { className: 'source-tree', 'aria-label': 'Supported original sources under KBs' }, model.roots.map(buildNode));
+  queueMicrotask(fetchVisibleStatistics);
+  queueMicrotask(fetchVisibleDirectoryStatistics);
   updateControls(model.records.keys());
   const load = button('Load selected sources', async () => {
     const successful = await mutateSource('kb/load',
@@ -686,13 +1362,27 @@ async function sourcesPage(_route, signal) {
   }, 'button secondary');
   reset.dataset.mutation = '';
   reset.disabled = state.mutation;
+  const refreshStates = button('Refresh file states', () => renderRoute(), 'button secondary');
+  refreshStates.disabled = state.mutation;
+  refreshStates.dataset.mutation = '';
+  const observedAt = catalog.fileStates?.observedAt;
+  const observation = typeof observedAt === 'number' && Number.isFinite(observedAt)
+    ? ` Last check: ${new Date(observedAt * 1000).toLocaleString()}.` : '';
+  const probeLimit = catalog.fileStates?.artifactProbeLimit;
+  const probeNote = Number.isSafeInteger(probeLimit) && model.files.length > probeLimit
+    ? ` Artifact checks cover at most ${number(probeLimit)} files per refresh; unprobed states remain unknown.` : '';
   return element('div', {},
-    heading('KB Sources', 'Choose original sources from the repository’s KBs directory. Loading and unloading never deletes files.'),
+    heading('KB Sources', 'Choose original sources from the repository’s KBs directory. Loading and unloading never deletes files.',
+      link('Source Packs', 'packs', {}, 'button secondary')),
     element('section', { className: 'source-selection' }, element('h2', {}, 'Source selection'),
-      element('div', { className: 'source-actions' }, load, reset, draftCount), statusNote,
+      element('div', { className: 'source-actions' }, load, reset, refreshStates, draftCount), statusNote,
+      element('p', { className: 'muted file-state-explanation' },
+        `Each badge is independent. Cached and Indexed show artifact presence only—not freshness or validity. Load at startup follows the server’s reported startup selection; Loaded now follows the active manifest, not checkbox selection. Warnings and Errors count recorded entries only; missing coverage stays unknown. Size describes the original source, not its caches. Statistics snapshot staleness is separate.${observation}${probeNote}`),
+      element('p', { className: 'muted statistics-explanation' },
+        'Saved inventory statistics, not live counts. Directory totals include every supported descendant once, regardless of checkbox selection; MTs and predicate/function symbols are deduplicated unions. All arities of a symbol count together. Referenced MTs cover recorded relation endpoints only.'),
       model.files.length ? tree : empty('No supported sources found', 'Place the original KIF, KRF, or MeTTa corpus under KBs. Generated companions are intentionally hidden.')),
     element('section', { className: 'loaded-section' }, element('h2', {}, 'Currently loaded'),
-      loadedFiles(state.status.files)));
+      loadedFiles(state.status.files, { fileStates })));
 }
 
 function selectField(label, name, value, options, onChange) {
@@ -714,22 +1404,16 @@ function queryResults(data) {
   solutions.forEach((solution, index) => {
     const bindings = solution.bindings ?? [];
     const body = element('section', { className: 'solution' },
-      element('h3', {}, `Solution ${index + 1}`, element('span', { className: 'solution-context' }, ' in ', mtLink(solution.mt, solution.mtExpression))));
+      element('h3', {}, `Solution ${index + 1}`, element('span', { className: 'solution-context', 'data-solution-field': 'mt' }, ' in ', mtLink(solution.mt, solution.mtExpression))));
     if (bindings.length) {
       body.append(element('dl', { className: 'bindings' }, bindings.flatMap(binding => [
         element('dt', {}, binding.name), element('dd', {}, renderExpression(binding.value)),
       ])));
     } else body.append(element('p', { className: 'muted' }, 'Ground query succeeded; no variable bindings.'));
     const proof = solution.proof ?? [];
-    body.append(element('details', { className: 'proof', open: true },
+    body.append(element('details', { className: 'proof', open: presentation.get().fields.proof },
       element('summary', {}, `${proof.length} successful proof ${proof.length === 1 ? 'step' : 'steps'}`),
-      element('ol', {}, proof.map(step => element('li', {},
-        element('div', { className: 'proof-heading' },
-          element('span', { className: 'badge' }, step.kind === 'rule' ? 'Rule' : 'Fact'),
-          link(step.id, 'assertion', { id: step.id }, 'assertion-id'),
-          Number.isFinite(step.before) && Number.isFinite(step.after)
-            ? element('span', { className: 'muted' }, `Bound slots ${step.before} → ${step.after}`) : null),
-        renderExpression(step.expression))))));
+      colorAssertionBalls(assertionView.proof(proof), proof)));
     results.append(body);
   });
   return results;
@@ -917,7 +1601,7 @@ async function mappingsPage(route, signal) {
             element('span', { className: 'assessment-line' }, assessment),
             element('span', { className: 'muted assessment-line' }, `${row.confidence} confidence · ${row.category}`),
           ]),
-          mappingCell('Notes / provenance', element('p', {}, row.notes)));
+          mappingCell('Notes / provenance', element('p', {}, renderDecodedText(row.notes))));
       })));
     panel.append(element('div', { className: 'mapping-table-wrapper' }, table));
   } else panel.append(empty('No matching mapping rows', 'Clear a filter or search a SUMO symbol, CycL symbol, or note.',
@@ -987,8 +1671,9 @@ function applicationReloadControls() {
 const pages = {
   overview, search: searchPage, predicates: searchPage, term: termPage,
   microtheory: microtheoryPage, microtheories: microtheoriesPage,
-  assertion: assertionPage, source: sourcePage, sources: sourcesPage,
+  assertion: assertionPage, source: sourcePage, sources: sourcesPage, packs: sourcePacksPage,
   query: queryPage, mappings: mappingsPage, settings: settingsPage,
+  'ui-settings': (_route, signal) => renderUISettings(presentation, { signal }),
 };
 
 async function renderRoute() {
@@ -1014,10 +1699,28 @@ async function renderRoute() {
       : empty('Page not found', 'This browser route is not recognized.', link('Return to overview', 'overview', {}, 'button'));
     if (view !== state.view) return;
     content.replaceChildren(result);
+    const displayedRoute = result.resolvedRoute ?? route;
+    if (result.resolvedRoute) {
+      for (const anchor of document.querySelectorAll('#navigation a')) {
+        if (anchor.dataset.route === 'microtheories') anchor.setAttribute('aria-current', 'page');
+        else anchor.removeAttribute('aria-current');
+      }
+    }
+    updateClassicContext(result, displayedRoute);
+    if (route.name === 'query' && state.literalQuery) {
+      const pending = state.literalQuery;
+      state.literalQuery = null;
+      if (route.params.get('query') === pending.query && (route.params.get('mt') || '') === pending.mt) {
+        result.querySelector('.query-form').requestSubmit();
+      }
+    }
+    refreshFileDisplays();
+    scheduleFileInformation();
     document.title = `${content.querySelector('h1')?.textContent ?? 'Browse'} · ${APP_NAME}`;
   } catch (error) {
     if (view !== state.view || error.name === 'AbortError') return;
     content.replaceChildren(errorPanel(error));
+    classicLayout.setContext({ title: 'Context index', coverage: 'unavailable', emptyMessage: error.message });
     document.title = `Request error · ${APP_NAME}`;
   } finally {
     if (view === state.view) {
@@ -1076,6 +1779,8 @@ function startLiveReload() {
 }
 
 window.addEventListener('hashchange', renderRoute);
+window.addEventListener('scroll', scheduleFileInformation, { passive: true, capture: true });
+window.addEventListener('resize', scheduleFileInformation, { passive: true });
 $('.skip-link').addEventListener('click', event => { event.preventDefault(); content.focus(); });
 try {
   state.settings = loadSettings(localStorage);

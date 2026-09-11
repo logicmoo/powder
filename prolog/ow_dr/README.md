@@ -13,19 +13,82 @@ Set-Location C:\snet\PeTTa\repos\openworld_dr
 
 # Compile the collection, or just the initial KB.
 swipl .\prolog\ow_dr\compile_kb.pl -- KBs
-swipl .\prolog\ow_dr\compile_kb.pl -- KBs\sumo\tinyKB.kif
+swipl .\prolog\ow_dr\compile_kb.pl -- KBs\tinyKB.krf
 
-# Start the browser with exactly KBs\sumo\tinyKB.kif.
+# Start with the saved selection, defaulting to KBs\tinyKB.krf.
 swipl .\prolog\ow_dr\app.pl
 
 # Select different sources or a different local port.
 swipl .\prolog\ow_dr\app.pl -- --port=8080 KBs\sumo\Merge.kif
-swipl .\prolog\ow_dr\app.pl -- --kb-source=KBs\sumo\tinyKB.kif --kb-source=KBs\examples\example.kif
+swipl .\prolog\ow_dr\app.pl -- --kb-source=KBs\sumo\tiny-merge.kif --kb-source=KBs\examples\example.kif
 ```
 
-The default address is **http://localhost:3050/**, bound to the loopback interface.
+The canonical address is **http://localhost:3050/swish/openworld_dr/**, bound to
+the loopback interface. APIs are below `/swish/openworld_dr/api/`. The root and
+old misspelled entry redirect to the canonical mount.
 All selected inputs must finish compilation and loading before startup is
 announced. An invalid source or a busy compiler prevents startup.
+
+Explicit CLI sources override saved startup selection. `KBs\tinyKB.krf` is the
+combined Cyc export; its original per-assertion MTs are preserved. The separate
+SUMO source is `KBs\sumo\tiny-merge.kif`, with explicit `(in-microtheory MergeMt)`.
+Its former `x_tinyKB` cache/ID context is historical, not silently reassigned.
+
+## Browser layout and assertion display
+
+Classic Cyc is the default layout, retaining this application's colors and fonts.
+The top menu remains global; the left pane indexes the current term by assertion
+section, argument position, predicate and microtheory. Counts and filters are
+computed over all of that term's loaded assertions before pagination.
+`Viewpoint Filters` filters stored assertions; it does not perform inference.
+
+The neutral **+** beside an eligible predicate/MT runs a real bounded query in the
+query console (20 results, three seconds). Only observed direct argument slots and
+known arities are offered; nested-only constructor references are not substituted
+for whole arguments. The action returns existing as well as derivable answers and
+successful proofs. No estimate of additional-answer likelihood is implied.
+Tree disclosure arrows and assertion-property balls are separate actions.
+
+`#/ui-settings` controls dense/comfortable spacing and visibility of IDs, kinds,
+MTs, source provenance, strength/direction, diagnostics, properties, proof details
+and observed utility. Defaults show just expressions and each assertion's
+properties ball. Full assertion detail retains all metadata; large raw properties
+are collapsed until requested. Blocking errors are never hidden.
+The checkbox **Classic Cyc mode** is synchronized with UI Settings and reversible
+without rebuilding the current page. Browser-only preferences use
+`powder.presentation.v2`; deliberate modern opt-outs persist, while legacy default
+false values migrate to Classic. Reset restores Classic/dense defaults.
+
+For a loaded compound MT, readable `#/term?term=(ActionModelMtFn%20Freeciv-TheGame)`
+and canonical native term input resolve through the existing inert context codec
+to its specialized microtheory page. Headings use linked S-expressions, not native
+Prolog or opaque keys. A non-atomic term is not assumed to be a microtheory from its
+constructor's spelling.
+
+Property-ball colors describe available metadata: monotonic white, actual
+back-chaining rule purple, explicit stored FALSE red, otherwise default yellow.
+They are not truth-confidence or rule-utility scores; asserted implications are
+not colored as executable rules merely because of their formula or direction.
+
+## Console controls
+
+The main thread quietly scans bounded, blocking key reads. **?** and **Ctrl+C**
+display the same help; **C** continue, **X** exit, **M** make/reload changed
+application code, **R** restart owned HTTP listeners, **B** bind another loopback
+port, and **T** list threads work directly without entering a menu or pressing
+Enter. Every recognized choice is printed and flushed before its action.
+Only port entry needs digits plus Enter (Escape cancels). Idle timeouts are
+silent. Make does not rerun main or recompile the corpus.
+
+Listener restart preserves loaded KBs, ports and worker counts. It drains active
+HTTP work rather than restarting the process. Extra ports are process-local and
+all owned listeners close on exit. Closed/redirected stdin never implies consent
+to exit; headless operation waits for a host `stop` message.
+
+Windows console handles require the included native adapter; build it once with
+`prolog\ow_dr\build_lifecycle_windows.ps1`. The DLL is a generated, ignored build
+product. Terminal/signal settings are restored on cleanup. A detached headless
+launch has no keyboard menu: start in a visible terminal to use these controls.
 
 Requirements: SWI-Prolog with its standard libraries. Windows source-catalog
 authorization uses the included PowerShell helper and native .NET file attributes:
@@ -295,6 +358,66 @@ the compiler's real source location while parsing provenance as data.
 files, including directives that are returned as data and never executed.
 Legacy files are **not** accepted as fresh, validated modern caches; recompile
 their original sources to migrate.
+
+## Shared file-worker pool
+
+The trusted host API in `kb_jobs` uses **one file pool**, not an inference pool:
+
+```prolog
+kb_jobs:start_file_pool(_{start:5,max:10,spare:2}).
+kb_jobs:queue_load(Paths,ExpectedGeneration,Accepted).
+kb_jobs:queue_index(Paths,Options,Accepted).
+kb_jobs:queue_cached_load(ValidatedPackSnapshots,ExpectedGeneration,Accepted).
+kb_jobs:queue_unload(Path,ExpectedGeneration,Accepted).
+kb_jobs:job_status(Accepted.jobId,Status).
+kb_jobs:await_result(Accepted.jobId,Result).
+kb_jobs:cancel_job(Accepted.jobId).
+kb_jobs:task_overview(Overview).
+kb_jobs:stop_file_pool(drain). % or cancel
+```
+
+`start_file_pool/1` also accepts saved settings and selects `Settings.pools.loader`.
+Five persistent workers start immediately for the selected profile; demand grows
+the same pool to at most ten, retaining two spare workers where capacity allows.
+Workers remain alive until explicit shutdown. `queueCapacity` optionally sets the
+accepted nonterminal-job bound (default 100, maximum 1000); excess submissions
+raise `task_queue_full(file)` rather than blocking the request thread. Completed
+history retains 100 jobs and is not a durable work queue.
+
+Each request fans out its concrete files to the shared workers. Overlapping
+physical cache paths are scheduled exclusively inside the process, while native
+cross-process claims still report external `busy` results. Compilation, indexing
+and native snapshot preparation can overlap; successful KB publication is FIFO
+among mutating jobs and checks the exact accepted generation again. `any` captures
+the generation at acceptance: later queued mutations are **not silently rebased**
+after an earlier mutation changes it. Index jobs never publish KB assertions.
+Index jobs use the existing compiler/index pipeline, so a missing or stale
+normalized cache is compiled first; no separate semantic analyzer is introduced.
+Discovery resolves source spelling once and the compiler implementation is
+fingerprinted once per request, not once per file. Request-wide application
+tickets prevent Code Make from changing the implementation between file units.
+Source-pack jobs load only their validated cache snapshots and preserve unrelated
+live sources, even if those originals have changed or disappeared.
+
+`load_sources/3`, `add_cached_sources/3` and `unload_source/3` remain synchronous:
+when the pool is active they enqueue and await, and otherwise retain their direct
+behavior. Worker adapters bypass these wrappers to avoid recursive enqueueing.
+`queue_load/4` accepts trusted compiler options, and `await_result/3` accepts a
+timeout in seconds (`infinite` is the default). Asynchronous status/error objects
+are inspectable; synchronous waits rethrow the underlying error.
+
+Cancellation cleans claims, locks and unpublished native snapshots; completed
+valid data/index caches remain reusable. Publication itself is a short
+non-cancellable operation. Shutdown rejects new submissions, drains or cancels
+owned jobs, then joins its manager/workers. Cleanup failures are reported and
+retained for another shutdown cleanup attempt; live snapshots are never deleted
+as failed staging work.
+
+HTTP stop/restart must not stop this pool. Application exit owns explicit pool
+shutdown. Code Make must use `kb_activity:with_exclusive_reload/1` together with
+the existing reload locks; queued and running jobs hold the matching shared gate.
+Source authorization and HTTP/UI lifecycle wiring remain host responsibilities.
+The obsolete dual-pool/inference job interfaces are not activated.
 
 ## Queries and active generations
 

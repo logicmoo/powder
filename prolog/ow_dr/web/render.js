@@ -1,3 +1,5 @@
+import { renderDecodedText } from './decoded-text.js';
+
 const text = value => ({ text: String(value), kind: 'text' });
 
 export function symbolLabel(value) {
@@ -43,7 +45,7 @@ function nested(node) {
 }
 
 function sequence(open, head, children, close, depth, output, pretty) {
-  output.push(text(open), ...head);
+  output.push(typeof open === 'object' ? open : text(open), ...head);
   const split = pretty && children.some(nested);
   for (const child of children) {
     output.push(text(split ? `\n${'  '.repeat(depth + 1)}` : ' '));
@@ -65,7 +67,7 @@ function emit(node, depth, output, pretty) {
       output.push({ text: String(node.value), kind: 'variable' });
       break;
     case 'string':
-      output.push({ text: JSON.stringify(String(node.value)), kind: 'string' });
+      output.push({ text: JSON.stringify(String(node.value)), raw: String(node.value), kind: 'string' });
       break;
     case 'number':
       output.push({ text: String(node.value), kind: 'number' });
@@ -76,7 +78,12 @@ function emit(node, depth, output, pretty) {
     case 'application': {
       const head = [];
       emit(node.head, depth, head, pretty);
-      sequence('(', head, node.args ?? [], ')', depth, output, pretty);
+      const identity = node.natKey ?? node.termKey;
+      const opening = node.denotesNat !== false && typeof identity === 'string' && identity
+        ? { text: '(', kind: 'nat', href: routeHref('term', { term: identity }),
+          title: 'Browse this complete non-atomic term', termKey: identity }
+        : '(';
+      sequence(opening, head, node.args ?? [], ')', depth, output, pretty);
       break;
     }
     case 'list':
@@ -126,10 +133,13 @@ export function renderExpression(expression, { document: doc = globalThis.docume
     } else {
       const part = doc.createElement(token.href ? 'a' : 'span');
       part.className = `expr-${token.kind}`;
-      part.textContent = token.text;
+      if (token.kind === 'string') {
+        part.append(doc.createTextNode('"'), renderDecodedText(token.raw, { document: doc }), doc.createTextNode('"'));
+      } else part.textContent = token.text;
       if (token.href) {
         part.href = token.href;
-        part.title = `Browse ${token.text}`;
+        part.title = token.title ?? `Browse ${token.text}`;
+        if (token.kind === 'nat') part.setAttribute('aria-label', token.title);
       }
       code.append(part);
     }
@@ -160,6 +170,7 @@ export function assertionRoles(expression, term) {
   const roles = new Set();
   function visit(node, role) {
     if (!node || typeof node !== 'object') return;
+    if (node.denotesNat !== false && (node.natKey ?? node.termKey) === term) roles.add(role);
     if (node.type === 'symbol' && node.value === term) roles.add(role);
     if (node.type === 'application') {
       visit(node.head, role === 'predicate' ? 'predicate' : 'nested');

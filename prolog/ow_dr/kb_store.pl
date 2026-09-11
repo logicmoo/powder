@@ -1,6 +1,9 @@
-:- module(kb_store, [load_sources/3, unload_source/3, status/1, active_modules/1,
+:- module(kb_store, [load_sources/3, add_cached_sources/3,
+                    unload_source/3, status/1, active_modules/1,
                     assertion/2, assertions/1, terms/1, predicates/1,
                     generation/1, source_info/2, query_text/5,
+                    publish_staged_sources/4,publish_staged_addition/3,
+                    prepare_source/2,prepare_cached_source/2,stage_source/2,cleanup_staged/1,
                     term_assertions/2, mt_assertions/2, term_exists/1, microtheories/1]).
 :- use_module(kb_paths).
 :- use_module(kb_runtime, []).
@@ -34,7 +37,101 @@ cleanup_owned_runtime :-
       catch(cleanup_native(Native),Error,print_message(error,Error))).
 
 load_sources(Paths, Expected, Status) :-
+    file_pool_caller, !,
+    kb_jobs:queue_load(Paths,Expected,Job),kb_jobs:await_result(Job.jobId,Status).
+load_sources(Paths, Expected, Status) :-
     with_mutex(openworld_code_reload,load_sources_locked(Paths,Expected,Status)).
+
+file_pool_caller :-
+    current_predicate(kb_jobs:file_pool_started/0),
+    kb_jobs:file_pool_started,\+kb_jobs:in_file_worker.
+
+% Trusted host interface for an already authorized source-pack composition:
+% each snapshot is {source:Absolute,outputHash:SHA256,sourceHash:SHA256}.
+% Only those exact, validated cache bytes are loaded. No compiler is invoked.
+% Unrelated live entries (including missing/modified originals) are retained.
+add_cached_sources(Snapshots,Expected,Status) :-
+    file_pool_caller, !,
+    kb_jobs:queue_cached_load(Snapshots,Expected,Job),kb_jobs:await_result(Job.jobId,Status).
+add_cached_sources(Snapshots,Expected,Status) :-
+    with_mutex(openworld_code_reload,
+      (with_mutex(openworld_store,checked_generation(Expected,Current)),
+       must_be(list,Snapshots),maplist(prepare_cached_source,Snapshots,Prepared),
+       with_mutex(openworld_store,install_addition(Prepared,Current,Status)))).
+
+prepare_cached_source(Snapshot,Prepared) :-
+    must_be(dict,Snapshot),must_be(atom,Snapshot.source),
+    absolute_file_name(Snapshot.source,Source,[access(read)]),
+    kb_paths:cache_paths(Source,Cache,_),
+    kb_cache:file_digest(Source,SourceHash),
+    (SourceHash==Snapshot.sourceHash->true;
+     throw(error(source_pack_source_changed(Source),_))),
+    kb_cache:file_digest(Cache,OutputHash),
+    (OutputHash==Snapshot.outputHash->true;
+     throw(error(source_pack_cache_changed(Source),_))),
+    (source_info(Source,Old),Old.outputHash==OutputHash,
+     get_dict(sourceHash,Old,VerifiedSourceHash),VerifiedSourceHash==SourceHash->
+      Prepared=retained(Source)
+    ;kb_cache:read_cache(Cache,Header,Records),kb_cache:file_digest(Cache,AfterHash),
+     (AfterHash==OutputHash->true;throw(error(source_pack_cache_changed(Source),_))),
+     (Header.sourceHash==SourceHash->true;throw(error(source_pack_stale_cache(Source),_))),
+     Info=result{source:Source,normalized:Cache,outputHash:OutputHash,sourceHash:SourceHash,
+       status:cache_hit,count:Header.count,warnings:Header.warnings,
+       lineCount:Header.lineCount,sizeBytes:Header.sizeBytes,elapsed:0},
+     Prepared=prepared(Source,Info,Records)).
+
+checked_generation(Expected,Current) :-
+    generation(Current),
+    (Expected==any->true;
+     must_be(integer,Expected),
+     (Expected=:=Current->true;throw(error(generation_conflict(Expected,Current),_)))).
+
+install_addition(Prepared0,Expected,Status) :-
+    checked_generation(Expected,Current),
+    maplist(preparation_source,Prepared0,AllSources),sort(AllSources,Unique),
+    (same_length(AllSources,Unique)->true;throw(error(duplicate_additive_sources,_))),
+    exclude(retained_preparation,Prepared0,Prepared),
+    findall(S,member(prepared(S,_,_),Prepared),Sources),
+    validate_unique_ids(Prepared),
+    forall((member(prepared(_,_,Records),Prepared),member(record(Id,_,_),Records),
+            assertion(Id,Existing),source_module(Other,Existing.module,_),
+            \+memberchk(Other,Sources)),
+           throw(error(conflicting_assertion_id(Id),_))),
+    stage_sources(Prepared,Staged),
+    exclude(reused_entry,Staged,Changes),
+    catch((commit_addition(Changes,Current,Obsolete)->true;throw(error(addition_install_failed,_))),
+          Error,(cleanup_staged(Staged),throw(Error))),
+    cleanup_obsolete(Obsolete,CleanupIssues),
+    status(Base),
+    findall(S,member(entry(S,_,_,_,_,_),Changes),Added),
+    findall(S,(member(retained(S),Prepared0);member(entry(S,_,_,_,_,true),Staged)),Reused),
+    Status=Base.put(addition,_{changed:Added,reused:Reused,cleanupIssues:CleanupIssues}).
+
+preparation_source(retained(Source),Source).
+preparation_source(prepared(Source,_,_),Source).
+retained_preparation(retained(_)).
+reused_entry(entry(_,_,_,_,_,true)).
+commit_addition([],_,[]) :- !.
+commit_addition(Changes,Current,Obsolete) :-
+    findall(Native,(member(entry(S,_,_,_,_,_),Changes),source_module(S,_,Native)),Obsolete),
+    transaction((
+      forall(member(entry(S,_,_,_,_,_),Changes),remove_live_source(S)),
+      maplist(activate_source,Changes),rebuild_rankings,
+      retractall(generation(_)),Next is Current+1,assertz(generation(Next))
+    )).
+cleanup_obsolete([],[]).
+cleanup_obsolete([Native|Rest],Issues) :-
+    catch((cleanup_native(Native)->Issue=none;
+           Issue=cleanup_issue{path:Native,message:"Native snapshot cleanup failed."}),Error,
+      (message_to_string(Error,Message),
+       Issue=cleanup_issue{path:Native,message:Message})),
+    (Issue==none->Issues=Tail;Issues=[Issue|Tail]),cleanup_obsolete(Rest,Tail).
+remove_live_source(Source) :-
+    (source_module(Source,Module,_)->
+      forall((assertion(Id,Data),Data.module==Module),
+        (retractall(assertion(Id,_)),retractall(constant_locator(_,Id)),retractall(mt_locator(_,Id))))
+    ;true),
+    retractall(source_module(Source,_,_)),retractall(source_info(Source,_)).
 
 load_sources_locked(Paths, Expected, Status) :-
     statistics(walltime,[Start,_]),
@@ -51,9 +148,44 @@ load_sources_locked(Paths, Expected, Status) :-
 
 prepare_source(Info, prepared(Source, WithHash, Records)) :-
     absolute_file_name(Info.source,Source,[access(read)]),
-    kb_cache:read_cache(Info.normalized, _, Records),
     crypto_file_hash(Info.normalized,Hash,[algorithm(sha256)]),
-    WithHash=Info.put(outputHash,Hash).
+    kb_cache:read_cache(Info.normalized, Header, Records),
+    crypto_file_hash(Info.normalized,After,[algorithm(sha256)]),
+    (Hash==After->true;throw(error(cache_changed_during_preparation(Source),_))),
+    WithHash=Info.put(_{outputHash:Hash,sourceHash:Header.sourceHash,count:Header.count,
+      lineCount:Header.lineCount,sizeBytes:Header.sizeBytes,warnings:Header.warnings}).
+
+publish_staged_sources(Staged,Expected,Started,Status) :-
+    with_mutex(openworld_store,
+      (checked_generation(Expected,Current),
+       staged_preparations(Staged,Prepared),validate_unique_ids(Prepared),
+       commit_generation(Staged,Current,Obsolete),
+       cleanup_obsolete(Obsolete,CleanupIssues),
+       get_time(Finished),Elapsed is max(0,Finished-Started),
+       retractall(generation_timing(_)),assertz(generation_timing(_{loadSeconds:Elapsed})),
+       status(Base),Status=Base.put(cleanupIssues,CleanupIssues))).
+
+staged_preparations([],[]).
+staged_preparations([entry(Source,Info,_,_,Records,_)|Rest],
+                    [prepared(Source,Info,Records)|Prepared]) :-
+    staged_preparations(Rest,Prepared).
+
+publish_staged_addition(Staged0,Expected,Status) :-
+    with_mutex(openworld_store,
+      (checked_generation(Expected,Current),
+       exclude(retained_preparation,Staged0,Staged),
+       staged_preparations(Staged,Prepared),validate_unique_ids(Prepared),
+       findall(S,member(entry(S,_,_,_,_,_),Staged),Sources),
+       forall((member(prepared(_,_,Records),Prepared),member(record(Id,_,_),Records),
+               assertion(Id,Existing),source_module(Other,Existing.module,_),
+               \+memberchk(Other,Sources)),
+              throw(error(conflicting_assertion_id(Id),_))),
+       exclude(reused_entry,Staged,Changes),
+       commit_addition(Changes,Current,Obsolete),
+       cleanup_obsolete(Obsolete,CleanupIssues),status(Base),
+       findall(S,member(entry(S,_,_,_,_,_),Changes),Added),
+       findall(S,(member(retained(S),Staged0);member(entry(S,_,_,_,_,true),Staged)),Reused),
+       Status=Base.put(addition,_{changed:Added,reused:Reused,cleanupIssues:CleanupIssues}))).
 
 validate_unique_ids(Prepared) :-
     findall(Id, (member(prepared(_,_,Records),Prepared), member(record(Id,_,_),Records)), Ids),
@@ -66,11 +198,12 @@ install_generation(Prepared, Expected, Start, Status) :-
     generation(Current),
     ( Expected == any ; Expected =:= Current ), !,
     stage_sources(Prepared, Staged),
-    catch((commit_generation(Staged, Current)->true;throw(error(generation_install_failed,_))), Error,
+    catch((commit_generation(Staged, Current, Obsolete)->true;throw(error(generation_install_failed,_))), Error,
           (cleanup_staged(Staged), throw(Error))),
+    cleanup_obsolete(Obsolete,CleanupIssues),
     statistics(walltime,[End,_]),Elapsed is (End-Start)/1000,
     retractall(generation_timing(_)),assertz(generation_timing(_{loadSeconds:Elapsed})),
-    status(Status).
+    status(Base),Status=Base.put(cleanupIssues,CleanupIssues).
 install_generation(_, Expected, _, _) :-
     generation(Current), throw(error(generation_conflict(Expected,Current), _)).
 
@@ -98,7 +231,7 @@ stage_source(prepared(Source,Info,Records), entry(Source,Info,Module,Native,Reco
             E, (cleanup_native(Native), throw(E)))
     ).
 
-commit_generation(Staged, Current) :-
+commit_generation(Staged, Current, Obsolete) :-
     findall(Native, (source_module(S,_,Native), \+ member(entry(S,_,_,Native,_,_),Staged)), Obsolete),
     transaction((
         retractall(source_info(_,_)), retractall(source_module(_,_,_)),
@@ -106,8 +239,7 @@ commit_generation(Staged, Current) :-
         maplist(activate_source, Staged),
         rebuild_rankings,
         retractall(generation(_)), Next is Current+1, assertz(generation(Next))
-    )),
-    maplist(cleanup_native, Obsolete).
+    )).
 
 activate_source(entry(Source,Info,Module,Native,Records,_)) :-
     assertz(source_info(Source,Info)), assertz(source_module(Source,Module,Native)),
@@ -147,7 +279,9 @@ signature(Head, _{term:Name,arity:Arity}) :-
 
 cleanup_staged([]).
 cleanup_staged([entry(_,_,_,Native,_,Reuse)|Rest]) :-
-    ( Reuse == true -> true ; cleanup_native(Native) ),
+    ( Reuse == true -> true
+    ; source_module(_,_,Native) -> true
+    ; cleanup_native(Native) ),
     cleanup_staged(Rest).
 cleanup_native(Native) :-
     kb_runtime:native_unload(Native),
@@ -155,6 +289,9 @@ cleanup_native(Native) :-
     file_directory_name(Native,Directory),
     ( exists_directory(Directory) -> delete_directory(Directory) ; true ).
 
+unload_source(Path, Expected, Status) :-
+    file_pool_caller, !,
+    kb_jobs:queue_unload(Path,Expected,Job),kb_jobs:await_result(Job.jobId,Status).
 unload_source(Path, Expected, Status) :-
     atom_string(Input,Path),repo_root(Root),
     absolute_file_name(Input,Absolute,[relative_to(Root),access(none)]),
@@ -233,6 +370,9 @@ diagnostic_text(Data,Message,Text) :-
 
 query_text(Text, MT, Limit, Timeout, Result) :-
     kb_reader:normalize_query(Text,Semantic,Names),
+    with_mutex(openworld_store,
+      query_semantic(Semantic,Names,MT,Limit,Timeout,Result)).
+query_semantic(Semantic,Names,MT,Limit,Timeout,Result) :-
     active_modules(Modules),
     kb_runtime:query_modules(Modules,Semantic,MT,Limit,Timeout,Solutions),
     maplist(solution_json(Names),Solutions,Values), Result=_{solutions:Values}.

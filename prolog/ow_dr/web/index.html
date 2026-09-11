@@ -3,7 +3,7 @@
 THESIS: A research workbench puts linked assertions and their evidence before decoration.
 OWN-WORLD: Cool paper, ink, cobalt links, square-edged records and readable system type.
 STORY: Inspect the active generation, follow symbols into context, and verify their source.
-FIRST VIEWPORT: A compact navigation rail frames search, live statistics and ranked vocabulary.
+FIRST VIEWPORT: Global navigation across the top; an optional Cyc contextual index beside linked assertions.
 FORM: The requested Cyc-style browser, with a shared expression canvas across every route.
 -->
 <html lang="en">
@@ -13,13 +13,15 @@ FORM: The requested Cyc-style browser, with a shared expression canvas across ev
   <meta name="color-scheme" content="light dark">
   <meta name="description" content="powder - Paraconsistent Open World Defeasible Epistemic Reasoner. Browse local knowledge bases, inspect assertion provenance, and query microtheory-scoped facts and rules.">
   <title>powder - Paraconsistent Open World Defeasible Epistemic Reasoner</title>
-  <link rel="stylesheet" href="/style.css">
-  <script type="module" src="/app.js"></script>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="presentation.css">
+  <link rel="stylesheet" href="classic-layout.css">
+  <script type="module" src="app.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#content">Skip to content</a>
   <div class="app-shell">
-    <aside class="sidebar" aria-label="Application navigation">
+    <header class="sidebar global-navigation" aria-label="Application navigation">
       <a class="brand" href="#/overview" aria-label="powder overview">
         <span class="brand-mark" aria-hidden="true">λ</span>
         <span class="brand-title">powder <span class="brand-subtitle">Paraconsistent Open World Defeasible Epistemic Reasoner</span></span>
@@ -31,14 +33,16 @@ FORM: The requested Cyc-style browser, with a shared expression canvas across ev
         <a href="#/microtheories" data-route="microtheories">Microtheories</a>
         <a href="#/query" data-route="query">Query console</a>
         <a href="#/sources" data-route="sources">KB Sources</a>
+        <a href="#/packs" data-route="packs">Source Packs</a>
         <a href="#/mappings" data-route="mappings">SUMO → CycL</a>
-        <a href="#/settings" data-route="settings">Settings</a>
+        <a href="#/ui-settings" data-route="ui-settings">UI Settings</a>
+        <a href="#/settings" data-route="settings">Runtime Settings</a>
       </nav>
       <div class="sidebar-footer">
         <span class="local-indicator">Local knowledge workspace</span>
         <span id="live-state" class="muted">Connecting to server…</span>
       </div>
-    </aside>
+    </header>
     <div class="workspace">
       <header class="workspace-header">
         <span id="generation-state" aria-live="polite">Loading active generation…</span>

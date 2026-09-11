@@ -94,9 +94,15 @@ metadata_item(xc_microtheory(_,Context),_{name:microtheory,value:AST}) :- !,
     term_ast(Context,[],AST).
 metadata_item(xc_mapping_rows(_,Rows),_{name:mapping_rows,value:Values}) :- !,
     mapping_rows_json(Rows,Values).
+metadata_item(xc_comments(_,Comments),_{name:comments,value:Values}) :-
+    is_list(Comments), !, maplist(comment_json,Comments,Values).
 metadata_item(Term, _{name:Name,value:Value}) :-
     Term =.. [Predicate,_,Raw], atom_concat(xc_, Name, Predicate),
     json_value(Raw, Value).
+comment_json(Comment,_{line:Line,column:Column,text:Text}) :-
+    nonvar(Comment),Comment=comment(Line,Column,Text),
+    integer(Line),Line>0,integer(Column),Column>0,string(Text), !.
+comment_json(Comment,Value) :- json_value(Comment,Value).
 mapping_rows_json(Rows,Values) :- maplist(mapping_row_json,Rows,Values).
 mapping_row_json(Row,Value) :- diagnostic_row(Row,Kind,Message), !,
     json_value(Message,Text),Value=_{type:Kind,message:Text}.
