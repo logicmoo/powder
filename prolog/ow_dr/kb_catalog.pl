@@ -44,7 +44,7 @@ windows_paths(Mode,Paths,Result) :-
 
 supported(File) :-
     file_name_extension(_,Ext0,File),downcase_atom(Ext0,Ext),
-    memberchk(Ext,[kif,krf,metta]).
+    memberchk(Ext,[kif,krf,meld,metta]).
 
 catalog_file(Start, Entry, Node) :-
     resolve_source(Entry.path,File),public_path(File,Public),
@@ -107,7 +107,8 @@ no_links_to_root(Path,Root) :-
 source_excerpt(Path,Line,Result) :-
     must_be(integer,Line),Line>0,Line=<100000000,
     authorize_sources([Path],[File]),Start is max(1,Line-10),
-    file_name_extension(_,Ext,File),(Ext==metta->Encoding=utf8;Encoding=iso_latin_1),
+    file_name_extension(_,Ext0,File),downcase_atom(Ext0,Ext),
+    (Ext==metta->Encoding=utf8;Encoding=iso_latin_1),
     setup_call_cleanup(open(File,read,S,[encoding(Encoding)]),
                        call_with_time_limit(2,excerpt_stream(S,1,Start,25,Lines)),close(S)),
     Result=_{path:Path,line:Line,start:Start,lines:Lines}.

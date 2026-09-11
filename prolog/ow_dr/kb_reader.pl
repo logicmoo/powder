@@ -1,5 +1,5 @@
 :- module(kb_reader,
-          [ read_source/4,
+          [ read_source/4, source_dialect/2,
             parse_text/4,
             normalize_query/3
           ]).
@@ -175,8 +175,9 @@ normalize_query(Text,Semantic,Names) :-
 
 source_dialect(File,Dialect) :-
     file_name_extension(_,Ext,File), downcase_atom(Ext,Lower),
-    ( memberchk(Lower,[kif,krf,metta]) -> Dialect=Lower
-    ; source_error(File,1,1,'Unsupported source extension (expected .kif, .krf or .metta)') ).
+    ( Lower==meld -> Dialect=krf
+    ; memberchk(Lower,[kif,krf,metta]) -> Dialect=Lower
+    ; Dialect=kif ).
 
 source_encoding(metta,Options,utf8) :- !,
     ( option(encoding(Other),Options), Other \== utf8
@@ -535,8 +536,8 @@ norm(n(_,_,var(Name,_)),_,_,Bound,S0,S,Var) :- !,
 norm(n(_,_,num(N)),_,_,_,S,S,N) :- !.
 norm(n(_,_,lexnum(_,N)),_,_,_,S,S,N) :- !.
 norm(n(_,_,str(Text)),_,_,_,S,S,Text) :- !.
-norm(n(_,_,sym(A)),_,_,_,S,S,Term) :- !, semantic_symbol(A,Term).
-norm(n(_,_,quoted(A)),_,_,_,S,S,Term) :- !, semantic_symbol(A,Term).
+norm(n(_,_,sym(A)),Dialect,_,_,S,S,Term) :- !, dialect_symbol(Dialect,A,Term).
+norm(n(_,_,quoted(A)),Dialect,_,_,S,S,Term) :- !, dialect_symbol(Dialect,A,Term).
 norm(n(_,_,mapped(A)),_,_,_,S,S,Term) :- !, semantic_symbol(A,Term).
 norm(n(_,_,quote(Node)),Dialect,File,Bound,S0,S,x_quote(Term)) :- !,
     norm(Node,Dialect,File,Bound,S0,S,Term).
@@ -619,6 +620,11 @@ nil_format_argument(Node) :-
 
 semantic_symbol(A,Symbol) :-
     (atom_concat('#$',Bare,A)->encode_symbol(Bare,Symbol);encode_symbol(A,Symbol)).
+
+dialect_symbol(metta,':','x_:') :- !.
+dialect_symbol(metta,'=','x_metta=') :- !.
+dialect_symbol(Dialect,'=',x_equals) :- memberchk(Dialect,[kif,krf]), !.
+dialect_symbol(_,Symbol,Encoded) :- semantic_symbol(Symbol,Encoded).
 
 normalized_application(H,Args,_,_,_,_,Term) :-
     ( var(H); compound(H) ), !, application(t,[H|Args],Term).

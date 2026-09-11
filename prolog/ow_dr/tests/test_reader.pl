@@ -697,7 +697,15 @@ test(metta_standalones_type_and_equation) :-
          assertion(metta_value("text"),[],_,_,_,_),
          assertion(metta_value(x_Atom),[],_,_,_,_),
          assertion('x_:'(x_f,x_Type),[],_,_,_,_),
-         assertion('x_='(x_f(X),Y),["$x"],_,_,_,_)]),X==Y.
+         assertion('x_metta='(x_f(X),Y),["$x"],_,_,_,_)]),X==Y.
+
+test(equality_is_dialect_specific_data) :-
+    forall(member(Dialect,[kif,krf]),
+      (one("(= ?X ?X)",Dialect,[],x_equals(X,Y),["?X"],_,[mapping_rows-[]],_),
+       X==Y)),
+    one("(= $x $x)",metta,[],'x_metta='(A,B),["$x"],_,[mapping_rows-[]],_),
+    A==B,
+    normalize_query("(= ?X ?X)",x_equals(P,Q),["?X"]),P==Q.
 
 test(occurrence_identity_ignores_layout_comments) :-
     one("(p ?X \"a\\nb\")",kif,[],_,_,_,_,K1),

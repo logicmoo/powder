@@ -52,6 +52,17 @@ test('an empty MeTTa expression is distinct from an explicit empty list', () => 
   assert.equal(expressionText({ type: 'execute', value: { type: 'empty' } }), '!()');
 });
 
+test('MeTTa equations and type data render distinctly from Cyc equality', () => {
+  const equation = application('metta=', application('f', variable('$x')), variable('$x'));
+  assert.equal(expressionText(equation, { pretty: false }), '(metta= (f $x) $x)');
+  assert.equal(expressionTokens(equation).find(token => token.text === 'metta=').href,
+    routeHref('term', { term: 'x_metta=' }));
+  assert.equal(expressionText(application('equals', symbol('a'), symbol('b'))), '(equals a b)');
+  assert.equal(expressionText(application(':', symbol('s'), symbol('TypeName'))), '(: s TypeName)');
+  assert.equal(expressionText(application(':', symbol('s'), application('->', symbol('Atom'), symbol('Atom'))),
+    { pretty: false }), '(: s (-> Atom Atom))');
+});
+
 test('compound and variable predicate positions render their source applications', () => {
   assert.equal(expressionText(application(variable('?P'), symbol('a')), { pretty: false }), '(?P a)');
   assert.equal(expressionText(application(application('a', symbol('b')), application('c', symbol('d'))), { pretty: false }), '((a b) (c d))');

@@ -40,6 +40,18 @@ test('active manifest initializes directory tri-state without changing the manif
   assert.equal(model.dirty, false);
 });
 
+test('MeTTa and MELD are selectable sources but their cache companions are not', () => {
+  const paths = ['KBs/program.metta', 'KBs/facts.meld', 'KBs/UPPER.MELD'];
+  const model = new SourceSelection([
+    ...paths.map(path => file(path)),
+    ...paths.flatMap(path => [file(`${path}.pl`), file(`${path}.index.pl`)]),
+    file('KBs/typo.melf'),
+  ], paths);
+  assert.deepEqual(model.selectedFiles(), paths);
+  paths.forEach(path => assert.ok(supportedSource(path)));
+  assert.equal(supportedSource('KBs/typo.melf'), false);
+});
+
 test('clicking an indeterminate directory selects all and child exclusions remain concrete', () => {
   const model = new SourceSelection(nodes, ['KBs/alpha/a.kif']);
   model.setSelected('KBs/alpha');

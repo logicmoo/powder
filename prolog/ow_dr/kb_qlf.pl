@@ -20,8 +20,8 @@ qlf_schema(powder_dynamic_qlf_v1).
 
 companion_path(Input,File) :-
     absolute_file_name(Input,File,[access(read)]),
-    (file_name_extension(Source,pl,File),file_name_extension(_,Dialect,Source),
-     memberchk(Dialect,[krf,kif,metta])->true;domain_error(compiled_kb_companion,Input)).
+    (file_name_extension(Source,pl,File),kb_compile:supported_source(Source)->true;
+     domain_error(compiled_kb_companion,Input)).
 paths(File,QLF,Metadata,StageSource) :-
     (file_name_extension(Base,pl,File)->true;Base=File),
     file_name_extension(Base,qlf,QLF),atom_concat(QLF,'.meta.pl',Metadata),
@@ -258,12 +258,12 @@ input_companion(Input,File) :-
     (exists_directory(Input),current_prolog_flag(windows,true)->
       kb_compile:windows_native_entries(files,Input,Entries),member(Entry,Entries),
       atom_string(Child,Entry.path),
-      file_name_extension(Source,pl,Child),file_name_extension(_,D,Source),
-      memberchk(D,[kif,krf,metta]),companion_path(Child,File)
+      file_name_extension(Source,pl,Child),kb_compile:supported_source(Source),
+      companion_path(Child,File)
     ;exists_directory(Input)->
       directory_files(Input,Names),member(Name,Names),Name\=='.',Name\=='..',
       directory_file_path(Input,Name,Child),
       (exists_directory(Child)-> \+read_link(Child,_,_),input_companion(Child,File)
-      ;file_name_extension(Source,pl,Child),file_name_extension(_,D,Source),
-       memberchk(D,[kif,krf,metta]),companion_path(Child,File))
+      ;file_name_extension(Source,pl,Child),kb_compile:supported_source(Source),
+       companion_path(Child,File))
     ;companion_path(Input,File)).

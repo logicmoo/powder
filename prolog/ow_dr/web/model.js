@@ -20,7 +20,7 @@ export function canonicalPath(path) {
 }
 
 export function supportedSource(path) {
-  return Boolean(canonicalPath(path) && /\.(kif|krf|metta)$/iu.test(path));
+  return Boolean(canonicalPath(path) && /\.(kif|krf|meld|metta)$/iu.test(path));
 }
 
 export function positiveInteger(value, fallback, maximum = Number.MAX_SAFE_INTEGER, minimum = 0) {

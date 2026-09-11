@@ -66,12 +66,12 @@ initialize_implementation_identity :-
 
 supported_source(Path) :-
     file_name_extension(_,Ext,Path),downcase_atom(Ext,Lower),
-    memberchk(Lower,[kif,krf,metta]).
+    memberchk(Lower,[kif,krf,meld,metta]).
 
 source_absolute(Input,File) :-
     absolute_file_name(Input,Canonical,[access(none),file_errors(error)]),
     (current_prolog_flag(windows,true),
-     (exists_directory(Canonical);supported_source(Canonical),exists_file(Canonical))
+     (exists_directory(Canonical);exists_file(Canonical))
     ->preserve_source_case(Canonical,File)
     ;File=Canonical).
 
@@ -117,12 +117,11 @@ discover_sources(Paths,Files) :-
 discover_sources_cached(Paths,Files) :-
     must_be(list,Paths),
     maplist(source_absolute,Paths,Abs),
-    forall(member(Path,Abs),
-      (exists_file(Path),\+supported_source(Path)
-      ->domain_error(kb_source,Path);true)),
+    partition(exists_directory,Abs,Directories,ExplicitFiles),
     (current_prolog_flag(windows,true)
-    ->windows_discover_sources(Abs,All)
-    ;empty_assoc(Seen),discover_queue(Abs,Seen,_,All,[])),
+    ->windows_discover_sources(Directories,Discovered)
+    ;empty_assoc(Seen),discover_queue(Directories,Seen,_,Discovered,[])),
+    append(ExplicitFiles,Discovered,All),
     sort(All,Files).
 
 windows_discover_sources(Paths,Files) :-
@@ -209,7 +208,7 @@ compile_source_cached(Input,Options,Result) :-
     must_be(list,Options),
     implementation_hash(_),
     source_absolute(Input,File),
-    (supported_source(File)->true;domain_error(kb_source,File)),
+    (exists_directory(File)->type_error(file,File);true),
     monotonic_seconds(Start),
     atom_concat(File,'.pl',Normal),atom_concat(File,'.index.pl',Index),
     atom_concat(Normal,'.lock',LockPath),
@@ -334,7 +333,7 @@ source_unchanged(File,Expected) :-
 cache_identity(Input,Options,Identity) :-
     source_absolute(Input,File),
     file_digest(File,Hash),size_file(File,Size),
-    file_name_extension(_,Ext,File),downcase_atom(Ext,Dialect),
+    source_dialect(File,Dialect),
     option(features(Features0),Options,[]),sort(Features0,Features),
     option(strict_mappings(Strict),Options,false),
     option(sumo_mappings(Sumo),Options,auto),
@@ -658,7 +657,7 @@ source_artifacts(Source,Artifacts) :-
     file_directory_name(Source,Dir),file_base_name(Source,Base),
     (exists_directory(Dir)
     ->directory_files(Dir,Names),
-      findall(Path,(member(Name,Names),artifact_source(Name,Candidate),
+      findall(Path,(member(Name,Names),artifact_source_name(Name,Candidate),
                     source_name_equal(Candidate,Base),
                     directory_file_path(Dir,Name,Path)),Artifacts)
     ;Artifacts=[]).
@@ -671,11 +670,12 @@ path_prefix(Prefix,Path) :-
     ;atom_concat(Prefix,_,Path)).
 
 artifact_source(Name,Source) :-
-    atom_concat(Source,'.pl.tmp',Name),supported_source(Source),!.
-artifact_source(Name,Source) :-
+    artifact_source_name(Name,Source),supported_source(Source).
+artifact_source_name(Name,Source) :-
+    atom_concat(Source,'.pl.tmp',Name),!.
+artifact_source_name(Name,Source) :-
     (sub_atom(Name,Before,10,_,'.pl.stage.'),sub_atom(Name,0,Before,_,Source)
     ;sub_atom(Name,Before,16,_,'.index.pl.stage.'),sub_atom(Name,0,Before,_,Source)),
-    supported_source(Source),
     (atom_concat(Source,'.pl.stage.',Prefix);atom_concat(Source,'.index.pl.stage.',Prefix)),
     atom_concat(Prefix,Token,Name),uuid_token(Token).
 
@@ -701,7 +701,7 @@ windows_recovery_sources(Paths,Sources) :-
     windows_selection(Paths,Roots,SelectedFiles),
     maplist(windows_recovery_directory,Roots,Groups),
     append(Groups,Discovered),
-    findall(File,(member(File,SelectedFiles),supported_source(File),
+    findall(File,(member(File,SelectedFiles),
                   source_artifacts(File,Artifacts),Artifacts\=[]),Direct),
     append(Discovered,Direct,Sources).
 
@@ -723,6 +723,6 @@ recovery_candidate(Path,Source) :-
     -> \+catch(read_link(Child,_,_),_,fail),recovery_candidate(Child,Source)
     ;artifact_source(Name,Base),directory_file_path(Path,Base,Source)).
 recovery_candidate(Path,Path) :-
-    supported_source(Path),source_artifacts(Path,Artifacts),Artifacts\=[].
+    source_artifacts(Path,Artifacts),Artifacts\=[].
 
 :- initialization(initialize_implementation_identity).

@@ -67,4 +67,5 @@ usage :-
     format('  --force --edit --editor=COMMAND --no-progress --progress=plain~n',[]),
     format('  --strict-mappings --recover-tmp --force-recover~n',[]),
     format('  --state-dir=PATH --encoding=utf8 --features=feature1,feature2~n',[]),
+    format('Explicit files without a recognized extension use KIF; directories discover .kif, .krf, .meld and .metta only.~n',[]),
     format('Exit: 0 success; 1 source failure; 2 usage/setup error; 3 busy/deferred.~n',[]).

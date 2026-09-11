@@ -19,6 +19,9 @@ test('Windows native catalog rejects junctions and transports literal paths', { 
   mkdirSync(root); mkdirSync(outside);
   const original = join(root, "literal ' $name.kif");
   writeFileSync(original, '(isa a b)');
+  const metta = join(root, 'program.metta'), meld = join(root, 'facts.MELD');
+  writeFileSync(metta, '(= (f $x) $x)');
+  writeFileSync(meld, '(instance a Class)');
   writeFileSync(join(root, 'cache.kif.pl'), 'must not be cataloged');
   writeFileSync(join(outside, 'escape.krf'), '(isa private outside)');
   symlinkSync(outside, join(root, 'linked'), 'junction');
@@ -26,8 +29,8 @@ test('Windows native catalog rejects junctions and transports literal paths', { 
     const catalog = invoke(root, 'catalog');
     assert.equal(catalog.status, 0, catalog.stderr);
     const rows = JSON.parse(catalog.stdout);
-    assert.deepEqual(rows.map(row => resolve(row.path)), [resolve(original)]);
-    assert.equal(invoke(root, 'authorize', [original]).status, 0);
+    assert.deepEqual(rows.map(row => resolve(row.path)).sort(), [original, metta, meld].map(path => resolve(path)).sort());
+    assert.equal(invoke(root, 'authorize', [original, metta, meld]).status, 0);
     assert.notEqual(invoke(root, 'authorize', [join(root, 'linked', 'escape.krf')]).status, 0);
     assert.notEqual(invoke(root, 'authorize', [join(outside, 'escape.krf')]).status, 0);
     assert.notEqual(invoke(root, 'authorize', [join(root, 'cache.kif.pl')]).status, 0);

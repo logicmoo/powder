@@ -51,7 +51,7 @@ canonical_source(Input,Source) :-
     atom_string(Path,Input),repo_root(Root),
     absolute_file_name(Path,Source,[relative_to(Root),access(none)]),
     file_name_extension(_,Ext,Source),downcase_atom(Ext,Lower),
-    (memberchk(Lower,[kif,krf,metta]),\+exists_directory(Source)->true;
+    (memberchk(Lower,[kif,krf,meld,metta]),\+exists_directory(Source)->true;
       domain_error(startup_source_file,Input)).
 unique_order([],_,[]).
 unique_order([Path|Paths],Seen,Unique) :-

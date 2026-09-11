@@ -35,7 +35,7 @@ the JavaScript tests.
 
 ## Offline compiler
 
-Supported input extensions are `.kif`, `.krf`, and `.metta`. Selections may be files,
+Supported input extensions are `.kif`, `.krf`, `.meld`, and `.metta`. Selections may be files,
 directories, or overlapping combinations. Companions are adjacent to each source:
 
 ```text
@@ -43,6 +43,27 @@ example.kif
 example.kif.pl
 example.kif.index.pl
 ```
+
+An explicitly supplied filename with no extension or an unrecognized extension
+is read as KIF, without renaming it. `.meld` is an alias for KRF, with the same
+encoding, reader conditionals and no-SUMO-mapping policy as `.krf`.
+`.krf`, `.meld`, and `.metta` always retain their own
+readers. This applies to both the compiler and `app.pl`; directory discovery and
+the browser source catalog still select only `.kif`, `.krf`, `.meld`, and `.metta`.
+For recovery of an extensionless/custom-extension source, supply that file
+explicitly rather than its directory.
+
+```powershell
+swipl .\prolog\ow_dr\compile_kb.pl -- KBs\my-data.metta
+swipl .\prolog\ow_dr\app.pl -- KBs\my-data.metta
+swipl .\prolog\ow_dr\app.pl -- C:\data\facts.txt
+```
+
+MeTTa companions are `my-data.metta.pl` and `my-data.metta.index.pl`.
+These cache inert browsing data; they are not executable translations of
+MeTTa functions. Equations, type declarations and `!(...)` are not evaluated.
+MELD companions retain their source extension: `my-data.meld.pl` and
+`my-data.meld.index.pl`.
 
 Useful options, placed after `--` and before the selected paths:
 
@@ -99,6 +120,11 @@ dict. Explicit lists take precedence. Invalid or duplicate map keys are errors.
 Reserved structural wrappers are `metta_value/1`, `metta_exec/1`, and
 `metta_expression([])` for standalone values, inert `!(...)`, and empty `()`.
 These wrappers and the dict tag are not semantic constants.
+MeTTa equations such as `(= (f $x) $x)` are stored as `x_metta=`,
+displayed as `(metta= (f $x) $x)`. They remain inert equation data.
+KIF/KRF `=` instead uses `x_equals` (Cyc `equals`); it is not Prolog
+unification. MeTTa type declarations such as `(: s TypeName)` and
+`(: s (-> Atom Atom))` remain ordinary data too; types are not enforced.
 
 KIF/KRF interpret `genFormat` argument 3 as list data. They also interpret
 argument 2 of **any predicate starting with `do`** as list data, but only when

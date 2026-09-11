@@ -8,7 +8,7 @@ $rootInfo = [System.IO.DirectoryInfo]::new($Root)
 $reparse = [System.IO.FileAttributes]::ReparsePoint
 if (($rootInfo.Attributes -band $reparse) -ne 0) { throw 'KB root is a reparse point' }
 $prefix = $rootInfo.FullName.TrimEnd('\') + '\'
-$supported = @('.kif', '.krf', '.metta')
+$supported = @('.kif', '.krf', '.meld', '.metta')
 $result = [System.Collections.Generic.List[object]]::new()
 if ($Mode -eq 'authorize') {
     $PathsJson = [Console]::In.ReadToEnd()
