@@ -95,7 +95,8 @@ test(krf_never_mapped_even_opt_in) :-
     Text=";; logos: sumo-mappings\n(=> (instance ?X Class) (exists (IndexicalFn currentRole)))",
     one(Text,krf,[sumo_mappings(true),strict_mappings(true)],Term,["?X"],_,Props,_),
     Term='x_=>'(x_instance(_,x_Class),x_exists(x_IndexicalFn(x_currentRole))),
-    Props==[mapping_rows-[]].
+    memberchk(mapping_rows-[],Props),
+    memberchk(comments-[comment(1,1,";; logos: sumo-mappings")],Props).
 
 test(krf_feature_default_and_executable) :-
     Text="#-:rc4 (p old) #+:rc4 (p new) #-:executable (q kept)",
@@ -647,7 +648,9 @@ check_mapping_anomaly_row(Path) :-
     read_source(Path,[diagnostics(false)],
                 [assertion(x_part(x_isa(x_a,x_Thing)),[],_,2,Properties,_)],Info),
     Info.warnings=[warning(Path,2,1,Message)],
-    Properties==[mapping_rows-['instance-isa','entity-thing',warnings(Message)],warnings-[Message]].
+    memberchk(mapping_rows-['instance-isa','entity-thing',warnings(Message)],Properties),
+    memberchk(warnings-[Message],Properties),
+    memberchk(comments-[comment(1,1,";; logos: sumo-mappings")],Properties).
 
 test(mapping_id_order_and_multiplicity_are_preserved_before_warning_rows) :-
     Text="(and (instance a Entity) (ordinary (1 2)) (instance b Entity))",
@@ -939,7 +942,7 @@ table_text(Rows,Text) :-
 
 test(real_original_tinykb_readonly) :-
     test_directory(Dir),
-    directory_file_path(Dir,'..\\..\\..\\KBs\\tinyKB.kif',Relative),
+    directory_file_path(Dir,'..\\..\\..\\KBs\\sumo\\tinyKB.kif',Relative),
     absolute_file_name(Relative,Path),
     crypto_file_hash(Path,Before,[algorithm(sha256)]),
     get_time(Start),

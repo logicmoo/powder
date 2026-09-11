@@ -85,6 +85,7 @@ creator and creation_date properties.
 :- use_module(kb_mappings).
 
 :- dynamic source_case_cache/3.
+:- thread_local collecting_comments/2.
 
 read_source(File,Options,Assertions,Info) :-
     must_be(atom,File), must_be(list,Options),
@@ -98,6 +99,16 @@ read_source(File,Options,Assertions,Info) :-
         close(Stream)).
 
 read_source_stream(Stream,File,Dialect,Features,Options,Assertions,Info) :-
+    flag(powder_comment_capture,N,N+1),atom_concat(powder_comments_,N,Key),
+    State=comments([],[],0),
+    setup_call_cleanup(
+      (nb_linkval(Key,State),asserta(collecting_comments(Stream,Key),Ref)),
+      read_source_body(Stream,File,Dialect,Features,Options,Plain,BaseInfo),
+      (erase(Ref),nb_delete(Key))),
+    attach_source_comments(State,Plain,Assertions,FileComments),
+    Info=BaseInfo.put(comments,FileComments).
+
+read_source_body(Stream,File,Dialect,Features,Options,Assertions,Info) :-
     initialize_progress(File,Options,ProgressOptions),
     leading_trivia(Stream,File,Leading),
     source_mapping_mode(File,Dialect,Leading,Options,Mode),
@@ -300,8 +311,10 @@ read_assertions(Stream,Ctx,Mt,DirectiveProps,Assertions,Warnings) :-
     ; Ctx=ctx(File,Dialect,_,_,_),
       ( Dialect\==metta, microtheory_declaration(Node)
       -> parse_microtheory(Node,File,NewMt,NewProps),
+         record_form_span(Stream,Node,ignored),
          read_assertions(Stream,Ctx,NewMt,NewProps,Assertions,Warnings)
       ; source_assertion(Node,Ctx,Mt,DirectiveProps,Assertion,LocalWarnings),
+        record_form_span(Stream,Node,assertion),
         Assertions=[Assertion|Tail],
         append(LocalWarnings,MoreWarnings,Warnings),
         read_assertions(Stream,Ctx,Mt,DirectiveProps,Tail,MoreWarnings)
@@ -688,9 +701,10 @@ next_form(Stream,Ctx,Node) :-
     Ctx=ctx(File,_,_,_,_), skip_trivia(Stream,File),
     peek_code(Stream,Code),
     ( Code=:= -1 -> Node=end_of_file
-    ; read_node(Stream,Ctx,Read),
+    ; stream_location(Stream,Line,Column),read_node(Stream,Ctx,Read),
       tick_progress(Stream,Ctx),
-      ( Read==skip -> next_form(Stream,Ctx,Node) ; Node=Read ) ).
+      ( Read==skip -> record_form_span(Stream,n(Line,Column,skip),ignored),
+                     next_form(Stream,Ctx,Node) ; Node=Read ) ).
 
 read_node(Stream,Ctx,Node) :-
     Ctx=ctx(File,Dialect,_,_,_),
@@ -843,23 +857,72 @@ trivia(Stream,File,Chunks,Tail) :-
     ( C=:=0xfeff -> get_code(Stream,_), trivia(Stream,File,Chunks,Tail)
     ; code_type(C,space) -> get_code(Stream,_), trivia(Stream,File,Chunks,Tail)
     ; C=:=0';
-    -> read_line_to_string(Stream,Line), Chunks=[Line|More],
+    -> stream_location(Stream,L,Col),read_line_to_string(Stream,Line), Chunks=[Line|More],
+       record_source_comment(Stream,L,Col,Line),
        trivia(Stream,File,More,Tail)
     ; C=:=0'#, peek_string(Stream,2,"#|")
     -> stream_location(Stream,L,Col), get_code(Stream,_), get_code(Stream,_),
-       block_comment(Stream,File,L,Col,1),
+       block_comment(Stream,File,L,Col,1,Codes,[]),
+       string_codes(Text,[0'#,0'||Codes]),record_source_comment(Stream,L,Col,Text),
        trivia(Stream,File,Chunks,Tail)
     ; Chunks=Tail ).
 
-block_comment(Stream,File,L,C,Depth) :-
+block_comment(Stream,File,L,C,Depth,Codes,Tail) :-
     get_code(Stream,Code),
     ( Code=:= -1 -> source_error(File,L,C,'Unterminated block comment')
     ; Code=:=0'#, peek_code(Stream,0'|)
-    -> get_code(Stream,_), D is Depth+1, block_comment(Stream,File,L,C,D)
+    -> get_code(Stream,_),Codes=[0'#,0'||Rest],
+       D is Depth+1, block_comment(Stream,File,L,C,D,Rest,Tail)
     ; Code=:=0'|, peek_code(Stream,0'#)
-    -> get_code(Stream,_), D is Depth-1,
-       ( D=:=0 -> true ; block_comment(Stream,File,L,C,D) )
-    ; block_comment(Stream,File,L,C,Depth) ).
+    -> get_code(Stream,_),Codes=[0'|,0'#|Rest],D is Depth-1,
+       ( D=:=0 -> Rest=Tail ; block_comment(Stream,File,L,C,D,Rest,Tail) )
+    ; Codes=[Code|Rest],block_comment(Stream,File,L,C,Depth,Rest,Tail) ).
+
+comment_state(Stream,State) :-
+    collecting_comments(Stream,Key),nb_current(Key,State).
+record_source_comment(Stream,Line,Column,Text) :-
+    (comment_state(Stream,State)->
+      arg(1,State,Before),nb_linkarg(1,State,[comment(Line,Column,Text)|Before])
+    ;true).
+record_form_span(Stream,n(Line,Column,_),Kind) :-
+    (comment_state(Stream,State)->
+      (Kind==assertion->arg(3,State,N),Target is N+1,nb_setarg(3,State,Target);Target=none),
+      stream_location(Stream,EndLine,EndColumn),arg(2,State,Before),
+      nb_linkarg(2,State,[span(pos(Line,Column),pos(EndLine,EndColumn),Target)|Before])
+    ;true).
+
+attach_source_comments(comments(Reversed,SpanReversed,_),Plain,Assertions,FileComments) :-
+    reverse(Reversed,Comments),reverse(SpanReversed,Spans),empty_assoc(Empty),
+    foldl(allocate_comment,Comments,allocation(Spans,none,Empty,[]),allocation(_,_,ByOwner,Orphans)),
+    attach_assertion_comments(Plain,1,ByOwner,Spans,Assertions),reverse(Orphans,FileComments).
+allocate_comment(Comment,allocation(Spans,Previous,Before,Orphans),
+                        allocation(Remaining,Last,After,Unassigned)) :-
+    Comment=comment(Line,Column,_),
+    comment_owner(pos(Line,Column),Spans,Previous,Owner,Remaining,Last),
+    (Owner==none->After=Before,Unassigned=[Comment|Orphans];
+      (get_assoc(Owner,Before,Existing)->true;Existing=[]),
+      put_assoc(Owner,Before,[Comment|Existing],After),Unassigned=Orphans).
+comment_owner(Position,[span(Start,End,Target)|Spans],Previous,Owner,Remaining,Last) :-
+    (Position @=< End->
+      (Position @< Start,same_line_trailer(Position,Previous,Prior)->Owner=Prior;Owner=Target),
+      Remaining=[span(Start,End,Target)|Spans],Last=Previous
+    ;comment_owner(Position,Spans,span(Start,End,Target),Owner,Remaining,Last)).
+comment_owner(Position,[],Previous,Owner,[],Previous) :-
+    (same_line_trailer(Position,Previous,Target)->Owner=Target;Owner=none).
+same_line_trailer(pos(Line,Column),span(_,pos(Line,EndColumn),Target),Target) :-
+    Column>=EndColumn.
+attach_assertion_comments([],_,_,_,[]).
+attach_assertion_comments([assertion(S,Names,Mt,Line,Props,Key)|Rest],N,Owners,Spans,
+                          [assertion(S,Names,Mt,Line,WithComments,Key)|Assertions]) :-
+    assertion_span(N,Spans,Span,Remaining),
+    (get_assoc(N,Owners,Reversed)->reverse(Reversed,Comments),
+      append(Props,[comments-Comments,comment_association-proximity_guess(Span)],WithComments)
+    ;WithComments=Props),
+    Next is N+1,attach_assertion_comments(Rest,Next,Owners,Remaining,Assertions).
+assertion_span(N,[span(pos(L,C),pos(EL,EC),N)|Rest],span(L,C,EL,EC),Rest) :- !.
+assertion_span(N,[span(_,_,none)|Rest],Span,Remaining) :- !,
+    assertion_span(N,Rest,Span,Remaining).
+assertion_span(N,_,_,_) :- throw(error(missing_assertion_comment_span(N),_)).
 
 stream_location(Stream,Line,Column) :-
     stream_property(Stream,position(Position)),
