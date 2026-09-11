@@ -1,9 +1,0 @@
-kb_index_header(index_header{count:2,digest:'9aca9c12f3b0ceb93f47d6f10159fd5fff7b620a944ff5c765b02729f6186076',normalizedDigest:d0ea8e97194bd053f175d2f8fffbaa9ac2a0be6bb74f3ae132afbe831ed76dc9,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/SimpleAstronomyMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/SimpleAstronomyMt.krf',sourceHash:a58f2fb76b20a089715cf39f99a8ca60144d12659c0f94d94d9fbd1a2fbd9c91}).
-kb_index_data(index{constants:[-(x_CoronaOfStar,1),-('x_Plasma-StateOfMatter',2),-(x_Star,1),-(x_genls,2)],entries:[entry(a65b127720c52b,signature(x_genls,2),x_SimpleAstronomyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/SimpleAstronomyMt.krf',3,[x_CoronaOfStar,'x_Plasma-StateOfMatter',x_genls]),entry(a65b127720c52c,signature(x_genls,2),x_SimpleAstronomyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/SimpleAstronomyMt.krf',4,['x_Plasma-StateOfMatter',x_Star,x_genls])],predicates:[-(signature(x_genls,2),2)],rankedConstants:[-(2,x_genls),-(2,'x_Plasma-StateOfMatter'),-(1,x_Star),-(1,x_CoronaOfStar)],rankedPredicates:[-(2,signature(x_genls,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/SimpleAstronomyMt.krf'}).
-xc_indexed_constant(a65b127720c52b,x_CoronaOfStar).
-xc_indexed_constant(a65b127720c52b,'x_Plasma-StateOfMatter').
-xc_indexed_constant(a65b127720c52b,x_genls).
-xc_indexed_constant(a65b127720c52c,'x_Plasma-StateOfMatter').
-xc_indexed_constant(a65b127720c52c,x_Star).
-xc_indexed_constant(a65b127720c52c,x_genls).
-kb_index_footer(2,'9aca9c12f3b0ceb93f47d6f10159fd5fff7b620a944ff5c765b02729f6186076',b6a84fd0278bfd2b6126aea21ed315864e4eaceda9a785608a11ef4a22c01119).

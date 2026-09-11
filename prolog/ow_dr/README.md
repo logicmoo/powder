@@ -13,14 +13,14 @@ Set-Location C:\snet\PeTTa\repos\openworld_dr
 
 # Compile the collection, or just the initial KB.
 swipl .\prolog\ow_dr\compile_kb.pl -- KBs
-swipl .\prolog\ow_dr\compile_kb.pl -- KBs\tinyKB.kif
+swipl .\prolog\ow_dr\compile_kb.pl -- KBs\sumo\tinyKB.kif
 
-# Start the browser with exactly KBs\tinyKB.kif.
+# Start the browser with exactly KBs\sumo\tinyKB.kif.
 swipl .\prolog\ow_dr\app.pl
 
 # Select different sources or a different local port.
-swipl .\prolog\ow_dr\app.pl -- --port=8080 KBs\Merge.kif
-swipl .\prolog\ow_dr\app.pl -- --kb-source=KBs\tinyKB.kif --kb-source=KBs\example.kif
+swipl .\prolog\ow_dr\app.pl -- --port=8080 KBs\sumo\Merge.kif
+swipl .\prolog\ow_dr\app.pl -- --kb-source=KBs\sumo\tinyKB.kif --kb-source=KBs\examples\example.kif
 ```
 
 The default address is **http://localhost:3050/**, bound to the loopback interface.
@@ -36,13 +36,32 @@ the JavaScript tests.
 ## Offline compiler
 
 Supported input extensions are `.kif`, `.krf`, `.meld`, and `.metta`. Selections may be files,
-directories, or overlapping combinations. Companions are adjacent to each source:
+directories, or overlapping combinations. Originals under repository `KBs` have
+their generated loading caches mirrored under repository `tmp\KBs`:
 
 ```text
-example.kif
-example.kif.pl
-example.kif.index.pl
+KBs\examples\example.kif
+tmp\KBs\examples\example.kif.data
+tmp\KBs\examples\example.kif.index.data
 ```
+
+These `.data` files still contain validated Prolog terms, not a different source
+language. The suffix distinguishes generated loading data from application code.
+Locks, claims (`.data.tmp`), and unique stages are alongside those generated caches,
+not the originals. Cache directories are created before taking the native lock.
+Files explicitly selected outside repository `KBs`, including test fixtures,
+retain adjacent `.data` and `.index.data` companions.
+Source statistics are **not loading caches**: `*.inventory.json` remains beside
+its original source, and microtheory statistics remain in `KBs\microtheory`.
+
+The shared `kb_paths` helpers return absolute, Windows-case-canonical paths,
+independent of the working directory (relative helper inputs are repository-root
+relative). `cache_source_base(Source,Base)` mirrors the original relative path;
+`cache_paths(Source,Normal,Index)` appends `.data` and `.index.data`.
+`cache_root/1` returns `tmp\KBs`, and `runtime_root/1` returns `tmp\runtime`.
+`cache_original_source(Base,Source)` reverses a mirrored base, including missing
+originals; callers remove artifact suffixes before using it. External bases are
+unchanged apart from absolute-path canonicalization.
 
 An explicitly supplied filename with no extension or an unrecognized extension
 is read as KIF, without renaming it. `.meld` is an alias for KRF, with the same
@@ -59,11 +78,11 @@ swipl .\prolog\ow_dr\app.pl -- KBs\my-data.metta
 swipl .\prolog\ow_dr\app.pl -- C:\data\facts.txt
 ```
 
-MeTTa companions are `my-data.metta.pl` and `my-data.metta.index.pl`.
+MeTTa companions are `my-data.metta.data` and `my-data.metta.index.data`.
 These cache inert browsing data; they are not executable translations of
 MeTTa functions. Equations, type declarations and `!(...)` are not evaluated.
-MELD companions retain their source extension: `my-data.meld.pl` and
-`my-data.meld.index.pl`.
+MELD companions retain their source extension: `my-data.meld.data` and
+`my-data.meld.index.data`.
 
 Useful options, placed after `--` and before the selected paths:
 
@@ -95,7 +114,38 @@ Recovery modes inspect known compiler claim/stage artifacts only. They do not
 mean a fresh compilation of the whole selection. `--recover-tmp` validates and
 recovers abandoned work; `--force-recover` rebuilds only affected interrupted
 sources. Neither overrides a live native lock. Ordinary `--force` rebuilds every
-selected source.
+selected source. Selecting a `KBs` directory for recovery scans its mirrored
+`tmp\KBs` subtree, not every original source; artifact paths are translated back
+to originals before validation or recompilation. Missing originals are reported
+as failures. Legacy `.pl` artifacts and adjacent artifacts under `KBs` must be migrated first;
+external sources retain adjacent recovery. Unrelated temporary files are ignored.
+
+The offline QLF converter accepts explicit `.kif.data`, `.krf.data`, `.meld.data`,
+and `.metta.data` companions, as well as legacy `.pl` inputs. A source-directory selection discovers originals and
+selects their mapped companions without parsing source content or mappings.
+A `tmp\KBs` directory selection discovers cached companions directly.
+QLF outputs replace the final `.data` (or legacy `.pl`) with `.qlf` beside the
+selected cache. Metadata is `.qlf.meta.data`, and the retained staging source is
+`.qlf-stage.data`; SWI `qcompile/2` accepts this exact `.data` filename and creates
+`.qlf-stage.qlf` before installation as `.qlf`. Direct external companions keep
+their existing location. The converter still verifies ownership and artifact
+identity; renaming an old bundle does not make obsolete embedded paths current.
+
+For a mirrored base `tmp\KBs\examples\example.kif`, compiler artifacts are:
+
+```text
+example.kif.data
+example.kif.index.data
+example.kif.data.lock
+example.kif.data.tmp
+example.kif.data.stage.UUID
+example.kif.index.data.stage.UUID
+```
+
+The stable lock is retained; claims and owned stages are removed after successful
+work. QLF conversion retains `.qlf.lock`, `.qlf`, `.qlf.meta.data`, and
+`.qlf-stage.data`. Its unique write stages append `.stage.UUID` to the data
+metadata/staging names. Source inventories are not renamed.
 
 ## Dialects and mappings
 
@@ -192,15 +242,27 @@ assertion errors with invented line numbers.
 Normalized caches contain `kb_cache_header/1` and `kb_cache_footer/1` with schema,
 converter, source/mapping/options identities, assertion count, normalized digest,
 and header digest. `normalizedFile` records the full absolute origin path of the
-generated `.kif.pl`, `.krf.pl`, or `.metta.pl` companion in both normalized and
+generated `.kif.data`, `.krf.data`, `.meld.data`, or `.metta.data` companion in both normalized and
 index headers; it remains unchanged in runtime snapshot copies. Older headers
 without this optional field remain readable. Raw readers validate these records and guarded clause
 structure as data; they do not consult arbitrary directives.
+When the reader supplies file-level/orphan comments, the cache header preserves
+the ground list as optional `sourceComments`. Assertion comments remain
+`xc_comments(Id,[comment(Line,Column,Text),...])` metadata. Comment text, including
+embedded newlines, uses the same one-line term serialization and header/payload
+integrity checks; older reader results without the optional field remain valid.
+`xc_comment_association(Id,proximity_guess(span(StartLine,StartColumn,EndLine,EndColumn)))`
+marks assertion attachment as a first-pass proximity heuristic, not semantic
+evidence; the source span's end position is exclusive.
+Compiler freshness checks include the resolved cache location and implementation
+identity. Moved caches with obsolete source/origin paths or implementation hashes
+are stale, not silently trusted. Compiler results always report the resolved
+physical output path, never an obsolete header path.
 
 IDs are atoms formed by `a` plus the hexadecimal full Unix-microsecond value.
 Native locks protect the durable allocator and occurrence assignments.
 `--state-dir=PATH` selects the durable state directory; it must not be pruned
-with disposable `.pl` or index caches. Keep occurrence state with its source
+with disposable `.data` or index caches. Keep occurrence state with its source
 dataset. The uniqueness domain is the shared allocator state, not every
 independently copied repository in the world. Independent copies that need
 coordinated allocation should share one state directory. Conflicting assertion
@@ -259,12 +321,14 @@ conjunction/disjunction forms. It does not execute operating-system commands,
 arbitrary Prolog built-ins, or MeTTa. Unsupported goals are errors. Neither
 loading nor browsing a rule executes its body.
 
-Runtime source replacement uses validated immutable native `.pl` snapshots in
-`.runtime`. Native clause `file/1` and `line_count/1` properties refer to those
+Runtime source replacement uses validated immutable native `.data` snapshots in
+repository `tmp\runtime`. Native clause `file/1` and `line_count/1` properties refer to those
 actual snapshot files; original source locations remain `xc_source_*` metadata.
 The active generation changes only after all snapshots load successfully.
 Unchanged modules are reused. Failed or stale-generation requests preserve the
 previous active KB. Unloading the final source leaves a valid empty KB.
+Exact `.data` native loads preserve real SWI file/line properties, even beside a
+QLF companion. Hand-authored `.pl` loader inputs remain supported.
 
 Browser source selection is restricted to concrete original files below `KBs`.
 Reparse/symlink escapes are rejected. CLI-selected external files can be unloaded
@@ -320,12 +384,22 @@ fresh compiler invocation after changing Prolog application code.
 
 ## Scope and current limitations
 
-All vocabulary is loaded as inert guarded data. Unsupported semantic shapes are
-advisory warnings, not reasons to discard an assertion. Integrity checks still
+All vocabulary is loaded as inert guarded data. Normal compilation, cache
+admission, and loading do not run advisory normalized-semantic or microtheory
+shape analysis. Internal `semantic_shape_checks(true)` explicitly enables reader
+analysis; its default `false` value is part of cache identity, so optional
+diagnostics cannot leak between cache modes. The explicit `kb_cache:valid_semantic/1`
+and `kb_cache:normalized_microtheory/1` analyses remain available. Historical
+warnings beginning `Non-symbol predicate position`, `Empty expression outside a
+declared list-data slot`, or `Unexpected normalized semantic shape` remain
+inspectable in saved metadata but are not replayed during default compiler/native
+cache loading. Explicit `semantic_shape_checks(true)` also permits their replay.
+Mapping shape gates and their
+warnings are unchanged. Integrity checks still
 reject corrupt caches, mismatched variable slots, and unsafe executable
 envelopes. Unparseable source syntax is reported with the original source left
 intact; it is not replaced by an invented assertion or an incomplete success
-cache. Separate last-failure reports are retained in `.logos-state/failures`.
+cache. Separate last-failure reports use `.data` files in `.logos-state/failures`.
 
 There is no implicit Lisp, MeTTa, forward-chaining, microtheory-inheritance, or
 defeasible conflict-resolution interpreter. Declared back-chaining rules execute
@@ -367,5 +441,9 @@ required. For the current targeted loader/cache regression:
 
 ```powershell
 swipl -q -s .\prolog\ow_dr\tests\test_advisory.pl -g run_tests -t halt
+swipl -q -s .\prolog\ow_dr\tests\test_cache_paths.pl -g "run_tests(cache_paths)" -t halt
 node --test .\prolog\ow_dr\tests\render.test.mjs .\prolog\ow_dr\tests\browser.test.mjs
 ```
+
+Cache-path integration tests use disposable fake repositories beneath
+`prolog\ow_dr\tests\artifacts`; they do not compile or modify the original corpus.

@@ -88,7 +88,7 @@ stage_source(prepared(Source,Info,Records), entry(Source,Info,Module,Native,Reco
         Reuse = true
     ; Reuse = false,
       uuid(Uuid), atom_concat(ow_source_, Uuid, Module),
-      app_dir(App), directory_file_path(App,'.runtime',Root),
+      runtime_root(Root),
       directory_file_path(Root,Uuid,Directory), make_directory_path(Directory),
       file_base_name(Info.normalized,Base), directory_file_path(Directory,Base,Native),
       catch((copy_file(Info.normalized,Native),

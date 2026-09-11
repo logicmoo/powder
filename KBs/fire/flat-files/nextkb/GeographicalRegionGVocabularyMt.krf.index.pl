@@ -1,9 +1,0 @@
-kb_index_header(index_header{count:2,digest:f7cfeee0282a8e14da2cd629ffeacdc540c4adde103236393c1ae9979077f8dd,normalizedDigest:be781b02dc6917aa9ebc14752797b1046f064972cbadebdda50e45e2683aa77c,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/GeographicalRegionGVocabularyMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/GeographicalRegionGVocabularyMt.krf',sourceHash:'040957805773d2cafcb048ed676410e117af5111944eed0bb80ff3d7fc0cf1ce'}).
-kb_index_data(index{constants:[-(x_GeographicalHemisphere,2),-('x_NorthernHemisphere-Region',1),-('x_SouthernHemisphere-Region',1),-(x_isa,2)],entries:[entry(a65b1273f9e0b6,signature(x_isa,2),x_GeographicalRegionGVocabularyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/GeographicalRegionGVocabularyMt.krf',3,[x_GeographicalHemisphere,'x_SouthernHemisphere-Region',x_isa]),entry(a65b1273f9e0b7,signature(x_isa,2),x_GeographicalRegionGVocabularyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/GeographicalRegionGVocabularyMt.krf',4,[x_GeographicalHemisphere,'x_NorthernHemisphere-Region',x_isa])],predicates:[-(signature(x_isa,2),2)],rankedConstants:[-(2,x_isa),-(2,x_GeographicalHemisphere),-(1,'x_SouthernHemisphere-Region'),-(1,'x_NorthernHemisphere-Region')],rankedPredicates:[-(2,signature(x_isa,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/GeographicalRegionGVocabularyMt.krf'}).
-xc_indexed_constant(a65b1273f9e0b6,x_GeographicalHemisphere).
-xc_indexed_constant(a65b1273f9e0b6,'x_SouthernHemisphere-Region').
-xc_indexed_constant(a65b1273f9e0b6,x_isa).
-xc_indexed_constant(a65b1273f9e0b7,x_GeographicalHemisphere).
-xc_indexed_constant(a65b1273f9e0b7,'x_NorthernHemisphere-Region').
-xc_indexed_constant(a65b1273f9e0b7,x_isa).
-kb_index_footer(2,f7cfeee0282a8e14da2cd629ffeacdc540c4adde103236393c1ae9979077f8dd,c5450b2afbcd50a57904a0d7e48fc726813ceb342d63c93965395fa4d06f59a2).

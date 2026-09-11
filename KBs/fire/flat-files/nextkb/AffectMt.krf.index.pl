@@ -1,6 +1,0 @@
-kb_index_header(index_header{count:1,digest:a698212b9ef0a595dd686464cf685e461456114d775619429396729d880826d5,normalizedDigest:'729e16961c0b68d760b6a0dc2ac382facbf0c69b0e108baf311cc6b08f640d14',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AffectMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AffectMt.krf',sourceHash:'37524b0b8e92fc3385683e1a35212e285ffa726128f5c7bd6cd46adf7780c6d4'}).
-kb_index_data(index{constants:[-(x_SetTheFormat,1),-(x_argFormat,1),-(x_feelingTypeExperienced,1)],entries:[entry(a65b126bc76c35,signature(x_argFormat,3),x_AffectMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AffectMt.krf',3,[x_SetTheFormat,x_argFormat,x_feelingTypeExperienced])],predicates:[-(signature(x_argFormat,3),1)],rankedConstants:[-(1,x_feelingTypeExperienced),-(1,x_argFormat),-(1,x_SetTheFormat)],rankedPredicates:[-(1,signature(x_argFormat,3))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AffectMt.krf'}).
-xc_indexed_constant(a65b126bc76c35,x_SetTheFormat).
-xc_indexed_constant(a65b126bc76c35,x_argFormat).
-xc_indexed_constant(a65b126bc76c35,x_feelingTypeExperienced).
-kb_index_footer(1,a698212b9ef0a595dd686464cf685e461456114d775619429396729d880826d5,a8cdfcd544986916bf0e80e7ac7762fd67661ba2478cf37013becbd50fb67f91).

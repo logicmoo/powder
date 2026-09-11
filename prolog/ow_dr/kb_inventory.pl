@@ -49,7 +49,7 @@ inventory_one(Log,Source,Result) :-
     catch(write_sidecar(Sidecar,Data,WriteStatus),Error,
       (message_to_string(Error,Message),WriteStatus=_{path:Sidecar,status:skipped,message:Message})),
     (Data.status==unstable->Contexts=[];Contexts=Data.microtheories),
-    (get_dict(compiled,Data,C)->Compiled=C.path;atom_concat(Source,'.pl',Compiled)),
+    (get_dict(compiled,Data,C)->Compiled=C.path;cache_paths(Source,Compiled,_)),
     forall(member(Context,Contexts),
       assertz(rollup(Context.key,Context.canonical,Context.label,Source,Context.put(compiled,Compiled)))),
     Result=Data.put(_{sidecar:WriteStatus,microtheories:Contexts}),
@@ -61,7 +61,7 @@ inventory_source(Source,Data) :-
     new_state(State),
     catch(read_original(Source,State),Error,record_issue(State,source_parse,Error)),
     source_state(State,Contexts,SourceCounts,SourceIssues),
-    atom_concat(Source,'.pl',Compiled),atom_concat(Source,'.index.pl',Index),
+    cache_paths(Source,Compiled,Index),
     catch(inspect_companion(Compiled,Before.sha256,Companion),CompanionError,
       (message_to_string(CompanionError,CM),
        Companion=_{path:Compiled,present:true,status:unreadable,physicalLineCount:null,
@@ -383,7 +383,7 @@ file_count_row(Data,row(Source,Size,Compiled,Lines,Clauses,N,R,G,O,Status)) :-
     optional(Data.source,sizeBytes,Size),
     (get_dict(compiled,Data,C)->optional(C,path,Compiled),optional(C,physicalLineCount,Lines),
                               optional(C,semanticClauseCount,Clauses)
-    ;atom_concat(Source,'.pl',Compiled),Lines=null,Clauses=null),
+    ;cache_paths(Source,Compiled,_),Lines=null,Clauses=null),
     (get_dict(counts,Data,Counts)->optional(Counts,semanticAssertionCount,N),optional(Counts,ruleCount,R),
                                  optional(Counts,gafCount,G),optional(Counts,otherCount,O)
     ;N=null,R=null,G=null,O=null).

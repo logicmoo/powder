@@ -5,6 +5,7 @@
 :- use_module('../kb_ids').
 :- use_module('../kb_index').
 :- use_module('../kb_editor').
+:- use_module('../kb_paths', [cache_paths/3]).
 :- use_module('../kb_runtime', []).
 :- use_module('../compile_kb', [parse_arguments/3]).
 :- use_module(library(filesex)).
@@ -278,7 +279,7 @@ test(stale_loaded_implementation_requires_restart_before_claim,
              assertion(Caught==true))),
        (retractall(kb_compile:loaded_implementation_identity(_)),
         assertz(kb_compile:loaded_implementation_identity(Loaded)))),
-    atom_concat(F,'.pl.lock',Lock),assertion(\+exists_file(Lock)).
+    cache_paths(F,Normal,_),atom_concat(Normal,'.lock',Lock),assertion(\+exists_file(Lock)).
 
 test(krf_never_maps_and_metta_inert,[setup(test_dir(D)),cleanup(clean_dir(D))]) :-
     fixture(D,'tinyKB.krf',"(instance Item Class)\n(exists (IndexicalFn currentRole))\n(<== (p ?X) (q ?X))\n",K),
@@ -338,6 +339,59 @@ test(metadata_nil_and_unknown_properties,[setup(test_dir(D)),cleanup(clean_dir(D
     assertion(\+member(xc_creator(_,_),M)),assertion(\+member(xc_creation_date(_,_),M)),
     member(Unknown,M),functor(Unknown,'xc_cyc::Custom-Property',2),!.
 
+test(source_and_assertion_comments_survive_cache_roundtrip,
+     [setup(test_dir(D)),cleanup(clean_dir(D))]) :-
+    fixture(D,'comments.krf',"(p a)\n",F),opts(D,O),cache_identity(F,O,Identity),
+    Comments=[comment(1,2,"first\nsecond"),comment(3,1,"orphan")],
+    Info=info{mappingHash:Identity.mappingHash,warnings:[],lineCount:3,comments:Comments},
+    kb_compile:reader_header(Identity,Info,Header0),
+    assertion(Header0.sourceComments==Comments),
+    kb_compile:assertion_record(F,
+      assertion(x_p(x_a),[],x_TestMt,2,[comments-Comments],key),a123,Record),
+    cache_paths(F,Data,_),write_cache(Data,Header0,[Record],Header),
+    read_cache(Data,Header,[record(a123,x_p(x_a),Metadata)]),
+    assertion(memberchk(xc_comments(a123,Comments),Metadata)),
+    del_dict(comments,Info,_,LegacyInfo),
+    kb_compile:reader_header(Identity,LegacyInfo,LegacyHeader),
+    assertion(\+get_dict(sourceComments,LegacyHeader,_)).
+
+test(source_comments_must_be_ground,
+     [throws(error(instantiation_error,_))]) :-
+    Info=info{mappingHash:none,warnings:[],lineCount:1,comments:[comment(1,1,_)]},
+    kb_compile:reader_header(cache{mappingHash:none},Info,_).
+
+test(reader_comments_survive_fresh_warm_native_and_forced_compilation,
+     [setup(test_dir(D)),cleanup(clean_dir(D))]) :-
+    fixture(D,'comments.krf',
+      "; leading\n(p #| inside |# a) ; trailing\n\n; orphan\n",F),opts(D,O),
+    compile_source(F,O,Fresh),assertion(Fresh.status==generated),
+    assertion(Fresh.warnings==[]),
+    read_cache(Fresh.normalized,Header,[record(Id,x_p(x_a),Metadata)]),
+    Header.sourceComments=[comment(4,1,Orphan)],
+    assertion(sub_string(Orphan,_,_,_,"orphan")),
+    memberchk(xc_comments(Id,Comments),Metadata),
+    Comments=[comment(1,_,Leading),comment(2,_,Inside),comment(2,_,Trailing)],
+    assertion(sub_string(Leading,_,_,_,"leading")),
+    assertion(sub_string(Inside,_,_,_,"inside")),
+    assertion(sub_string(Trailing,_,_,_,"trailing")),
+    memberchk(xc_comment_association(Id,Association),Metadata),
+    assertion(Association=proximity_guess(span(_,_,_,_))),
+    assertion(ground(Association)),
+    setup_call_cleanup(kb_runtime:native_load(Fresh.normalized,ow_compiler_comments),
+      once((kb_runtime:module_metadata(ow_compiler_comments,comments,Id,Comments),
+            kb_runtime:module_metadata(ow_compiler_comments,comment_association,Id,Association),
+            kb_runtime:module_assertion(ow_compiler_comments,Id,x_p(x_a),Ref),
+            clause_property(Ref,file(Native)),
+            assertion(same_file(Native,Fresh.normalized)))),
+      kb_runtime:native_unload(Fresh.normalized)),
+    compile_source(F,O,Warm),assertion(Warm.status==cache_hit),
+    read_cache(Warm.normalized,Header,[record(Id,x_p(x_a),Metadata)]),
+    fixture(D,'comments.krf',
+      "; revised\n(p #| inside |# a) ; trailing\n\n; new orphan\n",F),
+    compile_source(F,[force(true)|O],Forced),assertion(Forced.status==generated),
+    read_cache(Forced.normalized,Revised,[record(Id,x_p(x_a),_)]),
+    assertion(Revised.sourceComments\==Header.sourceComments).
+
 test(rejects_footer_without_final_newline,[setup(test_dir(D)),cleanup(clean_dir(D))]) :-
     fixture(D,'cache.pl',"",P),header('test.kif',H),metadata(a123,[],M),
     write_cache(P,H,[record(a123,x_p(x_a),M)],_),
@@ -353,7 +407,7 @@ test(batch_continues_and_preserves_old,[setup(test_dir(D)),cleanup(clean_dir(D))
     opts(D,Options),
     compile_sources([A,B,C,E],Options,S),
     assertion(S.failures==2),assertion(S.generated==2),assertion(S.exitCode==1),
-    atom_concat(B,'.pl',P),file_digest(P,Before),
+    cache_paths(B,P,_),file_digest(P,Before),
     fixture(D,'b.krf',"(broken",B),
     compile_sources([B],Options,S2),assertion(S2.failures==1),
     file_digest(P,After),assertion(Before==After).
@@ -433,12 +487,12 @@ test(recovery_only_affected_and_stage_promotion,[setup(test_dir(D)),cleanup(clea
     recover_sources([D],Options,Summary),
     assertion(Summary.generated==1),assertion(Summary.failures==0),
     assertion(exists_file(R.normalized)),assertion(\+exists_file(Stage)),
-    atom_concat(Other,'.pl',OtherCache),assertion(\+exists_file(OtherCache)),
+    cache_paths(Other,OtherCache,_),assertion(\+exists_file(OtherCache)),
     recover_sources([D],Options,Empty),assertion(Empty.results==[]).
 
 test(real_process_native_lock_busy,[setup(test_dir(D)),cleanup(clean_dir(D))]) :-
     fixture(D,'busy.krf',"(isa a b)\n",F),opts(D,Options),
-    atom_concat(F,'.pl.lock',Lock),
+    cache_paths(F,Normal,_),atom_concat(Normal,'.lock',Lock),
     worker([hold,Lock],Pid,In,Out),
     read_line_to_string(Out,"ready"),
     monotonic_seconds(Start),compile_source(F,Options,R),monotonic_seconds(End),
@@ -459,7 +513,7 @@ test(real_process_allocator_uniqueness,[setup(test_dir(D)),cleanup(clean_dir(D))
 
 test(two_real_compilers_early_busy,[setup(test_dir(D)),cleanup(clean_dir(D))]) :-
     heavy_fixture(D,F),directory_file_path(D,state,State),
-    atom_concat(F,'.pl.tmp',Marker),
+    cache_paths(F,Normal,_),atom_concat(Normal,'.tmp',Marker),
     worker([compile,F,State],P1,I1,O1),
     close(I1),wait_exists(Marker,300),
     worker([compile,F,State],P2,I2,O2),close(I2),
@@ -467,7 +521,7 @@ test(two_real_compilers_early_busy,[setup(test_dir(D)),cleanup(clean_dir(D))]) :
     assertion(sub_string(Text2,_,_,_,"busy")),
     read_string(O1,_,Text1),close(O1),process_wait(P1,exit(0)),
     assertion(sub_string(Text1,_,_,_,"generated")),
-    atom_concat(F,'.pl',Cache),read_cache(Cache,Header,_),
+    cache_paths(F,Cache,_),read_cache(Cache,Header,_),
     assertion(Header.count==12000),assertion(\+exists_file(Marker)).
 
 test(warning_flushed_before_later_file_finishes,
@@ -477,14 +531,14 @@ test(warning_flushed_before_later_file_finishes,
     worker_stderr([batch,First,Second,State],Pid,In,Out,Err),close(In),
     first_warning(Err,Warning),
     assertion(sub_string(Warning,_,_,_,"WARNING")),
-    atom_concat(Second,'.pl',Cache),
+    cache_paths(Second,Cache,_),
     assertion(\+exists_file(Cache)),
     read_string(Out,_,_),close(Out),read_string(Err,_,_),close(Err),
     process_wait(Pid,exit(0)),assertion(exists_file(Cache)).
 
 test(recovery_skips_active_marker,[setup(test_dir(D)),cleanup(clean_dir(D))]) :-
     fixture(D,'busy.krf',"(isa a b)\n",F),opts(D,Options),
-    atom_concat(F,'.pl.tmp',Marker),atom_concat(F,'.pl.lock',Lock),
+    cache_paths(F,Normal,_),atom_concat(Normal,'.tmp',Marker),atom_concat(Normal,'.lock',Lock),
     setup_call_cleanup(open(Marker,write,S),write_one_line(S,kb_compile_claim(1,F,0,0)),close(S)),
     worker([hold,Lock],Pid,In,Out),read_line_to_string(Out,"ready"),
     recover_sources([D],Options,R),
@@ -497,7 +551,7 @@ test(killed_writer_preserves_final_and_recovers,
     compile_source(F,Options,Original),file_digest(Original.normalized,OldHash),
     setup_call_cleanup(open(F,write,S,[encoding(utf8),newline(posix)]),
         forall(between(1,3000,_),format(S,'(isa New Class)~n',[])),close(S)),
-    directory_file_path(D,state,State),atom_concat(F,'.pl.tmp',Marker),
+    directory_file_path(D,state,State),cache_paths(F,Normal,_),atom_concat(Normal,'.tmp',Marker),
     worker([compile,F,State],Pid,In,Out),close(In),
     wait_exists(Marker,300),process_kill(Pid,term),process_wait(Pid,_),
     read_string(Out,_,_),close(Out),

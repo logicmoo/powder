@@ -5,7 +5,9 @@
 :- use_module(library(filesex)).
 
 fixture(Header,File) :-
-    tmp_file(ow_native,Base),atom_concat(Base,'.pl',File),
+    fixture(Header,pl,File).
+fixture(Header,Extension,File) :-
+    tmp_file(ow_native,Base),file_name_extension(Base,Extension,File),
     setup_call_cleanup(open(File,write,S,[encoding(utf8)]),
                        fixture_text(S,Header),close(S)).
 fixture_text(S,Header) :-
@@ -42,6 +44,18 @@ test(tail_native_location, [setup(fixture(tail,F)),cleanup(dispose(F))]) :-
     clause_property(R,line_count(5)).
 
 test(include_native_location, [setup(fixture(include,F)),cleanup(dispose(F))]) :-
+    native_load(F,ow_native_test),
+    xc_clause_handle(a101,R),
+    clause_property(R,file(Native)),same_file(F,Native),
+    clause_property(R,line_count(5)).
+
+test(data_tail_native_location, [setup(fixture(tail,data,F)),cleanup(dispose(F))]) :-
+    native_load(F,ow_native_test),
+    xc_clause_handle(a101,R),
+    clause_property(R,file(Native)),same_file(F,Native),
+    clause_property(R,line_count(5)).
+
+test(data_include_native_location, [setup(fixture(include,data,F)),cleanup(dispose(F))]) :-
     native_load(F,ow_native_test),
     xc_clause_handle(a101,R),
     clause_property(R,file(Native)),same_file(F,Native),

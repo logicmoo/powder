@@ -1,4 +1,4 @@
-:- module(kb_ids, [assign_ids/4, reserve_ids/3, state_directory/2]).
+:- module(kb_ids, [assign_ids/4, reserve_ids/3, state_directory/2, relocate_source_ids/4]).
 
 /** <module> Durable occurrence assignments and Unix-microsecond IDs.
 
@@ -41,6 +41,45 @@ assign_ids(Input, Assertions, Options, Ids) :-
           close(Lock))).
 
 file_digest_name(Source, Hash) :- terms_digest([Source],Hash).
+
+relocate_source_ids(OldInput,NewInput,Options,Result) :-
+    absolute_file_name(OldInput,Old,[access(none)]),
+    absolute_file_name(NewInput,New,[access(none)]),
+    state_directory(Options,Directory),
+    source_ledger_path(Directory,Old,OldFile),
+    source_ledger_path(Directory,New,NewFile),
+    (Old==New->Result=unchanged;
+      with_mutex(logos_occurrences,
+        with_ledger_lock(OldFile,
+          with_ledger_lock(NewFile,relocate_ledger(OldFile,NewFile,Old,New,Result))))).
+
+source_ledger_path(Directory,Source,File) :-
+    directory_file_path(Directory,occurrences,Ledgers),make_directory_path(Ledgers),
+    file_digest_name(Source,Hash),atom_concat(Hash,'.pl',Name),
+    directory_file_path(Ledgers,Name,File).
+
+:- meta_predicate with_ledger_lock(+,0).
+with_ledger_lock(File,Goal) :-
+    atom_concat(File,'.lock',LockFile),try_lock(LockFile,Lock),
+    (Lock==busy->throw(error(source_identity_busy(File),_));
+      setup_call_cleanup(true,Goal,release_lock(Lock))).
+
+relocate_ledger(OldFile,NewFile,Old,New,Result) :-
+    (exists_file(OldFile)->
+      read_ledger(OldFile,Old,Pairs),
+      (exists_file(NewFile)->
+        read_ledger(NewFile,New,Existing),
+        (Existing==Pairs->Result=existing;
+          throw(error(conflicting_relocation_ledger(Old,New),_)))
+      ;terms_digest([New,Pairs],Digest),stage_path(NewFile,Stage),
+       setup_call_cleanup(true,
+         (setup_call_cleanup(open(Stage,write,S,[encoding(utf8),newline(posix)]),
+            (write_one_line(S,occurrence_ledger(1,New,Pairs,Digest)),flush_output(S)),close(S)),
+          read_ledger(Stage,New,Pairs),install_stage(Stage,NewFile)),
+         remove_if_exists(Stage)),
+       length(Pairs,Count),Result=relocated(Count))
+    ;Result=absent).
+% Keep the old ledger as a durable rollback record; never prune it with caches.
 
 assign_locked(File,Source,Assertions,Dir,Ids) :-
     read_ledger(File, Source, Old),

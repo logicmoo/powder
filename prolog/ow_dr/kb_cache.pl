@@ -4,7 +4,8 @@
             write_one_line/2, term_line/2, terms_digest/2,
             file_digest/2, try_lock/2, release_lock/1,
             stage_path/2, install_stage/2, remove_if_exists/1,
-            safe_variable_names/2, valid_assertion_id/1, format_literal_data/1
+            safe_variable_names/2, valid_assertion_id/1, format_literal_data/1,
+            historical_semantic_shape_warning/1
           ]).
 
 /** <module> Non-executing, strict normalized-cache I/O.
@@ -254,6 +255,13 @@ valid_warning(warning(File,Line,Column,Message)) :-
     atom(File),integer(Line),Line>0,integer(Column),Column>0,
     (atom(Message);string(Message)).
 
+historical_semantic_shape_warning(warning(_,_,_,Message)) :-
+    (atom(Message)->atom_string(Message,Text);string(Message)->Text=Message),
+    member(Prefix,["Non-symbol predicate position",
+                  "Empty expression outside a declared list-data slot",
+                  "Unexpected normalized semantic shape"]),
+    sub_string(Text,0,_,_,Prefix),!.
+
 parse_records([], []).
 parse_records([Clause|Terms], [record(Id,Semantic,Metadata)|Records]) :-
     decode_clause(Clause, Id, Semantic),
@@ -308,7 +316,7 @@ valid_semantic(Semantic) :-
     ; valid_head(Semantic)
     ), !.
 
-% Semantic vocabulary checks are advisory. Cache admission checks only the
+% Semantic vocabulary checks are explicit analyses. Cache admission checks only the
 % inert clause envelope; nested terms are data, never consulted or called.
 storable_semantic(Semantic) :-
     acyclic_term(Semantic),nonvar(Semantic),

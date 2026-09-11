@@ -3,6 +3,7 @@
                    load_prebuilt_status/4]).
 :- use_module(kb_cache).
 :- use_module(kb_compile, []).
+:- use_module(kb_paths, [cache_paths/3]).
 :- use_module(kb_load_policy).
 :- use_module(library(error)).
 :- use_module(library(filesex)).
@@ -20,12 +21,14 @@ qlf_schema(powder_dynamic_qlf_v1).
 
 companion_path(Input,File) :-
     absolute_file_name(Input,File,[access(read)]),
-    (file_name_extension(Source,pl,File),kb_compile:supported_source(Source)->true;
+    (companion_base(File,Source),kb_compile:supported_source(Source)->true;
      domain_error(compiled_kb_companion,Input)).
+companion_base(File,Source) :-
+    file_name_extension(Source,Extension,File),memberchk(Extension,[data,pl]).
 paths(File,QLF,Metadata,StageSource) :-
-    (file_name_extension(Base,pl,File)->true;Base=File),
-    file_name_extension(Base,qlf,QLF),atom_concat(QLF,'.meta.pl',Metadata),
-    atom_concat(QLF,'-stage.pl',StageSource).
+    (companion_base(File,Base)->true;Base=File),
+    file_name_extension(Base,qlf,QLF),atom_concat(QLF,'.meta.data',Metadata),
+    atom_concat(QLF,'-stage.data',StageSource).
 abi(abi(Version,Arch,Bits)) :-
     current_prolog_flag(version_data,Version),current_prolog_flag(arch,Arch),
     current_prolog_flag(address_bits,Bits).
@@ -59,7 +62,7 @@ convert_owned(File,Options,QLF,Metadata,StageSource,Result) :-
      setup_call_cleanup(true,
        (write_staging(Temporary,StageModule,File,Header,Records),
         install_stage(Temporary,StageSource)),remove_if_exists(Temporary)),
-     file_name_extension(Base,pl,StageSource),file_name_extension(Base,qlf,Generated),
+     file_name_extension(Base,data,StageSource),file_name_extension(Base,qlf,Generated),
      setup_call_cleanup(true,
        (compile_stage(StageSource),
             (validate_staging(StageModule,Records)->true;
@@ -253,17 +256,35 @@ clear_staging(Module) :-
            abolish(Module:Name/Arity)).
 
 discover_companions(Inputs,Files) :-
-    findall(File,(member(Input,Inputs),input_companion(Input,File)),Raw),sort(Raw,Files).
+    maplist(kb_compile:source_absolute,Inputs,Paths),
+    (current_prolog_flag(windows,true)->
+      kb_compile:windows_selection(Paths,Roots,Explicit)
+    ;partition(exists_directory,Paths,Directories,Explicit),
+     sort(Directories,Sorted),kb_compile:minimal_directories(Sorted,none,Roots)),
+    findall(File,(member(Root,Roots),input_companion(Root,File)),Discovered),
+    maplist(companion_path,Explicit,Selected),
+    append(Selected,Discovered,Raw),sort(Raw,Files).
 input_companion(Input,File) :-
     (exists_directory(Input),current_prolog_flag(windows,true)->
       kb_compile:windows_native_entries(files,Input,Entries),member(Entry,Entries),
-      atom_string(Child,Entry.path),
-      file_name_extension(Source,pl,Child),kb_compile:supported_source(Source),
-      companion_path(Child,File)
+      kb_compile:native_entry_path(Entry,Child),directory_companion(Child,File)
     ;exists_directory(Input)->
       directory_files(Input,Names),member(Name,Names),Name\=='.',Name\=='..',
       directory_file_path(Input,Name,Child),
       (exists_directory(Child)-> \+read_link(Child,_,_),input_companion(Child,File)
-      ;file_name_extension(Source,pl,Child),kb_compile:supported_source(Source),
-       companion_path(Child,File))
+      ;directory_companion(Child,File))
     ;companion_path(Input,File)).
+
+directory_companion(Source,File) :-
+    kb_compile:supported_source(Source),!,
+    cache_paths(Source,Compiled,_),exists_file(Compiled),
+    companion_path(Compiled,File).
+directory_companion(Compiled,File) :-
+    companion_base(Compiled,Source),kb_compile:supported_source(Source),
+    cache_paths(Source,Expected,_),
+    (kb_compile:same_absolute_path(Compiled,Expected)
+    ;file_name_extension(Source,pl,Compiled),
+     atom_concat(Source,'.data',Adjacent),
+     kb_compile:same_absolute_path(Adjacent,Expected),
+     \+exists_file(Expected)),
+    companion_path(Compiled,File).

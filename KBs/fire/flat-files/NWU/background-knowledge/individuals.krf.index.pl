@@ -1,9 +1,0 @@
-kb_index_header(index_header{count:2,digest:ceb324b02e60d9f247ec626f06ba2d3ddcb46595275b268f3b2070309c106341,normalizedDigest:'93a0960fafdf2ae71c0f5473269f8c12f2a644ff590db605037783c5c05f66cf',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/background-knowledge/individuals.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/background-knowledge/individuals.krf',sourceHash:'1fee4cf6b2f29e6e0d57a0bac1b33bcd63816fa2d031dc3d429ab25035d67eda'}).
-kb_index_data(index{constants:[-(x_ReferenceWebSite,1),-(x_WebSite,1),-('x_Wikipedia-WebSite',1),-('x_YouTube-WebSite',1),-(x_isa,2)],entries:[entry(a65b126a0effa3,signature(x_isa,2),x_UniversalVocabularyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/background-knowledge/individuals.krf',17,[x_WebSite,'x_YouTube-WebSite',x_isa]),entry(a65b126a0effa4,signature(x_isa,2),x_UniversalVocabularyMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/background-knowledge/individuals.krf',18,[x_ReferenceWebSite,'x_Wikipedia-WebSite',x_isa])],predicates:[-(signature(x_isa,2),2)],rankedConstants:[-(2,x_isa),-(1,'x_YouTube-WebSite'),-(1,'x_Wikipedia-WebSite'),-(1,x_WebSite),-(1,x_ReferenceWebSite)],rankedPredicates:[-(2,signature(x_isa,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/NWU/background-knowledge/individuals.krf'}).
-xc_indexed_constant(a65b126a0effa3,x_WebSite).
-xc_indexed_constant(a65b126a0effa3,'x_YouTube-WebSite').
-xc_indexed_constant(a65b126a0effa3,x_isa).
-xc_indexed_constant(a65b126a0effa4,x_ReferenceWebSite).
-xc_indexed_constant(a65b126a0effa4,'x_Wikipedia-WebSite').
-xc_indexed_constant(a65b126a0effa4,x_isa).
-kb_index_footer(2,ceb324b02e60d9f247ec626f06ba2d3ddcb46595275b268f3b2070309c106341,'313b7ab4dcfbc61bb27182e7f9b8c6c54cc61a0cf8e48a0b7bcc109d9eecfd9f').

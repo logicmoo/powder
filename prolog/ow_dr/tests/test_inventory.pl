@@ -14,7 +14,7 @@ test(rule_gaf_other_and_declaration_targets) :-
 
 test(source_inventory_counts_lf_bytes_and_keeps_declaration_only_mt) :-
     tmp_file(powder_inventory,D),make_directory(D),
-    directory_file_path(D,'example.krf',Source),atom_concat(Source,'.pl',Compiled),
+    directory_file_path(D,'example.krf',Source),kb_paths:cache_paths(Source,Compiled,_),
     setup_call_cleanup(true,
       (setup_call_cleanup(open(Source,write,S,[encoding(utf8)]),
         format(S,'(in-microtheory (DataOfFn Something))~n(p A)~n(<=== (r ?X) (p ?X))~n(argIsa missingHead 2 Thing)~n(in-microtheory EmptyMt)~n',[]),close(S)),

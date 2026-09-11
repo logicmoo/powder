@@ -1,9 +1,0 @@
-kb_index_header(index_header{count:2,digest:'05e810c15dd2bfb4a58b0e59089673fbb74d0b8cd6b8349a81096426036127ce',normalizedDigest:'79ee23fa58c6a7f8798b1c07d3cffeeae05de01f009ece2fa6aa9d29ec15865b',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-mouse_pathology-links.kif.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-mouse_pathology-links.kif',sourceHash:ce703d494c37bb1ae670b57767393d18a6b6fe3994ebcedee8c2c6726ba281ff}).
-kb_index_data(index{constants:[-(x_Atrophy,1),-(x_Emphysema,1),-(x_mouse_pathology,2),-(x_synonymousExternalConcept,2)],entries:[entry(a65b1253df4246,signature(x_synonymousExternalConcept,3),'x_SUMO-mouse_pathology-linksMt','c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-mouse_pathology-links.kif',1,[x_Atrophy,x_mouse_pathology,x_synonymousExternalConcept]),entry(a65b1253df4247,signature(x_synonymousExternalConcept,3),'x_SUMO-mouse_pathology-linksMt','c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-mouse_pathology-links.kif',2,[x_Emphysema,x_mouse_pathology,x_synonymousExternalConcept])],predicates:[-(signature(x_synonymousExternalConcept,3),2)],rankedConstants:[-(2,x_synonymousExternalConcept),-(2,x_mouse_pathology),-(1,x_Emphysema),-(1,x_Atrophy)],rankedPredicates:[-(2,signature(x_synonymousExternalConcept,3))],source:'c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-mouse_pathology-links.kif'}).
-xc_indexed_constant(a65b1253df4246,x_Atrophy).
-xc_indexed_constant(a65b1253df4246,x_mouse_pathology).
-xc_indexed_constant(a65b1253df4246,x_synonymousExternalConcept).
-xc_indexed_constant(a65b1253df4247,x_Emphysema).
-xc_indexed_constant(a65b1253df4247,x_mouse_pathology).
-xc_indexed_constant(a65b1253df4247,x_synonymousExternalConcept).
-kb_index_footer(2,'05e810c15dd2bfb4a58b0e59089673fbb74d0b8cd6b8349a81096426036127ce',ed41f33b3fae12953db465851246e22fdf9be17c522ebf12c02adcb5e84fbdf4).

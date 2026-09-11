@@ -12,6 +12,7 @@
 :- use_module(library(option)).
 :- use_module(library(assoc)).
 :- use_module(kb_index, []).
+:- use_module(kb_cache, [historical_semantic_shape_warning/1]).
 :- use_module(kb_symbols).
 :- use_module(kb_limits).
 :- dynamic native_file/2.
@@ -78,8 +79,11 @@ cache_warnings(Header) :-
     (is_dict(Header),get_dict(warnings,Header,Warnings)->true;Warnings=[]),
     (capturing_load(Key),native_load_options(Key,Options)->true;Options=[]),
     option(diagnostics(Show),Options,true),
-    (Show==false->true;empty_assoc(Counts),foldl(cached_warning,Warnings,Counts,_)).
-cached_warning(warning(File,Line,Column,Message),Before,After) :-
+    (Show==false->true;empty_assoc(Counts),foldl(cached_warning(Options),Warnings,Counts,_)).
+cached_warning(Options,Warning,Before,Before) :-
+    option(semantic_shape_checks(ShapeChecks),Options,false),ShapeChecks\==true,
+    historical_semantic_shape_warning(Warning),!.
+cached_warning(_,warning(File,Line,Column,Message),Before,After) :-
     ground(warning(File,Line,Column,Message)),
     atom(File),integer(Line),integer(Column),atomic(Message), !,
     (get_assoc(Message,Before,N0)->true;N0=0),N is N0+1,
@@ -88,7 +92,7 @@ cached_warning(warning(File,Line,Column,Message),Before,After) :-
     ;N=:=6->format(user_error,'WARNING ~w: additional identical warnings suppressed.~n',[File])
     ;true),
     flush_output(user_error).
-cached_warning(Warning,_,_) :- throw(error(domain_error(cache_warning,Warning),_)).
+cached_warning(_,Warning,_,_) :- throw(error(domain_error(cache_warning,Warning),_)).
 
 register_native(File, Module) :-
     absolute_file_name(File, Absolute),

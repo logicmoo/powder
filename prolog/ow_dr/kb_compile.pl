@@ -30,7 +30,8 @@ on-disk hashes. Durable occurrence ledgers are independent of this fingerprint.
 :- use_module(kb_index).
 :- use_module(kb_editor).
 :- use_module(kb_reader).
-:- use_module(kb_paths, [repo_root/1,app_dir/1]).
+:- use_module(kb_paths, [repo_root/1,app_dir/1,cache_paths/3,
+                        cache_source_base/2,cache_original_source/2]).
 
 :- thread_local batch_state/1.
 :- thread_local path_cache_active/0, source_name_cache/2.
@@ -210,7 +211,8 @@ compile_source_cached(Input,Options,Result) :-
     source_absolute(Input,File),
     (exists_directory(File)->type_error(file,File);true),
     monotonic_seconds(Start),
-    atom_concat(File,'.pl',Normal),atom_concat(File,'.index.pl',Index),
+    cache_paths(File,Normal,Index),
+    file_directory_name(Normal,CacheDirectory),make_directory_path(CacheDirectory),
     atom_concat(Normal,'.lock',LockPath),
     ( mutex_trylock(LockPath)
     -> setup_call_cleanup(true,
@@ -312,8 +314,7 @@ owned_compile(File,Normal,Index,Options,Start,Abandoned,Result) :-
     forall(member(Artifact,Abandoned),
            (Artifact==Normal->true;remove_if_exists(Artifact))),
     monotonic_seconds(End),Elapsed is max(0,End-Start),
-    (get_dict(normalizedFile,Header,Origin)->true;Origin=Normal),
-    Result=result{status:Status,source:File,normalized:Origin,index:Index,
+    Result=result{status:Status,source:File,normalized:Normal,index:Index,
         count:Header.count,warnings:Header.warnings,lineCount:Header.lineCount,
         sizeBytes:Header.sizeBytes,elapsed:Elapsed},
     memory_checkpoint(finished,File,Options),
@@ -337,16 +338,18 @@ cache_identity(Input,Options,Identity) :-
     option(features(Features0),Options,[]),sort(Features0,Features),
     option(strict_mappings(Strict),Options,false),
     option(sumo_mappings(Sumo),Options,auto),
+    option(semantic_shape_checks(ShapeChecks),Options,false),must_be(boolean,ShapeChecks),
     (Dialect==metta->Encoding=utf8;option(encoding(Encoding),Options,iso_latin_1)),
     mapping_identity(Dialect,MappingHash),
     converter_version(Converter),
     implementation_hash(ImplementationHash),
-    atom_concat(File,'.pl',NormalizedFile),
+    cache_paths(File,NormalizedFile,_),
     Identity=cache{source:File,sourceHash:Hash,sizeBytes:Size,dialect:Dialect,
           normalizedFile:NormalizedFile,
          mappingHash:MappingHash,converter:Converter,mtPolicy:filename_v1,
          implementationHash:ImplementationHash,
-         options:[encoding(Encoding),features(Features),strict_mappings(Strict),sumo_mappings(Sumo)]}.
+         options:[encoding(Encoding),features(Features),strict_mappings(Strict),
+                  sumo_mappings(Sumo),semantic_shape_checks(ShapeChecks)]}.
 
 mapping_identity(kif,Hash) :- !,
     (current_predicate(kb_mappings:mapping_identity/1)
@@ -362,7 +365,10 @@ reader_header(Identity,Info,Header) :-
     (Info.mappingHash==Identity.mappingHash
     ->true
     ;throw(error(mapping_identity_changed(Identity.mappingHash,Info.mappingHash),_))),
-    Header=Identity.put(_{warnings:Info.warnings,lineCount:Info.lineCount}).
+    Base=Identity.put(_{warnings:Info.warnings,lineCount:Info.lineCount}),
+    (get_dict(comments,Info,Comments)
+    ->must_be(list,Comments),must_be(ground,Comments),Header=Base.put(sourceComments,Comments)
+    ;Header=Base).
 
 current_cache(Path,Identity,Header,Records) :-
     exists_file(Path),catch(read_cache(Path,Header,Records),_,fail),
@@ -374,7 +380,7 @@ identity_matches(Identity,Header) :-
 
 identity_field_matches(normalizedFile,Expected,Header) :- !,
     (get_dict(normalizedFile,Header,Stored)->true
-    ;atom(Header.source),atom_concat(Header.source,'.pl',Stored)),
+    ;atom(Header.source),cache_paths(Header.source,Stored,_)),
     same_absolute_path(Stored,Expected).
 identity_field_matches(source,Expected,Header) :- !,
     get_dict(source,Header,Stored),same_absolute_path(Stored,Expected).
@@ -383,8 +389,9 @@ identity_field_matches(Key,Expected,Header) :-
 
 same_absolute_path(A,B) :-
     atom(A),atom(B),is_absolute_file_name(A),is_absolute_file_name(B),
-    absolute_file_name(A,Canonical,[access(none)]),
-    absolute_file_name(B,Canonical,[access(none)]).
+    absolute_file_name(A,CanonicalA,[access(none)]),
+    absolute_file_name(B,CanonicalB,[access(none)]),
+    CanonicalA==CanonicalB.
 
 usable_stage(Artifacts,Normal,Identity,Stage,Header,Records) :-
     atom_concat(Normal,'.stage.',Prefix),
@@ -395,26 +402,12 @@ assertion_record(File,assertion(Semantic,Names,Mt,Line,Props,_),Id,
                  Record) :-
     assertion_record(File,[],assertion(Semantic,Names,Mt,Line,Props,unused),Id,Record).
 
-assertion_record(File,Options,assertion(Semantic,Names,Mt,Line,Props,_),Id,
+assertion_record(File,_Options,assertion(Semantic,Names,Mt,Line,Props,_),Id,
                  record(Id,Semantic,Metadata)) :-
     Base=[xc_microtheory(Id,Mt),xc_source_file(Id,File),
           xc_source_line(Id,Line),xc_kb_names(Id,Names)],
     maplist(property_terms(Id),Props,Lists),append(Lists,Extra),
-    append(Base,Extra,Original),
-    ( kb_cache:valid_semantic(Semantic), kb_cache:normalized_microtheory(Mt)
-    -> Metadata=Original
-    ; Message="Unexpected normalized semantic shape; retained unchanged as assertion data.",
-      Warning=warning(File,Line,1,Message),
-      (option(compiler_warning_state(State),Options)->warning_observer(State,Warning);true),
-      reader_diagnostic(Warning),
-      append_metadata_messages(xc_warnings,Id,[Message],Original,WithWarnings),
-      append_metadata_messages(xc_mapping_rows,Id,[warnings(Message)],WithWarnings,Metadata)
-    ).
-
-append_metadata_messages(Name,Id,More,Before,After) :-
-    Term=..[Name,Id,Values],
-    (select(Term,Before,Rest)->append(Values,More,All);Rest=Before,All=More),
-    Updated=..[Name,Id,All],append(Rest,[Updated],After).
+    append(Base,Extra,Metadata).
 
 property_terms(Id,Property-Value,Terms) :-
     property_name(Property,Name),
@@ -465,6 +458,9 @@ ensure_index(Index,Header,Records) :-
 report_cached_warnings(Warnings,Options) :-
     empty_assoc(A0),foldl(cached_warning(Options),Warnings,A0,_).
 
+cached_warning(Options,Warning,A,A) :-
+    option(semantic_shape_checks(ShapeChecks),Options,false),ShapeChecks\==true,
+    historical_semantic_shape_warning(Warning),!.
 cached_warning(Options,warning(File,Line,Column,Message),A0,A) :-
     Key=File-Message,(get_assoc(Key,A0,N0)->N is N0+1;N=1),
     put_assoc(Key,A0,N,A),
@@ -523,7 +519,7 @@ failure_result(File,Options,Error,Result) :-
     kb_mappings:diagnostic_metadata(Events,Properties,Rows),
     (Error=error(compilation_aborted(_,_),_)->Aborted=true;Aborted=false),
     source_size(File,Size),
-    atom_concat(File,'.pl',Normal),atom_concat(File,'.index.pl',Index),
+    cache_paths(File,Normal,Index),
     Result=result{status:failed,source:File,normalized:Normal,index:Index,
          count:0,warnings:Warnings,lineCount:0,sizeBytes:Size,elapsed:0,error:Message,
          errorDetail:Detail,properties:Properties,mapping_rows:Rows,aborted:Aborted},
@@ -543,7 +539,7 @@ warning_event(warning(_,_,_,Message),diagnostic(warnings,Message)).
 persist_failure(File,Options,Result) :-
     state_directory(Options,State),directory_file_path(State,failures,Directory),
     make_directory_path(Directory),terms_digest([File],Key),
-    atom_concat(Key,'.pl',Name),directory_file_path(Directory,Name,Final),
+    atom_concat(Key,'.data',Name),directory_file_path(Directory,Name,Final),
     atom_concat(Final,'.lock',LockPath),try_lock(LockPath,Lock),
     (Lock==busy->diagnostic(Options,'Failure report busy: ~w~n',[Final])
     ;setup_call_cleanup(true,
@@ -556,7 +552,7 @@ persist_failure(File,Options,Result) :-
 
 deferred_result(File,Result) :-
     source_size(File,Size),
-    atom_concat(File,'.pl',Normal),atom_concat(File,'.index.pl',Index),
+    cache_paths(File,Normal,Index),
     Result=result{status:failed,source:File,normalized:Normal,index:Index,
         count:0,warnings:[],lineCount:0,sizeBytes:Size,elapsed:0,
         error:"Batch aborted before this source",aborted:false}.
@@ -654,7 +650,8 @@ terminal_width(Width) :-
     ;Width=119).
 
 source_artifacts(Source,Artifacts) :-
-    file_directory_name(Source,Dir),file_base_name(Source,Base),
+    cache_source_base(Source,CacheBase),
+    file_directory_name(CacheBase,Dir),file_base_name(CacheBase,Base),
     (exists_directory(Dir)
     ->directory_files(Dir,Names),
       findall(Path,(member(Name,Names),artifact_source_name(Name,Candidate),
@@ -672,11 +669,11 @@ path_prefix(Prefix,Path) :-
 artifact_source(Name,Source) :-
     artifact_source_name(Name,Source),supported_source(Source).
 artifact_source_name(Name,Source) :-
-    atom_concat(Source,'.pl.tmp',Name),!.
+    atom_concat(Source,'.data.tmp',Name),!.
 artifact_source_name(Name,Source) :-
-    (sub_atom(Name,Before,10,_,'.pl.stage.'),sub_atom(Name,0,Before,_,Source)
-    ;sub_atom(Name,Before,16,_,'.index.pl.stage.'),sub_atom(Name,0,Before,_,Source)),
-    (atom_concat(Source,'.pl.stage.',Prefix);atom_concat(Source,'.index.pl.stage.',Prefix)),
+    member(Suffix,['.data.stage.','.index.data.stage.']),atom_length(Suffix,Length),
+    sub_atom(Name,Before,Length,_,Suffix),sub_atom(Name,0,Before,_,Source),
+    atom_concat(Source,Suffix,Prefix),
     atom_concat(Prefix,Token,Name),uuid_token(Token).
 
 uuid_token(Token) :-
@@ -689,9 +686,10 @@ recover_sources(Paths,Options,Summary) :-
 
 recover_sources_cached(Paths,Options,Summary) :-
     maplist(source_absolute,Paths,Abs),
+    maplist(cache_source_base,Abs,CachePaths),
     (current_prolog_flag(windows,true)
-    ->windows_recovery_sources(Abs,Raw)
-    ;findall(Source,(member(Path,Abs),recovery_candidate(Path,Source)),Raw)),
+    ->windows_recovery_sources(CachePaths,Raw)
+    ;findall(Source,(member(Path,CachePaths),recovery_candidate(Path,Source)),Raw)),
     maplist(source_absolute,Raw,Normalized),sort(Normalized,Files),
     (option(recovery(force),Options)->Recovery=[force(true),recovery(force)|Options]
     ;Recovery=[recovery(normal)|Options]),
@@ -701,7 +699,7 @@ windows_recovery_sources(Paths,Sources) :-
     windows_selection(Paths,Roots,SelectedFiles),
     maplist(windows_recovery_directory,Roots,Groups),
     append(Groups,Discovered),
-    findall(File,(member(File,SelectedFiles),
+    findall(File,(member(Base,SelectedFiles),cache_original_source(Base,File),
                   source_artifacts(File,Artifacts),Artifacts\=[]),Direct),
     append(Discovered,Direct,Sources).
 
@@ -712,7 +710,8 @@ windows_recovery_directory(Root,Sources) :-
     findall(Source,
        (member(Entry,Entries),native_entry_path(Entry,Path),
         file_base_name(Path,Name),artifact_source(Name,Base),
-        file_directory_name(Path,Dir),directory_file_path(Dir,Base,Source)),
+        file_directory_name(Path,Dir),directory_file_path(Dir,Base,CacheBase),
+        cache_original_source(CacheBase,Source)),
        Sources).
 
 recovery_candidate(Path,Source) :-
@@ -721,8 +720,9 @@ recovery_candidate(Path,Source) :-
     directory_file_path(Path,Name,Child),
     (exists_directory(Child)
     -> \+catch(read_link(Child,_,_),_,fail),recovery_candidate(Child,Source)
-    ;artifact_source(Name,Base),directory_file_path(Path,Base,Source)).
-recovery_candidate(Path,Path) :-
-    source_artifacts(Path,Artifacts),Artifacts\=[].
+    ;artifact_source(Name,Base),directory_file_path(Path,Base,CacheBase),
+     cache_original_source(CacheBase,Source)).
+recovery_candidate(Path,Source) :-
+    cache_original_source(Path,Source),source_artifacts(Source,Artifacts),Artifacts\=[].
 
 :- initialization(initialize_implementation_identity).

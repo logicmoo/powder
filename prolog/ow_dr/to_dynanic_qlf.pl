@@ -16,7 +16,7 @@ main(Args) :-
     catch(run(Args,Code),Error,(print_message(error,Error),Code=2)),
     halt(Code).
 run([],2) :-
-    format(user_error,'Usage: swipl .\\prolog\\ow_dr\\to_dynanic_qlf.pl -- [--force] COMPILED.kif.pl [FILE_OR_DIRECTORY ...]~n',[]).
+    format(user_error,'Usage: swipl .\\prolog\\ow_dr\\to_dynanic_qlf.pl -- [--force] COMPILED.kif.data [FILE_OR_DIRECTORY ...] (legacy .pl inputs also accepted)~n',[]).
 run(Args,Code) :-
     Args\=[],
     (select('--force',Args,Inputs)->Options=[force(true)];Inputs=Args,Options=[]),

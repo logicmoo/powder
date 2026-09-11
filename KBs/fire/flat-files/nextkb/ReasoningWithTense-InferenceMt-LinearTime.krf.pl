@@ -1,9 +1,0 @@
-:- use_module('c:/snet/petta/repos/openworld_dr/prolog/ow_dr/kb_tail_loader.pl'),kb_tail_loader:load_remaining.
-kb_cache_header(cache{converter:logos_compiler_v2,count:1,dialect:krf,implementationHash:'71cb72e234ed2804aaf2e92ed08acd8f3f696c91f9042960c275a96b3d9f69e0',lineCount:11,mappingHash:none,mtPolicy:filename_v1,normalizedDigest:ff973f50d5f487be280e091dfc248fca244f476b17a88a497829e932385803ce,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ReasoningWithTense-InferenceMt-LinearTime.krf.pl',options:[encoding(iso_latin_1),features([]),strict_mappings(false),sumo_mappings(auto)],schema:logos_cache_v1,sizeBytes:523,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ReasoningWithTense-InferenceMt-LinearTime.krf',sourceHash:dbb37b5ba085e56d4e19de76181cdcb2c371764bd502d1d25111c35de0ef13c5,warnings:[]}).
-x_comment('x_ReasoningWithTense-InferenceMt-LinearTime',"This #$Microtheory contains rules about relations between\ninstances of\n#$ReasoningWithTenseMicrotheory-LinearTime, which\nrepresent a linear ordering among moments.  Note that rules in this \nmicrotheory amounts to semantic interpretations of formulas in \nmicrotheories that are instances of \n#$ReasoningWithTenseMicrotheory-SingleDateSeries, and \nthus should not be present in those microtheories.") :- x_cid(a65b1276eb788b).
-xc_microtheory(a65b1276eb788b,'x_ReasoningWithTense-InferenceMt-LinearTime').
-xc_source_file(a65b1276eb788b,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/ReasoningWithTense-InferenceMt-LinearTime.krf').
-xc_source_line(a65b1276eb788b,3).
-xc_kb_names(a65b1276eb788b,[]).
-xc_mapping_rows(a65b1276eb788b,[]).
-kb_cache_footer(footer{count:1,digest:ff973f50d5f487be280e091dfc248fca244f476b17a88a497829e932385803ce,headerDigest:'47aca64814e0ebc5f19a7b323946ceeae10248797a700122394308b7103bc59d'}).

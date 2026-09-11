@@ -1,6 +1,0 @@
-kb_index_header(index_header{count:1,digest:'70dd1562e1836a968fa124becdd5c0dd45ddec193001da803a5f4b5bc754c3f4',normalizedDigest:'23297e0cb7253c99d4f1af0ab84108a10d311bbf4f1a5bacad86311da447ddf6',normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/RCCMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/RCCMt.krf',sourceHash:a178bf83214e348da04ccc9a3797ea9932e552c98e9a0edd0e98dc5daee5777e}).
-kb_index_data(index{constants:[-(x_NonEmptyCollection,1),-(x_UniversalSpaceRegion,1),-(x_isa,1)],entries:[entry(a65b1276db9bd6,signature(x_isa,2),x_RCCMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/RCCMt.krf',3,[x_NonEmptyCollection,x_UniversalSpaceRegion,x_isa])],predicates:[-(signature(x_isa,2),1)],rankedConstants:[-(1,x_isa),-(1,x_UniversalSpaceRegion),-(1,x_NonEmptyCollection)],rankedPredicates:[-(1,signature(x_isa,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/RCCMt.krf'}).
-xc_indexed_constant(a65b1276db9bd6,x_NonEmptyCollection).
-xc_indexed_constant(a65b1276db9bd6,x_UniversalSpaceRegion).
-xc_indexed_constant(a65b1276db9bd6,x_isa).
-kb_index_footer(1,'70dd1562e1836a968fa124becdd5c0dd45ddec193001da803a5f4b5bc754c3f4','9ef768e5b5908bb383013c517a173c3572710816fedffdc631fa199cc6854c73').

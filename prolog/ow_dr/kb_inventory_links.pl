@@ -3,6 +3,7 @@
 :- use_module(kb_reader, []).
 :- use_module(kb_mappings, []).
 :- use_module(kb_compile,[discover_sources/2]).
+:- use_module(kb_paths,[cache_paths/3]).
 :- use_module(kb_cache,[write_one_line/2,file_digest/2]).
 :- use_module(kb_terms,[context_key/2]).
 :- use_module(library(http/json)).
@@ -67,7 +68,7 @@ exclude_unstable_schema :-
       retract(subrelation(A,B,E))).
 
 project_source(File,Out) :-
-    atom_concat(File,'.pl',Compiled),State=projection(0,[]),
+    cache_paths(File,Compiled,_),State=projection(0,[]),
     (exists_file(Compiled)->
       file_digest(Compiled,Before),
       catch(setup_call_cleanup(open(Compiled,read,S,[encoding(utf8)]),

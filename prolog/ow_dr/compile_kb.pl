@@ -35,7 +35,8 @@ default_paths([File]) :-
     (current_predicate(kb_paths:default_source/1)->kb_paths:default_source(File)
     ;source_file(compile_kb:main(_),Here),file_directory_name(Here,App),
      file_directory_name(App,Prolog),file_directory_name(Prolog,Root),
-     directory_file_path(Root,'KBs',KBs),directory_file_path(KBs,'tinyKB.kif',File)).
+     directory_file_path(Root,'KBs',KBs),directory_file_path(KBs,sumo,Sumo),
+     directory_file_path(Sumo,'tinyKB.kif',File)).
 
 parse_arguments([],[],[]).
 parse_arguments(['--'|Args],[],Args) :- !.

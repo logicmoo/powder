@@ -26,7 +26,7 @@ test(load_query_unload_last,
     assertion(Rule.expression.args=[_{type:application,head:_{type:symbol,value:x_checked},args:_},_]),
     unload_source(F,S.generation,Empty),
     assertion(Empty.files==[]),assertion(Empty.counts.assertions=:=0),
-    atom_concat(F,'.pl',Compiled),assertion(exists_file(Compiled)).
+    kb_paths:cache_paths(F,Compiled,_),assertion(exists_file(Compiled)).
 
 test(failed_replacement_preserves_generation,
      [setup(fixture("(isa A Thing)\n",D,F)),cleanup(cleanup(D))]) :-
@@ -51,7 +51,7 @@ test(unload_does_not_require_original_source_to_still_exist,
     delete_file(F),
     unload_source(F,Before.generation,After),
     assertion(After.files==[]),
-    atom_concat(F,'.pl',Compiled),assertion(exists_file(Compiled)).
+    kb_paths:cache_paths(F,Compiled,_),assertion(exists_file(Compiled)).
 
 test(changed_source_replaces_native_generation,
      [setup(fixture("(in-microtheory TestMt)\n(isa A Thing)\n",D,F)),cleanup(cleanup(D))]) :-

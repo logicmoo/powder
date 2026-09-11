@@ -1,6 +1,0 @@
-kb_index_header(index_header{count:1,digest:'826873ba3aa90a13e5a5d9c7baad37d41bec90ae7f9e72cf913e799ce8c4c185',normalizedDigest:ec9f3a61e8e8823fec537ffbcc3774ee3446de7b75bfcc23b12e65f6fd5567c4,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-pathway-links.kif.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-pathway-links.kif',sourceHash:'65ee769e444831a5d528b8da8fbd00541e26dba82cda83b698e6be917ae4bbf1'}).
-kb_index_data(index{constants:[-(x_parts,1),-(x_pathway,1),-(x_synonymousExternalConcept,1)],entries:[entry(a65b1253e06242,signature(x_synonymousExternalConcept,3),'x_SUMO-pathway-linksMt','c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-pathway-links.kif',1,[x_parts,x_pathway,x_synonymousExternalConcept])],predicates:[-(signature(x_synonymousExternalConcept,3),1)],rankedConstants:[-(1,x_synonymousExternalConcept),-(1,x_pathway),-(1,x_parts)],rankedPredicates:[-(1,signature(x_synonymousExternalConcept,3))],source:'c:/snet/petta/repos/openworld_dr/KBs/SUMO-OBO/SUMO-pathway-links.kif'}).
-xc_indexed_constant(a65b1253e06242,x_parts).
-xc_indexed_constant(a65b1253e06242,x_pathway).
-xc_indexed_constant(a65b1253e06242,x_synonymousExternalConcept).
-kb_index_footer(1,'826873ba3aa90a13e5a5d9c7baad37d41bec90ae7f9e72cf913e799ce8c4c185','1da2ff00bb2f1c1152a368b7adc57c025bf451ba5612929e44560c338528242c').

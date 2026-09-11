@@ -3,11 +3,12 @@
 **Paraconsistent Open World Defeasible Epistemic Reasoner**
 
 A local SWI-Prolog knowledge-base compiler, guarded assertion runtime, and
-browser for KIF, KRF, and inert MeTTa data.
+browser for KIF, KRF/MELD, and inert MeTTa data.
 
-The implementation remains in `prolog\ow_dr`, and the original corpus remains
-in `KBs`. This rebrand does not rename source predicates, public APIs, durable
-assertion IDs, cache formats, or saved browser preferences.
+The implementation is in `prolog\ow_dr`. Original sources and their saved
+statistics remain in `KBs`; generated loading caches mirror that tree under
+`tmp\KBs`, using `.data` and `.index.data` companions. The initial source is
+`KBs\sumo\tinyKB.kif`. See [KB organization](KBs/docs/README.md).
 
 ```powershell
 swipl .\prolog\ow_dr\app.pl

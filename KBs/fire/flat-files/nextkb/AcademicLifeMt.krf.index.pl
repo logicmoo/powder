@@ -1,9 +1,0 @@
-kb_index_header(index_header{count:2,digest:'963dceda3ff4318811c3e8274c87da44b5ccc93b85ab105cbe29f820c084c823',normalizedDigest:df89e5bcf2916c9191165fedadd45c7f5b4a87c30fa375a0a130cdfa645d1ae1,normalizedFile:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AcademicLifeMt.krf.pl',schema:logos_index_v1,source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AcademicLifeMt.krf',sourceHash:'3ed705dc28aa6c86659a63bed6e48b5856fa2d19aaea943d3f716bede4c4e563'}).
-kb_index_data(index{constants:[-(x_AcademicProfessional,1),-(x_Lecturer,1),-(x_PersonTypeByPositionInOrg,1),-(x_Teacher,1),-(x_genls,1),-(x_isa,1)],entries:[entry(a65b126bc05ea7,signature(x_isa,2),x_AcademicLifeMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AcademicLifeMt.krf',3,[x_Lecturer,x_PersonTypeByPositionInOrg,x_isa]),entry(a65b126bc05ea8,signature(x_genls,2),x_AcademicLifeMt,'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AcademicLifeMt.krf',4,[x_AcademicProfessional,x_Teacher,x_genls])],predicates:[-(signature(x_genls,2),1),-(signature(x_isa,2),1)],rankedConstants:[-(1,x_isa),-(1,x_genls),-(1,x_Teacher),-(1,x_PersonTypeByPositionInOrg),-(1,x_Lecturer),-(1,x_AcademicProfessional)],rankedPredicates:[-(1,signature(x_isa,2)),-(1,signature(x_genls,2))],source:'c:/snet/petta/repos/openworld_dr/KBs/fire/flat-files/nextkb/AcademicLifeMt.krf'}).
-xc_indexed_constant(a65b126bc05ea7,x_Lecturer).
-xc_indexed_constant(a65b126bc05ea7,x_PersonTypeByPositionInOrg).
-xc_indexed_constant(a65b126bc05ea7,x_isa).
-xc_indexed_constant(a65b126bc05ea8,x_AcademicProfessional).
-xc_indexed_constant(a65b126bc05ea8,x_Teacher).
-xc_indexed_constant(a65b126bc05ea8,x_genls).
-kb_index_footer(2,'963dceda3ff4318811c3e8274c87da44b5ccc93b85ab105cbe29f820c084c823','430bac60491ecb4e7821701a522d151d9e3720c404a5a17b5ea8b06afa16c9fd').

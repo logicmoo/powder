@@ -18,10 +18,10 @@ fixture(Directory,Input) :-
 metadata(Id,Mt,[xc_microtheory(Id,Mt),xc_source_file(Id,'sample.krf'),
                 xc_source_line(Id,1),xc_kb_names(Id,[])]).
 
-test(qlf_replaces_pl_extension_for_every_source_dialect,
+test(qlf_replaces_data_or_legacy_pl_extension_for_every_source_dialect,
      [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D))]) :-
-    forall(member(Dialect,[kif,krf,metta]),
-      (atomic_list_concat([sample,Dialect,pl],'.',Input),
+    forall((member(Dialect,[kif,krf,meld,metta]),member(Extension,[data,pl])),
+      (atomic_list_concat([sample,Dialect,Extension],'.',Input),
        atomic_list_concat([sample,Dialect,qlf],'.',Output),
        kb_qlf:paths(Input,Output,_,_))),
     convert_companion(F,[],Result),
@@ -54,6 +54,17 @@ test(offline_roundtrip_preserves_duplicates_ids_and_mutability,
        file_digest(F,Before)),
       release_staging(Module)).
 
+test(data_staging_and_metadata_have_exact_native_locations,
+     [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D))]) :-
+    convert_companion(F,[],Result),file_digest(F,Hash),
+    atom_concat(Result.qlf,'.meta.data',Metadata),assertion(exists_file(Metadata)),
+    atom_concat(Result.qlf,'-stage.data',Stage),assertion(exists_file(Stage)),
+    setup_call_cleanup(load_prebuilt(F,Hash,Module,Records),
+      (Records=[native_record(_,_,_,Ref)|_],
+      clause_property(Ref,file(Native)),assertion(same_file(Native,Stage)),
+      clause_property(Ref,line_count(Line)),assertion(Line>1)),
+      release_staging(Module)).
+
 test(changed_input_bypasses_old_qlf,
      [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D))]) :-
     convert_companion(F,[],_),
@@ -71,7 +82,7 @@ test(installation_failure_releases_loaded_staging,
      [setup(fixture(D,F)),cleanup(delete_directory_and_contents(D))]) :-
     kb_qlf:paths(F,Output,_,_),make_directory(Output),
     catch(convert_companion(F,[],_),Error,true),assertion(nonvar(Error)),
-    atom_concat(Output,'-stage.pl',Stage),
+    atom_concat(Output,'-stage.data',Stage),
     assertion(\+source_file_property(Stage,module(_))),
     atom_concat(Output,'-stage.qlf',Generated),assertion(\+exists_file(Generated)),
     assertion(exists_directory(Output)).
