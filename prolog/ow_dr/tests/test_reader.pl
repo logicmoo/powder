@@ -942,7 +942,7 @@ table_text(Rows,Text) :-
 
 test(real_original_tinykb_readonly) :-
     test_directory(Dir),
-    directory_file_path(Dir,'..\\..\\..\\KBs\\sumo\\tinyKB.kif',Relative),
+    directory_file_path(Dir,'..\\..\\..\\KBs\\sumo\\tiny-merge.kif',Relative),
     absolute_file_name(Relative,Path),
     crypto_file_hash(Path,Before,[algorithm(sha256)]),
     get_time(Start),

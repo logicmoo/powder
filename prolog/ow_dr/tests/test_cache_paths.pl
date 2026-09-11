@@ -58,8 +58,8 @@ test(roots_default_and_inverse, [setup(fixture(R,A)),cleanup(cleanup(R,A))]) :-
     directory_file_path(Tmp, runtime, ExpectedRuntime),
     canonical(ExpectedRuntime, Runtime), runtime_root(Runtime),
     default_source(Default),
-    file_base_name(Default, 'tinyKB.kif'),
-    file_directory_name(Default, Sumo), file_base_name(Sumo, sumo),
+    file_base_name(Default, 'tinyKB.krf'),
+    file_directory_name(Default, KBs), file_base_name(KBs, 'KBs'),
     cache_source_base(Default, Base), cache_paths(Default, Normal, Index),
     atom_concat(Base, '.data', Normal), atom_concat(Base, '.index.data', Index),
     cache_original_source(Base, Original), canonical(Default, Original).

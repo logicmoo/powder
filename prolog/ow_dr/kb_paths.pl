@@ -13,8 +13,7 @@ repo_root(Root) :-
     file_directory_name(Prolog, Root).
 kb_root(Root) :- repo_root(Repo), directory_file_path(Repo, 'KBs', Root).
 default_source(Source) :-
-    kb_root(Root), directory_file_path(Root, sumo, Sumo),
-    directory_file_path(Sumo, 'tinyKB.kif', Source).
+    kb_root(Root), directory_file_path(Root, 'tinyKB.krf', Source).
 
 cache_root(Root) :- generated_root('KBs', Root).
 runtime_root(Root) :- generated_root(runtime, Root).

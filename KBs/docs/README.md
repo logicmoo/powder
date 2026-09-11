@@ -4,7 +4,7 @@ Original root-level files are grouped by corpus or purpose:
 
 | Directory | Contents |
 | --- | --- |
-| `sumo` | tinyKB, Merge, and English-format SUMO sources |
+| `sumo` | tiny-merge, Merge, and English-format SUMO sources |
 | `ikb` | IKB exports and associated existential axioms |
 | `sigma` | Sigma support sources and test questions |
 | `scenarios` | HPKB, military, and scenario sources |
@@ -13,7 +13,9 @@ Original root-level files are grouped by corpus or purpose:
 
 Existing nested corpora retain their original directory structure. Source
 contents are not repaired or rewritten during organization. The default KB
-is `sumo\tinyKB.kif`.
+is now the separately supplied `KBs\tinyKB.krf` Cyc export at the KB root.
+The SUMO copy is `sumo\tiny-merge.kif`, explicitly scoped to `MergeMt`.
+That deliberate context change does not reuse the former `x_tinyKB` assertion IDs.
 
 Each `*.inventory.json` stays beside its original source. The `microtheory`
 directory keeps the recorded MT catalogs, content contributors, referenced-only
@@ -22,8 +24,8 @@ post-translation vocabulary; KRF/MELD and MeTTa do not receive SUMO mappings.
 These are saved statistics, not additional KB assertions or runtime inheritance
 rules. Their recorded timestamps and coverage identify the snapshot they describe.
 
-Loading caches are separate: `KBs\sumo\tinyKB.kif` uses
-`tmp\KBs\sumo\tinyKB.kif.data` and `.index.data` relative to the repository root.
+Loading caches are separate: `KBs\tinyKB.krf` uses
+`tmp\KBs\tinyKB.krf.data` and `.index.data` relative to the repository root.
 The text caches contain serialized Prolog data, not application source code.
 Optional QLFs are derived fast-load files; MeTTa equations remain inert data.
 New runtime snapshots are under `tmp\runtime`; retained old snapshots may be
