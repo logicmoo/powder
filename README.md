@@ -14,6 +14,6 @@ swipl .\prolog\ow_dr\app.pl
 swipl .\prolog\ow_dr\compile_kb.pl -- KBs
 ```
 
-The browser opens at **http://localhost:3050/swish/powder/**. See the
+The browser opens at **http://localhost:3050/**. See the
 [implementation guide](prolog/ow_dr/README.md) for source dialects, cache
 recovery, querying, Settings, application-code reload, and current limitations.

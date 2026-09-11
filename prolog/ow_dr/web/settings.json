@@ -1,13 +1,4 @@
 {
   "defaults": { "pageSize": 400, "queryLimit": 400 },
-  "maximums": { "pageSize": 400, "queryLimit": 1000 },
-  "serverDefaults": {
-    "startupConfigured": false,
-    "startupFiles": [],
-    "pools": {
-      "loader": { "start": 5, "max": 10, "spare": 2 },
-      "inference": { "start": 5, "max": 10, "spare": 2 },
-      "http": { "start": 5, "max": 10, "spare": 2 }
-    }
-  }
+  "maximums": { "pageSize": 400, "queryLimit": 1000 }
 }

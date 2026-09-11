@@ -28,8 +28,7 @@ intern_record(Module,File,AllowVersions,native_record(Occurrence,Semantic,Metada
       flag(powder_form_key,N,N+1),atom_concat(form_,N,Key),
       guarded_clause(Key,Semantic,(Head:-Guard)),
       shared_guard(Guard,Trusted),
-      functor(Head,Name,Arity),dynamic(Name/Arity),multifile(Name/Arity),
-      assertz(kb_forms:(Head:-Trusted),Ref),
+      assertz(kb_forms:(Head:-Trusted),Ref),functor(Head,Name,Arity),
       assertz(form(Hash,Key,Semantic,Ref,Name,Arity))),
     (mt_record(Key,Mt,Primary)->true;
       available_number(Occurrence,Primary),

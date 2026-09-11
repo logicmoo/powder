@@ -1,6 +1,5 @@
 :- module(kb_reload, [reload_changed_files/1, remember_loaded_code/0]).
 :- use_module(kb_paths).
-:- use_module(kb_activity).
 :- use_module(library(crypto)).
 :- use_module(library(lists)).
 :- use_module(library(ugraphs)).
@@ -28,7 +27,11 @@ changed_file(File) :-
     ;source_file_property(File,modified(Loaded)),time_file(File,Now),Now=\=Loaded).
 
 reload_changed_files(Report) :-
-    with_exclusive_reload(reload_locked(Report)).
+    (mutex_trylock(openworld_code_reload)->
+      setup_call_cleanup(true,
+        with_mutex(openworld_store,reload_locked(Report)),
+        mutex_unlock(openworld_code_reload))
+    ;throw(error(application_reload_busy,_))).
 
 reload_locked(Report) :-
     setup_call_cleanup(asserta(reloading,Ref),

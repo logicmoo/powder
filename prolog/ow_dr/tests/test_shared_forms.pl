@@ -12,8 +12,7 @@ fixture(Directory,A,B,C) :-
     source(Directory,'c.krf',"(in-microtheory (MtFn B))\n(:DIRECTION :DEFAULT :KIF (p A))\n(v ?P ?Q)\n",C).
 source(D,Name,Text,File) :-
     directory_file_path(D,Name,File),
-    setup_call_cleanup(open(File,write,S),format(S,'~s',[Text]),close(S)),
-    kb_compile:compile_source(File,[state_dir(D),progress(none)],_).
+    setup_call_cleanup(open(File,write,S),format(S,'~s',[Text]),close(S)).
 cleanup(D) :-
     findall(P,source_info(P,_),Paths),
     forall(member(P,Paths),(generation(G),unload_source(P,G,_))),
@@ -62,20 +61,6 @@ test(variants_not_unification_and_alias_lookup,
     kb_runtime:xc_form_handle(Other,OtherRef),assertion(Ref\==OtherRef),
     kb_forms:form_record(Id,x_v(X,Y),_,_),assertion(X==Y),
     kb_forms:form_record(Other,x_v(P,Q),_,_),assertion(P\==Q).
-
-test(prebuilt_qlfs_use_normal_generation_interning,
-     [setup(fixture(D,A,B,C)),cleanup(cleanup(D))]) :-
-    kb_compile:compile_sources([A,B,C],[progress(none)],Compiled),
-    forall(member(Info,Compiled.results),kb_qlf:convert_companion(Info.normalized,[],_)),
-    load_sources([A,B,C],any,Loaded),
-    forall(source_info(_,Info),assertion(Info.nativeLoad.format==qlf)),
-    record_for(x_MtA,x_p,Id,Data),assertion(length(Data.contributions,3)),
-    Data.sameForm=[Other],kb_runtime:xc_form_handle(Id,Ref),kb_runtime:xc_form_handle(Other,Ref),
-    predicate_property(kb_forms:x_p(_),dynamic),predicate_property(kb_forms:x_p(_),multifile),
-    load_sources([A,B,C],Loaded.generation,Reused),
-    unload_source(A,Reused.generation,Removed),record_for(x_MtA,x_p,Id,Remaining),
-    assertion(length(Remaining.contributions,1)),
-    unload_source(B,Removed.generation,_),kb_runtime:xc_form_handle(Other,Ref).
 
 native_fixture(D,Name,Id,Mt,File) :-
     directory_file_path(D,Name,File),app_dir(App),

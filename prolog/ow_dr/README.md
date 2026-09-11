@@ -15,7 +15,7 @@ Set-Location C:\snet\PeTTa\repos\openworld_dr
 swipl .\prolog\ow_dr\compile_kb.pl -- KBs
 swipl .\prolog\ow_dr\compile_kb.pl -- KBs\tinyKB.kif
 
-# Start the browser with saved sources, or all KB sources when unset.
+# Start the browser with exactly KBs\tinyKB.kif.
 swipl .\prolog\ow_dr\app.pl
 
 # Select different sources or a different local port.
@@ -23,27 +23,9 @@ swipl .\prolog\ow_dr\app.pl -- --port=8080 KBs\Merge.kif
 swipl .\prolog\ow_dr\app.pl -- --kb-source=KBs\tinyKB.kif --kb-source=KBs\example.kif
 ```
 
-The default address is **http://localhost:3050/swish/powder/**, bound to the loopback interface.
-The HTTP server becomes available first, then the selected startup sources are
-queued in the loader pool. Enqueueing is not successful loading: Overview and
-Settings show the startup task's actual state, progress and failures. Publication
-is transactional; failed loads do not install a partial generation.
-
-Settings > **Next server startup** stores an ordered list of `.kif`, `.krf`, and
-`.metta` files on the server. Paths are saved as canonical absolute paths and
-duplicates are removed without reordering the remaining entries. Enable the
-saved list and leave it empty to start with no KB. With no enabled saved list,
-all original `.kif`, `.krf`, and `.metta` files under the repository KB root are
-selected, without a page-size limit. Companions, QLFs and JSON are not independent
-sources. Explicit CLI sources override
-the saved list. Saving settings does not load anything immediately, restart the
-server, or affect browser source-selection drafts.
-
-Machine settings live in the ignored
-`prolog\ow_dr\.logos-state\server-settings.json`; `POWDER_SERVER_SETTINGS` may
-select a different local settings file. Writes are locked, atomic and guarded
-by a revision check. Missing sources are flagged, and startup failures leave the
-server available to correct the saved list.
+The default address is **http://localhost:3050/**, bound to the loopback interface.
+All selected inputs must finish compilation and loading before startup is
+announced. An invalid source or a busy compiler prevents startup.
 
 Requirements: SWI-Prolog with its standard libraries. Windows source-catalog
 authorization uses the included PowerShell helper and native .NET file attributes:
@@ -81,9 +63,6 @@ opens an editor without `--edit`. Successful caches are retained after another
 source fails. Exit codes are 0 for success, 1 for source failures, 2 for
 usage/setup failures, and 3 for busy/deferred inputs without source failures.
 Diagnostics and progress go to stderr; `--no-progress` does not suppress errors.
-Cache hits retain stored warning counts and metadata without replaying warnings
-or rerunning source mapping/semantic-shape analysis. The offline compiler still
-validates cache integrity/freshness and may rebuild a missing semantic index.
 
 Repair mode asks before launching an editor. Enter edits and retries, `s` skips
 one source, `S` disables further repair prompts for that invocation, and `q` or
@@ -96,69 +75,6 @@ mean a fresh compilation of the whole selection. `--recover-tmp` validates and
 recovers abandoned work; `--force-recover` rebuilds only affected interrupted
 sources. Neither overrides a live native lock. Ordinary `--force` rebuilds every
 selected source.
-
-## Offline dynamic QLF conversion
-
-The standalone command intentionally uses the requested spelling:
-
-```powershell
-swipl .\prolog\ow_dr\to_dynanic_qlf.pl -- KBs
-swipl .\prolog\ow_dr\to_dynanic_qlf.pl -- KBs\tinyKB.kif.pl
-```
-
-It reads complete compiled `.kif.pl`, `.krf.pl`, and `.metta.pl` companions as
-data, builds one QLF per file, and exits. It does not start powder/SWISH, HTTP,
-loader/inference pools, or an active KB. Source/index files and `XXXX` counting
-artifacts are not conversion inputs. All records, duplicates, real IDs,
-microtheories, variable sharing and metadata are retained: no offline interning,
-deduplication or renumbering occurs.
-
-For `example.krf.pl`, outputs are `example.krf.qlf`,
-`example.krf.qlf.meta.pl`, and `example.krf.qlf-stage.pl`. The final `.pl`
-extension is replaced, never appended to. The same naming applies to KIF and
-MeTTa companions. Existing legacy `.pl.qlf` artifacts remain a read-only loading
-fallback when no canonical QLF exists; they are not renamed or regenerated
-implicitly.
-Every staging KB predicate and metadata predicate is declared **dynamic and
-multifile** before clauses are installed; live shared form predicates also
-retain both flags. No `compile_predicates/1` is used. Runtime form sharing
-remains a separate later operation.
-
-Normal native, startup and loader-pool loads use **compiled artifacts only**:
-first a compatible existing QLF, then the PL companion if QLF is unavailable or
-fails artifact admission. They never read/map the original source, reanalyze row
-types, or build normalized, index or QLF caches. A missing companion is an
-explicit error that preserves the previous generation. Runtime builder entry
-points throw `runtime_cache_build(...)` rather than compiling implicitly.
-Stored warnings remain available in metadata/status but are never reprinted.
-
-Runtime admission validates artifact schema, SWI ABI, counts and checksums; these
-are integrity checks, not semantic analysis. It does not invalidate QLFs for
-source edits, changed compiler/mapping code or missing staging/PL source text.
-QLF is the preferred stored snapshot even if the PL is newer: explicitly run the
-offline compiler and QLF converter to publish updated data. Actual native-load
-errors remain errors. Per-source status reports
-`nativeLoad.format` (`qlf` or `pl`). `native_load/3` accepts
-`prebuilt_qlf(false)` to explicitly use PL. Owned, reference-counted staging
-leases keep older generation readers independent; source removal releases only
-its support/lease. QLF-native clause locations identify the retained controlled
-staging source, while original KB source/line metadata stays unchanged.
-
-`kb_qlf:convert_companion(File,Options,Result)` is the callable offline API.
-Options include `force(true)`; the CLI accepts `--force`. Valid converter-owned
-caches are reused. Input hash, normalized identity, converter implementation,
-SWI version/architecture/address width, staging hash and QLF binary hash are
-checked. Unknown preexisting outputs are refused rather than overwritten.
-Per-file locks and staged publication protect final QLF files; failures retain
-honest errors and the batch continues. Importing the utility does not run its
-CLI or load a default corpus. Generated binaries/staging files are derived
-local artifacts and are not automatically committed.
-
-The 2026-09-10 offline corpus run produced 975 QLFs containing 1,994,021
-records, with zero failures/busy/missing files. Binary outputs totalled
-888,707,273 bytes; wall time was 835.692 seconds. A subsequent tinyKB cache hit
-took 0.073 seconds. These are conversion/cache measurements, not live-server
-startup claims.
 
 ## Dialects and mappings
 
@@ -255,7 +171,7 @@ index headers; it remains unchanged in runtime snapshot copies. Older headers
 without this optional field remain readable. Raw readers validate these records and guarded clause
 structure as data; they do not consult arbitrary directives.
 
-Offline occurrence IDs are atoms formed by `a` plus the hexadecimal full Unix-microsecond value.
+IDs are atoms formed by `a` plus the hexadecimal full Unix-microsecond value.
 Native locks protect the durable allocator and occurrence assignments.
 `--state-dir=PATH` selects the durable state directory; it must not be pruned
 with disposable `.pl` or index caches. Keep occurrence state with its source
@@ -277,9 +193,7 @@ immediate include frame; it does not reopen the parent or select a stream by
 matching filenames.
 
 `kb_runtime:xc_src/2` returns fresh semantic clauses,
-`xc_clause_handle/2` returns a native source-record reference with the original
-generated-file/line properties, `xc_form_handle/2` returns the shared executable
-clause reference, and `xc_plvars/2` computes
+`xc_clause_handle/2` returns native references, and `xc_plvars/2` computes
 deterministic ground Prolog-safe names. Native handles are never serialized.
 `xc_indexed_constant/2` derives distinct semantic constants, including nested
 heads, without indexing metadata or context-only MT references.
@@ -296,31 +210,7 @@ their original sources to migrate.
 
 ## Queries and active generations
 
-Runtime loading interns variant-equivalent forms independently of microtheory.
-There is **one dynamically asserted executable clause per form**, and **one
-primary assertion number per (form, microtheory)**. Repeated source occurrences
-within that MT join their contributions into the existing number. Another MT
-retains a different number and separate properties, linked by
-`kb_runtime:xc_same_form/2` and the API's `sameForm` links. Ordinary unification
-or subsumption is never used for form identity.
-
-Each source contribution retains its own occurrence ID, source/line, original
-variable names, MT and properties. The API exposes these together in
-`contributions`; `aliases` and `xc_source_id/2` retain original IDs. Joined
-properties never cross MT records. Query proof steps include only supporting
-contributions from that query's selected generation and MT.
-
-Existence checks, dynamic assertion, MT identity selection and contribution
-updates are atomic across loader workers. Unloading a source removes only its
-contributions. Its MT number survives while any remaining source supports it;
-the shared executable clause survives while any MT supports it. Generation
-leases also retain the old contributions for already-running queries.
-Status distinguishes primary `assertions`, shared `forms`, and source
-`occurrences`. Original source files and offline companions are not rewritten
-to impose runtime deduplication. Restart once before loading existing snapshots
-under this new runtime representation.
-
-The browser's **Run query** action accepts S-expressions, a microtheory (or all contexts),
+The browser query console accepts S-expressions, a microtheory (or all contexts),
 a result limit, and a timeout. Results include bindings and successful proof
 steps. Unscoped queries run the **whole query independently in each MT**.
 There is no implicit MT inheritance or cross-MT joining.
@@ -338,41 +228,10 @@ API contexts keep atomic keys such as `x_tinyKB`. Compound contexts use an opaqu
 key and render the expression. Query inputs may also use a source S-expression
 such as `(CommonsenseMicrostoryMtFn ViolentImpact-Harm)`.
 
-The KB dispatcher calls only registered guarded KB predicates and supported
+The dispatcher calls only registered guarded KB predicates and supported
 conjunction/disjunction forms. It does not execute operating-system commands,
 arbitrary Prolog built-ins, or MeTTa. Unsupported goals are errors. Neither
 loading nor browsing a rule executes its body.
-
-**Run Prolog** is a separate, explicitly trusted-local execution mode, not a
-sandbox. It accepts a single Prolog goal, including built-ins and side effects.
-Unqualified predicates and user assertions live in the persistent
-`powder_console` module. Use explicit module qualification to access `user` or
-application modules. Current-generation KB predicates are bridged into the
-console and require a selected microtheory; ordinary built-ins run once without
-one. For example, `member(X,[a,b]).` needs no KB context.
-
-Execution honors the selected result/time limits without rerunning goals to
-count results. Output from current output, `user_output`, and `user_error` is
-captured together; input is EOF. Results distinguish success, false, reaching
-the result limit, exceptions, and timeout, preserving output and earlier
-solutions on exceptions. Unqualified assertions persist until explicitly
-retracted. Side effects are **not rolled back** by failure, cancellation,
-exceptions, or timeout; full Prolog can change files and stop the server.
-
-Full execution requires a loopback peer, the server's exact localhost host/port,
-same-origin browser metadata, and a server-issued local CSRF capability header.
-It is only available on explicit POST; no GET or dropdown action executes code.
-Do not expose this trusted-local server through an unauthenticated remote proxy.
-
-The stored-question dropdown reads actual loaded `test_Qs/3` assertions. The
-schema is declared in `KBs\SigmaTestQuestions.krf`: identifier string, English
-question string, then query formula. Every available choice is retrieved through
-pagination, searchable, and labelled with its owning MT/source location.
-Selecting one fills editable Prolog text and context, but never runs it.
-Variables keep their sharing and show their original-to-Prolog name mapping.
-Conjunction/disjunction become Prolog controls; other formula heads remain KB
-predicates. The owning question MT is not necessarily the data context needed
-to answer it, so the context stays editable.
 
 Runtime source replacement uses validated immutable native `.pl` snapshots in
 `.runtime`. Native clause `file/1` and `line_count/1` properties refer to those
@@ -389,37 +248,11 @@ Original files and their compiled/index companions are not deleted on unload.
 
 ## APIs and browser
 
-The application is mounted at `/swish/powder/`; every REST endpoint is under
-`/swish/powder/api/`. The shared `web/paths.json` supplies the mount to both
-Prolog route registration and the browser client.
-
-Read endpoints: `status`, `search`, `predicates`, `term`, `microtheory`,
-`microtheories`, `assertion`, `kb/catalog`, `source`, `mappings`, and `version`.
-Mutation/query endpoints: `POST kb/load`, `kb/unload`, and `query`.
-Application maintenance: `POST app/reload` with an empty JSON object.
-Stored questions: `GET test-questions` (`q`, `offset`, `limit`).
-Full local Prolog: `GET prolog/access` obtains the local capability;
-`POST prolog/query` requires it in `X-Powder-Local-Token`.
-All names in this paragraph are relative to `/swish/powder/api/`.
-
-Loads, unloads, KB queries and full-Prolog queries return **HTTP 202** with
-`{accepted:true,jobId,pool,state:"queued"}`. Read `GET tasks/detail?id=...` until
-the task reaches `succeeded`, `failed` or `cancelled`; only then consume its
-`result` or `error`. **Queue Selected for Loading** releases Sources controls as
-soon as the job is accepted. Tracking continues after navigation, with a link
-to Tasks; publication updates the active manifest without discarding later draft
-edits. Acceptance or failure never resets the draft. `GET tasks` returns the pool overview
-and task lists. `POST tasks/cancel` accepts `{id:...}` and requires the local
-capability header; full-Prolog side effects completed before cancellation are
-not undone. `GET server/settings` reads next-start configuration;
-`POST server/settings/save` saves `{revision,settings}` with the same trusted-local
-capability protection. Neither settings endpoint executes a startup load.
-
-Examples: `/swish/powder/#/query`, `/swish/powder/#/settings`, and
-`/swish/powder/api/status`. `/swish/powder` redirects to its trailing-slash form.
-Powder does not claim `/`, the parent `/swish/`, or sibling applications, and
-does not alias the old `/api/` or `/powder/` locations. Unknown API paths return
-JSON 404 responses, never the SPA page. This mount does not install SWISH.
+Read endpoints: `/api/status`, `/api/search`, `/api/predicates`, `/api/term`,
+`/api/microtheory`, `/api/microtheories`, `/api/assertion`, `/api/kb/catalog`, `/api/source`,
+`/api/mappings`, and `/api/version`.
+Mutation/query endpoints: `POST /api/kb/load`, `/api/kb/unload`, `/api/query`.
+Application maintenance: `POST /api/app/reload` with an empty JSON object.
 Load/unload requests carry the expected `generation`; conflicts return HTTP 409.
 Pagination uses `offset` and `limit` (1-400), defaulting to 400. Queries default
 to 400 results, accept 1-1000 results, and retain the existing 30-second timeout
@@ -437,7 +270,7 @@ Markdown-backed mapping table. Approximate mappings remain labelled proposals,
 not authoritative ontology identities.
 The Microtheories page lists every indexed context with its assertion count,
 including compound contexts, and retains the full list while a context is open.
-`GET /swish/powder/api/microtheories` returns the entire generation's catalog without a result
+`GET /api/microtheories` returns the entire generation's catalog without a result
 cap; assertion pages within each context remain paginated.
 
 Web assets are served without stale caching. Content-version polling refreshes
@@ -448,9 +281,7 @@ Settings > **Reload changed files** reloads changed, already loaded application
 modules directly under `prolog/ow_dr`, using SWI's module loader and recorded
 dependencies. It excludes KB sources, generated companions, runtime snapshots,
 tests, external modules and include-only KB headers; it never invokes broad
-`make/0`. Application-code reload proceeds alongside loader and inference work,
-without a busy/retry denial or waiting for the store lock. Only simultaneous
-application-code reload requests serialize with one another. Active generations,
+`make/0`. Code reload and source compilation are serialized. Active generations,
 native assertion handles, browser drafts and saved settings are retained.
 The button sends no filenames or executable goals. Reload failures are reported
 with affected files; already applied code changes cannot be automatically rolled
@@ -460,148 +291,6 @@ A server started before this endpoint existed needs one normal restart to load
 the feature; subsequent button presses do not require restarting the server.
 A long-running `--edit` compiler also keeps its loaded implementation. Start a
 fresh compiler invocation after changing Prolog application code.
-
-## Task pools
-
-Loader, inference and HTTP pools have separate server-side profiles, each
-defaulting to **startup 5, maximum 10, spare 2**. Settings validates
-`1 <= startup <= maximum <= 128` and `0 <= spare <= maximum`. Changes apply
-at the next normal server start, not on save or application-code reload.
-
-The loader and inference pools own separate worker threads and bounded queues
-(100 waiting requests per pool). Each accepted request receives an ID before a
-worker starts. Workers grow toward `busy + queued + spare`, never above the
-configured maximum. Spare is a preferred minimum idle reserve, not a command to
-exceed capacity. Pools do not shrink during the run; workers retire gracefully
-at shutdown. Application-code reload does not spawn duplicate pools.
-
-All managed source replacement/unload, startup-source loads, and public native
-cache import/loading use the loader service. Independent source preparations
-can overlap, but loader publication follows accepted FIFO intent. Accepted
-source selections are complete manifests; later queued selections publish after
-earlier ones. Offline source compiler claims do not block loading existing
-artifacts. Missing/invalid artifacts produce a visible failed task without
-triggering compilation. Allocator locks still protect newly needed runtime
-identities. Inference uses immutable generation leases, so
-an existing query can finish against its old native clauses while a new
-generation is published. Retired snapshots are removed after their readers
-finish. Arbitrary Prolog I/O remains explicitly user-operated Prolog, not an
-implicit KB loader.
-
-KB and full-Prolog inference run in the dedicated inference pool, not HTTP
-request threads. The result and time limits still apply. Scheduling, polling,
-listing and counting tasks never rerun a query. Queued cancellation prevents
-execution; running cancellation signals only the matching task. A loader
-publication already in progress is not interrupted.
-
-Settings shows a separate **Requested tasks** list for loader and inference,
-including all active/queued tasks and the latest 100 completed tasks. Completed
-history is bounded; active jobs are never pruned. Task history is transient and
-pending work is **not** resumed after process restart. Public pool views omit
-arbitrary query text, output, tokens and request headers; private query results
-remain available through their task ID.
-
-HTTP profiles apply server-wide to the app's actual listener. Its scoped
-scheduler uses SWI's HTTP worker facilities and enforces the same maximum/reserve
-policy without changing unrelated listeners. HTTP idle counts come from workers
-waiting on the accept queue; busy counts are the remaining workers, not guesses
-based on generic thread `running` state. Queue depth is read from that queue.
-Five or more simultaneous heavy loads can still consume substantial memory;
-set smaller startup/maximum values when appropriate.
-
-A server predating this service needs one normal restart to create the pools
-and apply startup settings. Application-code reload may install the API/UI code
-but deliberately does not bootstrap or resize an already running server.
-
-## On-disk inventory reports
-
-`kb_inventory:inventory(SourceDirectory, ReportDirectory)` scans the original
-KIF/KRF/MeTTa files as data, without consulting, compiling, importing, or
-executing KB expressions. It writes derived `<source>.inventory.json` sidecars
-and a `microtheory` subdirectory containing one safe, readable JSON filename per
-MT plus `_catalog.json`. Compound contexts use names such as
-`DataOfFn_Something.json`; canonical identities are retained inside the data,
-and case-insensitive filename collisions receive stable hash suffixes.
-Existing unrelated JSON files are not overwritten.
-
-The report directory contains `microtheories.csv`,
-`microtheory-predicates-files.csv`, `kb-file-counts.csv`, a complete NDJSON
-per-file stream, and `summary.json`. Counts are disk occurrences, not runtime
-form/MT deduplication. The original `ruleCount` field counts **executable**
-`<===` heads only; it must not be interpreted as the total logical-rule count.
-GAFs are ground atomic assertions. The semantic supplement below separates
-logical rule-shaped data from remaining non-ground/formula data.
-Declaration targets of `argIsa`, `argGenl`, `resultIsa`,
-`resultGenl`, `argFormat`, known indexed variants, range/domain declarations,
-and explicit arity declarations are included with distinct reference counts.
-An argument-position number is never treated as full predicate arity.
-
-Companion `physicalLineCount` is the exact number of LF bytes, equivalent to
-`wc -l`, including metadata and directives and excluding any unterminated final
-line. Parsed semantic clauses, metadata facts, and directives have separate
-counts. Missing/unreadable/stale/changing evidence is labelled explicitly.
-Sources, normalized companions, indexes, allocator state and running
-generations are not changed. Inventory JSON is generated local data and should
-not be automatically staged or pushed.
-
-`kb_inventory_links:extend_inventory(SourceDirectory, ReportDirectory)` adds a
-compiled-companion-only projection to the same sidecars/catalogs without
-repeating the original-source or LF-count pass. It discovers relations whose
-first **and** second arguments have Microtheory-valued schema declarations
-(`argIsa`, `arg1Isa`, `arg2Isa`, plus documented explicit subtype/predicate
-specialization evidence). `_relations.json` contains the actual evidence and
-unresolved one-sided signatures. This is not a name-suffix heuristic.
-
-Each MT JSON contains relation-specific `mtRelations` with `asArg1` and `asArg2`
-neighbors and source/line/asserting-context supports. `genlMt` additionally has
-the same two arrays as a convenient hierarchy field. Endpoints are associated
-with the MTs named in the relation, not its asserting context. Referenced-only
-MTs receive zero-clause entries. Multiple parents, cycles, self-links and support
-multiplicity remain explicit data; no inferred edge or runtime MT inheritance
-is introduced. Compiled metadata guards are removed for semantic identity:
-`Head :- x_cid(...)` remains a fact, while `x_cid_io` recovers the rule body.
-
-The projection retains an `assertion-identities.ndjson` stream for exact
-disk-backed global deduplication. Its variant hash is the runtime's
-`variant_sha1/2`; an exact variable-preserving canonical form is retained as a
-collision check. Source IDs/properties/locations are excluded from form identity,
-and canonical MTs distinguish per-MT assertion identities. This is separate
-from a requested quick **textual** `^x_` line count whose temporary copies only
-replace guard IDs with `XXXX`; that quick count does not alpha-normalize forms.
-
-After exact aggregation has retained `unique-forms.sqlite`, the optional
-standard-library Python/SQLite reporter enriches the existing JSON without
-reading original sources or compiled payloads again:
-
-```powershell
-python .\prolog\ow_dr\inventory_rule_counts.py --report-directory C:\path\to\completed-inventory-report
-```
-
-`kb_inventory_rules:rule_classification/2` is the authoritative inert structural
-classifier. `compiledSemanticCounts` separates `semanticRuleCount`,
-`logicalRuleDataCount`, `executableRuleCount`, `gafCount`, and `otherCount`.
-Recognized positive forms include implications, biconditionals, and preserved
-`<==` rule-shaped operator data (including head-only forms); universal binder
-wrappers are retained in the evidence. `<==` keeps its own classification and
-is **not** translated into implication, committed choice, or executable code.
-Negated rules and arbitrary non-ground data are not counted as positive rules.
-
-`compiledRuleHeads` retains consequent/head predicate, semantic arity, polarity,
-side and reference count. Multiple/disjunctive conclusions can produce more
-head references than rule assertions; they do not become separately asserted
-facts. `headReferenceCount` and `rulesWithoutHeadReferences` make this explicit.
-`semantic-rule-occurrences.ndjson` retains source, line, MT, canonical form and
-classification for each supporting occurrence. Every source/MT/catalog JSON
-defines the legacy `ruleCount` meaning in `countSemantics`.
-
-The completed 975-source snapshot has 9,281 logical rule-shaped occurrences
-(5,177 implications, 153 biconditionals, 3,951 `<==` forms), **zero executable
-rules**, 1,974,602 GAFs and 10,138 remaining forms. Its 13,682 head references
-are distinct from assertion counts. There are 1,942,605 globally unique forms
-(8,308 rule-shaped forms) and 1,985,179 unique form/MT assertions (9,023
-rule-shaped assertions). The supplement includes all 975 sidecars, including
-11 zero-assertion sources, and 2,746 MT JSON files. These are retained
-disk-snapshot counts, not an inference result or a claim about a running server.
 
 ## Scope and current limitations
 

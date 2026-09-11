@@ -1,4 +1,4 @@
-:- module(kb_catalog, [catalog/1, catalog/2, authorize_sources/2, source_excerpt/3]).
+:- module(kb_catalog, [catalog/1, authorize_sources/2, source_excerpt/3]).
 :- use_module(kb_paths).
 :- use_module(kb_store, []).
 :- use_module(library(filesex)).
@@ -11,19 +11,13 @@
 :- dynamic source_measure/4.
 
 catalog(Catalog) :-
-    catalog(false,Catalog).
-catalog(Canonical,Catalog) :-
     native_catalog(Entries),
     statistics(walltime,[Start,_]),
-    maplist(catalog_file(Start,Canonical),Entries,Files),
+    maplist(catalog_file(Start),Entries,Files),
     tree(Files,Nodes),
     kb_store:generation(G),
     findall(P,(kb_store:source_info(S,_),public_path(S,P)),Active),
-    Public=_{root:'KBs',nodes:Nodes,generation:G,active:Active},
-    (Canonical==true->
-      repo_root(Root),(current_prolog_flag(windows,true)->Sensitive=false;Sensitive=true),
-      Catalog=Public.put(_{canonicalRoot:Root,pathCaseSensitive:Sensitive})
-    ;Catalog=Public).
+    Catalog=_{root:'KBs',nodes:Nodes,generation:G,active:Active}.
 
 native_catalog(Entries) :-
     current_prolog_flag(windows,true), !,
@@ -53,13 +47,10 @@ supported(File) :-
     memberchk(Ext,[kif,krf,metta]).
 
 catalog_file(Start, Entry, Node) :-
-    catalog_file(Start,false,Entry,Node).
-catalog_file(Start, Canonical, Entry, Node) :-
     resolve_source(Entry.path,File),public_path(File,Public),
     source_lines(File,Entry.modified,Entry.sizeBytes,Start,Lines),
     file_base_name(Entry.path,Name),
-    Base=_{path:Public,name:Name,type:file,lineCount:Lines,sizeBytes:Entry.sizeBytes},
-    (Canonical==true->Node=Base.put(canonicalPath,File);Node=Base).
+    Node=_{path:Public,name:Name,type:file,lineCount:Lines,sizeBytes:Entry.sizeBytes}.
 
 source_lines(File,Modified,Size,_,Lines) :- source_measure(File,Modified,Size,Lines), !.
 source_lines(File,Modified,Size,Start,Lines) :-

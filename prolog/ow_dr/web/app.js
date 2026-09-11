@@ -1,8 +1,7 @@
 import { assertionRoles, contextExpression, contextInputText, contextLabel, expressionText, groupAssertions, renderExpression, routeHref, symbolLabel } from './render.js';
-import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, mergeStartupSources, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON } from './model.js';
+import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON } from './model.js';
 import { collectDiagnostics, diagnosticCounts, diagnosticMessages, diagnosticProperty, mappingRowsOf, splitMappingRows } from './diagnostics.js';
 import { DEFAULT_SETTINGS, MAXIMUMS, loadSettings, saveSettings } from './settings.js';
-import { apiPath } from './paths.js';
 
 const $ = selector => document.querySelector(selector);
 const content = $('#content');
@@ -11,12 +10,9 @@ const number = value => new Intl.NumberFormat().format(Number(value) || 0);
 const state = {
   status: null, catalog: null, selection: null, expanded: new Set(['KBs']),
   knownSources: new Set(), knownMappings: null, contexts: new Map(),
-  mutation: false, codeReloading: false, sourceTasks: new Map(), refreshSources: null,
-  routeController: null, queryController: null, view: 0,
+  mutation: false, routeController: null, queryController: null, view: 0,
   settings: { ...DEFAULT_SETTINGS },
   query: { query: '', mt: '', limit: DEFAULT_SETTINGS.queryLimit, timeout: 3 },
-  refreshQuestions: null,
-  queryJobId: null,
 };
 
 function element(tag, attributes = {}, ...children) {
@@ -58,49 +54,11 @@ function api(path, params = {}, options = {}) {
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
   }
-  return requestJSON(`${apiPath(path)}${query.size ? `?${query}` : ''}`, options);
-}
-
-async function localAdmin(path, body) {
-  const { token } = await api('prolog/access');
-  return api(path, {}, { method: 'POST', body, headers: { 'X-Powder-Local-Token': token } });
-}
-
-async function awaitTask(accepted, { signal, onUpdate, onPollError } = {}) {
-  if (!accepted?.accepted) return accepted;
-  const id = accepted.jobId;
-  const abort = () => { localAdmin('tasks/cancel', { id }).catch(error => showNotice(`Cancellation could not be confirmed: ${error.message}`, true)); };
-  if (signal?.aborted) { abort(); throw new DOMException('Cancelled', 'AbortError'); }
-  signal?.addEventListener('abort', abort, { once: true });
-  try {
-    for (;;) {
-      let task;
-      try { task = await api('tasks/detail', { id }, { signal }); }
-      catch (error) {
-        if (!onPollError || (error.code !== 'connection_failed' && !(error.status >= 500))) throw error;
-        onPollError(error);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        continue;
-      }
-      onUpdate?.(task);
-      if (task.state === 'succeeded') return task.result;
-      if (['failed', 'cancelled'].includes(task.state)) {
-        if (task.result?.mode === 'prolog') {
-          throw new APIError(task.result.exception?.message ?? 'Prolog task failed.', 'prolog_exception', 422, { execution: task.result });
-        }
-        throw new APIError(task.error?.message ?? `Task ${task.state}.`, `task_${task.state}`, 422, task.error);
-      }
-      await new Promise(resolve => setTimeout(resolve, 250));
-      if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
-    }
-  } finally {
-    signal?.removeEventListener('abort', abort);
-  }
+  return requestJSON(`/api/${path}${query.size ? `?${query}` : ''}`, options);
 }
 
 function showNotice(message, isError = false) {
   const target = $('#notice');
-  delete target.dataset.taskId;
   target.replaceChildren(element('div', { className: 'notice-content' }, message),
     button('Dismiss', () => { target.hidden = true; }, 'text-button'));
   target.className = `notice${isError ? ' error-notice' : ''}`;
@@ -169,9 +127,6 @@ function propertyList(properties, { context } = {}) {
       const rows = splitMappingRows(Array.isArray(property.value) ? property.value : []);
       value = element('span', {}, `${number(rows.ids.length)} mapping IDs · ${number(rows.markers.length)} diagnostic markers${rows.other.length ? ` · ${number(rows.other.length)} other annotations` : ''}`);
     } else if (property.name === 'microtheory' && context) value = mtLink(context.mt, context.mtExpression);
-    else if (context?.contributions?.length > 1 && ['source_file', 'source_line', 'kb_names'].includes(property.name)) {
-      value = element('span', { className: 'muted' }, 'See the associated source contributions below.');
-    }
     else value = property.value?.type ? renderExpression(property.value) : element('pre', {}, displayProperty(property.value));
     list.append(element('dt', {}, property.name),
       element('dd', {}, value));
@@ -261,15 +216,6 @@ function assertionCard(assertion, term) {
   const card = element('article', { className: 'assertion-card' },
     roles.length > 0 && element('div', { className: 'role-labels' }, roles.map(role => element('span', {}, labels[role]))),
     renderExpression(assertion.expression), diagnosticsPanel(assertion), footer);
-  if (assertion.sameForm?.length) card.append(element('div', { className: 'same-form-links' },
-    'Same form in other microtheories: ',
-    assertion.sameForm.flatMap((id, index) => [index ? ', ' : '', link(id, 'assertion', { id })])));
-  if (assertion.contributions?.length) card.append(element('details', { className: 'source-contributions' },
-    element('summary', {}, `${number(assertion.contributions.length)} source ${assertion.contributions.length === 1 ? 'contribution' : 'contributions'}`),
-    assertion.contributions.map(item => element('section', {},
-      element('p', {}, sourceLink(item.source, item.line), ' · ', element('code', {}, item.sourceId)),
-      element('p', {}, mtLink(item.mt, item.mtExpression)),
-      propertyList(item.properties)))));
   if (mapping.other.length) {
     card.append(element('details', { className: 'assertion-properties' },
       element('summary', {}, 'Other mapping annotations'),
@@ -342,20 +288,15 @@ function searchForm(routeName, q = '', placeholder = 'Name, symbol, or fragment'
 }
 
 function setStatus(status) {
-  if (state.status && status.generation < state.status.generation) return false;
+  if (state.status && status.generation < state.status.generation) return;
   if (state.status && status.generation !== state.status.generation) state.contexts.clear();
   state.status = status;
-  if (state.selection && status.generation > state.selection.generation) {
-    const preserveDraft = state.selection.dirty || [...state.sourceTasks.values()].some(task => task.path === 'kb/load');
-    state.selection.updateActive((status.files ?? []).map(file => file.path), status.generation, preserveDraft);
-  }
   for (const file of status.files ?? []) {
     const path = canonicalPath(file.path);
     if (path) state.knownSources.add(path);
   }
   $('#generation-state').textContent = `Generation ${status.generation} · ${number(status.counts?.assertions)} assertions`;
   $('#loaded-count').textContent = `${number(status.files?.length)} loaded ${status.files?.length === 1 ? 'source' : 'sources'}`;
-  return true;
 }
 
 function rememberCatalog(catalog) {
@@ -433,10 +374,6 @@ async function overview(_route, signal) {
     heading('Knowledge overview', 'Follow a term, inspect its assertions, and trace every claim to its source.'),
     searchForm('search', '', 'Search the active knowledge base…'),
     stats, diagnosticsPanel(status, { status: true }));
-  if (status.startup) panel.append(element('section', { className: 'startup-status', role: 'status' },
-    element('h2', {}, `Startup load: ${status.startup.state}`),
-    status.startup.error?.message && element('p', {}, status.startup.error.message),
-    link('Inspect requested tasks and startup settings', 'settings')));
   if (!status.files?.length) {
     panel.append(loadedFiles([]));
     return panel;
@@ -622,83 +559,25 @@ async function sourcePage(route, signal) {
 
 function setMutation(value) {
   state.mutation = value;
-  for (const control of document.querySelectorAll('[data-mutation]')) {
-    control.disabled = value || control.dataset.mutationDisabled === 'true';
-  }
-}
-
-async function refreshPublishedView() {
-  if (state.refreshSources) state.refreshSources();
-  else if (state.refreshQuestions) await state.refreshQuestions();
-  else if (parseRoute(location.hash).name !== 'settings') await renderRoute();
-}
-
-function sourceTaskNotice(id, message, isError = false) {
-  showNotice(element('div', {}, message, element('p', {}, `Loader task ${id}. `,
-    link('View task in Tasks', 'settings', { task: id }))), isError);
-  $('#notice').dataset.taskId = id;
-}
-
-async function sourceUpdateError(error, id) {
-  let refreshError;
-  if (error.status === 409 || error.code === 'stale_generation') {
-    try { setStatus(await api('status')); await refreshPublishedView(); }
-    catch (failure) { refreshError = failure; }
-  }
-  const details = requestErrorDetails(error, { preserveSelection: true });
-  if (refreshError) {
-    details.append(element('p', { className: 'status-refresh-error' },
-      `Refreshing the active KB after this failure also failed: ${apiErrorSummary(refreshError)} The last confirmed status is shown. Reopen KB Sources to refresh it before submitting another change.`));
-  }
-  if (id) sourceTaskNotice(id, details, error.code !== 'busy');
-  else showNotice(details, error.code !== 'busy');
-  if (error.code === 'busy') $('#notice').className = 'notice busy-notice';
-}
-
-async function trackSourceTask(accepted, path, successMessage) {
-  const id = accepted.jobId;
-  state.sourceTasks.set(id, { path });
-  const updateNotice = message => {
-    if ($('#notice').dataset.taskId === id && !$('#notice').hidden) sourceTaskNotice(id, message);
-  };
-  try {
-    const status = await awaitTask(accepted, {
-      onUpdate: task => {
-        if (!['queued', 'running'].includes(task.state)) return;
-        const progress = task.progress ?? {};
-        const source = progress.currentPath || progress.source;
-        updateNotice(`Loader task ${task.state}: ${progress.phase ?? task.label}${source ? ` — ${source}` : ''}. The previous KB remains active until publication succeeds. You can keep editing your draft or leave this page.`);
-      },
-      onPollError: () => updateNotice('Task tracking is reconnecting. The accepted job is still tracked in Tasks; do not resubmit it.'),
-    });
-    const current = setStatus(status);
-    sourceTaskNotice(id, current ? successMessage
-      : `Published generation ${status.generation}. Generation ${state.status.generation} is now active.`);
-    if (current) await refreshPublishedView();
-  } catch (error) {
-    await sourceUpdateError(error, id);
-  } finally {
-    state.sourceTasks.delete(id);
-  }
+  for (const control of document.querySelectorAll('[data-mutation]')) control.disabled = value;
 }
 
 async function mutateSource(path, body, successMessage) {
   if (state.mutation) return false;
   setMutation(true);
-  showNotice('Submitting the source request. The active KB and your draft stay unchanged until publication succeeds.');
+  showNotice('Updating the active knowledge base. The previous generation remains available until this succeeds.');
   try {
-    const accepted = await api(path, {}, { method: 'POST', body });
-    if (accepted?.accepted) {
-      sourceTaskNotice(accepted.jobId, 'Source request queued. The active KB and your draft are unchanged until publication. You can keep editing or leave this page.');
-      void trackSourceTask(accepted, path, successMessage);
-    } else {
-      setStatus(accepted);
-      showNotice(successMessage);
-      await refreshPublishedView();
-    }
+    const status = await api(path, {}, { method: 'POST', body });
+    setStatus(status);
+    if (state.selection) state.selection.reset((status.files ?? []).map(file => file.path), status.generation);
+    showNotice(successMessage);
     return true;
   } catch (error) {
-    await sourceUpdateError(error);
+    if (error.status === 409) {
+      try { setStatus(await api('status')); } catch { /* Keep the last confirmed generation if refresh also fails. */ }
+    }
+    showNotice(requestErrorDetails(error, { preserveSelection: true }), error.code !== 'busy');
+    if (error.code === 'busy') $('#notice').className = 'notice busy-notice';
     return false;
   } finally {
     setMutation(false);
@@ -707,8 +586,9 @@ async function mutateSource(path, body, successMessage) {
 
 async function unloadSource(file) {
   if (state.mutation) return;
-  await mutateSource('kb/unload', { path: file.path, generation: state.status.generation },
+  const success = await mutateSource('kb/unload', { path: file.path, generation: state.status.generation },
     `Unloaded ${file.path} from memory. Source files and caches are unchanged.`);
+  if (success) await renderRoute();
 }
 
 async function sourcesPage(_route, signal) {
@@ -718,7 +598,7 @@ async function sourcesPage(_route, signal) {
   setStatus(status);
   rememberCatalog(catalog);
   if (!state.selection || !state.selection.dirty) {
-    state.selection = new SourceSelection(catalog.nodes, (state.status.files ?? []).map(file => file.path), state.status.generation);
+    state.selection = new SourceSelection(catalog.nodes, catalog.active, catalog.generation);
   } else {
     const previous = state.selection;
     const updated = new SourceSelection(catalog.nodes, [...previous.active], previous.generation);
@@ -734,7 +614,7 @@ async function sourcesPage(_route, signal) {
   const statusNote = element('p', { className: 'muted draft-note' });
   const updateDraft = () => {
     draftCount.textContent = `${number(model.selected.size)} of ${number(model.files.length)} files selected${model.dirty ? ' · unsaved selection' : ''}`;
-    statusNote.textContent = `Selection generation ${model.generation}. Queue submits this exact file list; unselected descendants stay excluded. Changes remain a draft until the task publishes. Loading zero files is allowed.`;
+    statusNote.textContent = `Selection generation ${model.generation}. ${model.dirty ? 'Load applies this exact file list; unselected descendants stay excluded.' : 'Select files to replace the active source set. Loading zero files is allowed.'}`;
   };
   const updateControls = paths => {
     for (const path of paths) {
@@ -744,7 +624,6 @@ async function sourcesPage(_route, signal) {
         checkbox.checked = value.checked;
         checkbox.indeterminate = value.indeterminate;
         checkbox.disabled = state.mutation || value.disabled;
-        checkbox.dataset.mutationDisabled = String(value.disabled);
         checkbox.setAttribute('aria-checked', value.indeterminate ? 'mixed' : String(value.checked));
       }
       if (counts.has(path)) counts.get(path).textContent = `${number(value.selected)}/${number(value.total)}`;
@@ -792,11 +671,12 @@ async function sourcesPage(_route, signal) {
   };
   const tree = element('ul', { className: 'source-tree', 'aria-label': 'Supported original sources under KBs' }, model.roots.map(buildNode));
   updateControls(model.records.keys());
-  const load = button('Queue Selected for Loading', async () => {
-    await mutateSource('kb/load',
+  const load = button('Load selected sources', async () => {
+    const successful = await mutateSource('kb/load',
       { files: model.selectedFiles(), generation: model.generation },
       'The selected sources are now active.');
-    updateControls(model.records.keys());
+    if (successful) await renderRoute();
+    else updateControls(model.records.keys());
   });
   load.dataset.mutation = '';
   load.disabled = state.mutation;
@@ -806,20 +686,13 @@ async function sourcesPage(_route, signal) {
   }, 'button secondary');
   reset.dataset.mutation = '';
   reset.disabled = state.mutation;
-  const loaded = element('div', {}, loadedFiles(state.status.files));
-  state.refreshSources = () => {
-    if (signal.aborted) return;
-    updateControls(model.records.keys());
-    loaded.replaceChildren(loadedFiles(state.status.files));
-  };
   return element('div', {},
     heading('KB Sources', 'Choose original sources from the repository’s KBs directory. Loading and unloading never deletes files.'),
     element('section', { className: 'source-selection' }, element('h2', {}, 'Source selection'),
       element('div', { className: 'source-actions' }, load, reset, draftCount), statusNote,
-      element('p', { className: 'muted' }, 'Accepted requests continue in the background. ', link('Track or cancel them in Tasks', 'settings')),
       model.files.length ? tree : empty('No supported sources found', 'Place the original KIF, KRF, or MeTTa corpus under KBs. Generated companions are intentionally hidden.')),
     element('section', { className: 'loaded-section' }, element('h2', {}, 'Currently loaded'),
-      loaded));
+      loadedFiles(state.status.files)));
 }
 
 function selectField(label, name, value, options, onChange) {
@@ -856,33 +729,10 @@ function queryResults(data) {
           link(step.id, 'assertion', { id: step.id }, 'assertion-id'),
           Number.isFinite(step.before) && Number.isFinite(step.after)
             ? element('span', { className: 'muted' }, `Bound slots ${step.before} → ${step.after}`) : null),
-        renderExpression(step.expression),
-        step.contributions?.length ? element('details', {}, element('summary', {}, 'Supporting source contributions'),
-          step.contributions.map(item => element('div', {}, sourceLink(item.source,item.line),
-            ' · ',element('code',{},item.sourceId),propertyList(item.properties)))) : null)))));
+        renderExpression(step.expression))))));
     results.append(body);
   });
   return results;
-}
-
-function prologResults(data) {
-  const failed = ['exception', 'timeout', 'cancelled'].includes(data.status);
-  const titles = { success: 'Prolog succeeded', failure: 'Prolog failed (false)',
-    limit: 'Prolog result limit reached', exception: 'Prolog raised an exception', timeout: 'Prolog timed out', cancelled: 'Prolog cancelled' };
-  const panel = element('section', { className: `prolog-results${failed ? ' error-panel' : ''}`, role: failed ? 'alert' : 'status' },
-    element('h2', {}, titles[data.status] ?? data.status),
-    element('p', { className: 'muted' }, 'Executed in powder_console. Side effects are not rolled back, including on failure, cancellation, or exceptions.'));
-  if (data.exception) panel.append(element('pre', { className: 'prolog-output' }, data.exception.term));
-  for (const [label, output] of [['Output', data.output], ['Error output', data.errorOutput]]) {
-    if (output) panel.append(element('h3', {}, label), element('pre', { className: 'prolog-output' }, output));
-  }
-  for (const [index, solution] of (data.solutions ?? []).entries()) {
-    panel.append(element('h3', {}, `Solution ${index + 1}`),
-      solution.bindings.length ? element('dl', { className: 'bindings' }, solution.bindings.flatMap(binding => [
-        element('dt', {}, binding.name), element('dd', {}, element('code', {}, binding.value)),
-      ])) : element('p', {}, 'true'));
-  }
-  return panel;
 }
 
 async function queryPage(route, signal) {
@@ -894,7 +744,7 @@ async function queryPage(route, signal) {
     const context = await api('microtheory', { mt: values.mt, limit: 1 }, { signal });
     rememberContext(values.mt, context.mtExpression ?? context.items?.[0]?.mtExpression);
   }
-  let initialContext = { key: values.mt ?? '', display: contextInputText(values.mt, state.contexts.get(values.mt)) };
+  const initialContext = { key: values.mt ?? '', display: contextInputText(values.mt, state.contexts.get(values.mt)) };
   let contextEdited = false;
   const query = element('textarea', {
     name: 'query', rows: 5, required: true, value: values.query,
@@ -907,7 +757,6 @@ async function queryPage(route, signal) {
   const timeout = element('input', { name: 'timeout', type: 'number', min: 1, max: 30, step: 1, required: true, value: positiveInteger(values.timeout, 3, 30, 1) });
   const results = element('div', { className: 'query-results', 'aria-live': 'polite' });
   const run = element('button', { type: 'submit', className: 'button' }, 'Run query');
-  const runProlog = element('button', { type: 'submit', className: 'button secondary', 'data-query-mode': 'prolog' }, 'Run Prolog');
   const cancel = button('Cancel query', () => state.queryController?.abort(), 'button secondary');
   cancel.hidden = true;
   const selectedContext = element('div', { className: 'selected-context' });
@@ -928,7 +777,6 @@ async function queryPage(route, signal) {
   const form = element('form', { className: 'query-form', onsubmit: async event => {
     event.preventDefault();
     if (state.queryController || !query.value.trim()) return;
-    const prolog = event.submitter?.dataset.queryMode === 'prolog';
     saveDraft();
     const body = {
       query: query.value.trim(), mt: currentContext(),
@@ -938,36 +786,24 @@ async function queryPage(route, signal) {
     const controller = new AbortController();
     state.queryController = controller;
     run.disabled = true;
-    runProlog.disabled = true;
     cancel.hidden = false;
     results.setAttribute('aria-busy', 'true');
-    results.replaceChildren(element('p', { className: 'loading', role: 'status' },
-      prolog ? 'Running full Prolog in the local server process…' : 'Searching for bounded, context-isolated proofs…'));
+    results.replaceChildren(element('p', { className: 'loading', role: 'status' }, 'Searching for bounded, context-isolated proofs…'));
     try {
-      let token;
-      if (prolog) token = (await api('prolog/access', {}, { signal: controller.signal })).token;
-      const accepted = await api(prolog ? 'prolog/query' : 'query', {}, { method: 'POST', body,
-        headers: prolog ? { 'X-Powder-Local-Token': token } : {} });
-      state.queryJobId = accepted.jobId ?? null;
-      const data = await awaitTask(accepted, { signal: controller.signal, onUpdate: task => {
-        results.replaceChildren(element('p', { className: 'loading', role: 'status' },
-          `Inference task ${task.id}: ${task.state}.`));
-      } });
-      if (!controller.signal.aborted) results.replaceChildren(prolog ? prologResults(data) : queryResults(data));
+      const data = await api('query', {}, { method: 'POST', body, signal: controller.signal });
+      if (!controller.signal.aborted) results.replaceChildren(queryResults(data));
     } catch (error) {
       results.replaceChildren(error.name === 'AbortError'
-        ? element('p', { className: 'muted' }, 'Stopped waiting for the query. Server execution remains time-bounded; any Prolog side effects are not rolled back.')
-        : error.execution ? prologResults(error.execution) : errorPanel(error, () => form.requestSubmit(prolog ? runProlog : run)));
+        ? element('p', { className: 'muted' }, 'Query cancelled. Server-side execution remains bounded by the time limit.')
+        : errorPanel(error, () => form.requestSubmit()));
     } finally {
       if (state.queryController === controller) state.queryController = null;
-      state.queryJobId = null;
       run.disabled = false;
-      runProlog.disabled = false;
       cancel.hidden = true;
       results.setAttribute('aria-busy', 'false');
     }
   } },
-  inputField('KB S-expression or Prolog goal', query),
+  inputField('S-expression query', query),
   element('p', { className: 'muted', id: 'query-help' }, 'Only registered KB predicates and supported logical forms are dispatched. A blank context runs whole-query solutions independently by microtheory.'),
   element('div', { className: 'query-options' },
     inputField('Microtheory (optional)', mt), contextSuggestions(),
@@ -976,89 +812,13 @@ async function queryPage(route, signal) {
     element('span', { className: 'muted' }, 'Enter an atomic name or a source S-expression such as (MicrotheoryFn Argument).'),
     clearContext),
   selectedContext,
-  element('div', { className: 'prolog-warning' }, element('strong', {}, 'Run Prolog grants full local-process access. '),
-    'Built-ins and side effects can modify files, application state, or stop the server. Only run code you trust. ',
-    'Unqualified goals run in powder_console, where user assertions persist. Qualify user: or an application module explicitly when needed. ',
-    'Select a microtheory to call current-generation x_ KB predicates. Without one, ordinary Prolog goals still run once. Interactive input is EOF.'),
-  element('div', { className: 'form-actions' }, run, runProlog, cancel));
-  const questionPicker = storedQuestionPicker(signal, item => {
-    query.value = item.prolog;
-    rememberContext(item.mt, item.mtExpression);
-    initialContext = { key: item.mt, display: contextInputText(item.mt, item.mtExpression) };
-    mt.value = initialContext.display;
-    contextEdited = false;
-    selectedContext.replaceChildren(mtLink(item.mt, item.mtExpression));
-    saveDraft();
-    query.focus();
-  });
+  element('div', { className: 'form-actions' }, run, cancel));
   return element('div', {}, heading('Query console', 'Ask the active knowledge base and inspect the successful proof, not failed branches.'),
-    questionPicker, form, results,
+    form, results,
     element('details', { className: 'query-help' },
       element('summary', {}, 'Query semantics'),
       element('p', {}, 'Facts use their own microtheory. Executable <=== rules run ordered bodies within that same context. <== and ordinary implication are assertion data, not commands.'),
-      element('p', {}, 'Run query uses the restricted KB dispatcher. Run Prolog is a separate, explicit trusted-local capability with side effects. Loading KBs or selecting a saved question never runs its code.')));
-}
-
-function storedQuestionPicker(signal, selectQuestion) {
-  let questions = [];
-  let refreshVersion = 0;
-  const select = element('select', { name: 'storedQuestion', disabled: true, 'aria-label': 'Stored test question' });
-  const search = element('input', { type: 'search', name: 'questionSearch', placeholder: 'Filter identifier, question or source', 'aria-label': 'Filter stored test questions' });
-  const stateText = element('p', { className: 'muted', role: 'status' }, 'Loading stored test questions…');
-  const provenance = element('div', { className: 'question-provenance' });
-  const render = () => {
-    const filter = search.value.trim().toLowerCase();
-    const matching = questions.filter(item => `${item.identifier} ${item.question} ${item.source} ${item.prolog}`.toLowerCase().includes(filter));
-    select.replaceChildren(element('option', { value: '' }, 'Select a question to populate the Prolog editor'),
-      ...matching.map(item => element('option', { value: item.id },
-        `${item.identifier}: ${item.question} — ${contextLabel(item.mt, item.mtExpression)} — ${item.source}:${item.line}`)));
-    select.disabled = !matching.length;
-    stateText.textContent = questions.length ? `${number(matching.length)} of ${number(questions.length)} loaded test questions. Selection does not execute code.`
-      : 'No test_Qs questions are loaded. Load a question source from KB Sources to list its assertions.';
-  };
-  search.addEventListener('input', render);
-  select.addEventListener('change', () => {
-    const item = questions.find(question => question.id === select.value);
-    if (!item) return;
-    selectQuestion(item);
-    provenance.replaceChildren(element('p', {}, item.question),
-      element('p', {}, mtLink(item.mt, item.mtExpression), ' · ', sourceLink(item.source, item.line)),
-      element('p', { className: 'muted' }, (item.variables ?? []).map(pair => `${pair.prolog} = ${pair.source}`).join(', ')),
-      element('p', { className: 'muted' }, 'The owning context is selected; change it if the question needs another data context. Conjunction/disjunction become Prolog controls; other formula heads remain KB predicates.'));
-  });
-  const refresh = async () => {
-    const version = ++refreshVersion;
-    select.disabled = true;
-    stateText.setAttribute('role', 'status');
-    stateText.textContent = 'Loading stored test questions…';
-    try {
-      const all = [];
-      let offset = 0, generation;
-      do {
-        const page = await api('test-questions', { offset, limit: state.settings.pageSize }, { signal });
-        if (generation !== undefined && page.generation !== generation) throw new APIError('The active generation changed while listing questions. Refresh the list.', 'generation_changed');
-        generation = page.generation;
-        if (!Number.isSafeInteger(page.total) || page.total < 0 || !Array.isArray(page.items)
-          || (!page.items.length && offset < page.total)) throw new APIError('The server returned an incomplete question list.', 'incomplete_question_list');
-        all.push(...page.items); offset += page.items.length;
-        if (offset >= page.total) break;
-      } while (!signal.aborted);
-      if (signal.aborted || version !== refreshVersion) return;
-      questions = all;
-      render();
-    } catch (error) {
-      if (error.name === 'AbortError' || version !== refreshVersion) return;
-      questions = [];
-      select.replaceChildren(element('option', {}, 'Question list unavailable'));
-      stateText.setAttribute('role', 'alert');
-      stateText.textContent = error.message;
-    }
-  };
-  state.refreshQuestions = refresh;
-  refresh();
-  return element('section', { className: 'stored-questions', 'aria-label': 'Stored test questions' },
-    element('h2', {}, 'Stored test questions'), search, select, stateText,
-    button('Refresh questions', refresh, 'button secondary'), provenance);
+      element('p', {}, 'No filesystem, process, administrative, or MeTTa execution is available through this console. Bound-slot counts are diagnostics, not proof-pruning conditions.')));
 }
 
 function copyButton(label, value) {
@@ -1166,7 +926,7 @@ async function mappingsPage(route, signal) {
   return panel;
 }
 
-function settingsPage(_route, signal) {
+function settingsPage() {
   const inputs = {};
   const feedback = element('div', { className: 'settings-feedback', 'aria-live': 'polite' });
   const apply = values => {
@@ -1194,189 +954,14 @@ function settingsPage(_route, signal) {
       element('button', { type: 'submit', className: 'button' }, 'Save settings'),
       button('Restore defaults', () => apply(DEFAULT_SETTINGS), 'button secondary')), feedback),
     element('p', { className: 'muted' }, 'Page size applies to terms, predicates, assertions and mappings. Explicit URL limits still override defaults. Query timeouts remain unchanged. All microtheories are always listed, without a cap.'),
-    applicationReloadControls(), serverSettingsPanel(signal));
-}
-
-function serverSettingsPanel(signal) {
-  const panel = element('section', { className: 'server-settings' });
-  const startup = element('section', { className: 'startup-settings' },
-    element('h2', {}, 'Next server startup'),
-    element('p', {}, 'This ordered source list and these pool profiles are saved on the server. Saving does not load files, restart, or resize the running server.'));
-  const contents = element('div', { className: 'startup-settings-fields', role: 'status' }, 'Loading saved server settings…');
-  const profileSlot = element('div');
-  startup.append(contents);
-  const form = element('form', { className: 'server-settings-form' },
-    profileSlot, tasksPanel(signal), startup);
-  panel.append(form);
-  const load = async () => {
-    try {
-      const config = await api('server/settings', {}, { signal });
-      const configured = element('input', { type: 'checkbox', checked: config.startupConfigured });
-      const rows = element('ol', { className: 'startup-source-list' });
-      const addRow = value => {
-        const input = element('input', { type: 'text', value, placeholder: 'KBs\\tinyKB.kif or an absolute source path', 'aria-label': 'Startup source path' });
-        const row = element('li', {}, input,
-          button('Up', () => { if (row.previousElementSibling) rows.insertBefore(row, row.previousElementSibling); }, 'button secondary'),
-          button('Down', () => { if (row.nextElementSibling) rows.insertBefore(row.nextElementSibling, row); }, 'button secondary'),
-          button('Remove', () => row.remove(), 'button secondary'));
-        rows.append(row);
-      };
-      for (const file of config.startupFiles) addRow(file);
-      const fields = {};
-      const profiles = element('div', { className: 'pool-settings' },
-        ['loader', 'inference', 'http'].map(pool => element('fieldset', {},
-          element('legend', {}, `${pool === 'http' ? 'HTTP (server-wide)' : pool} pool`),
-          ['start', 'max', 'spare'].map(key => {
-            const input = element('input', { type: 'number', name: `server_${pool}_${key}`, min: key === 'spare' ? 0 : 1, max: 128, step: 1, required: true, value: config.pools[pool][key] });
-            fields[`${pool}.${key}`] = input;
-            return inputField({ start: 'Startup threads', max: 'Maximum threads', spare: 'Preferred idle reserve' }[key], input);
-          }))));
-      const feedback = element('div', { 'aria-live': 'polite' });
-      const save = element('button', { type: 'submit', className: 'button' }, 'Save next-start settings');
-      const selectAll = button('Select All Files', async () => {
-        selectAll.disabled = true;
-        feedback.setAttribute('role', 'status');
-        feedback.replaceChildren(element('p', {}, 'Discovering all KB source files…'));
-        try {
-          const catalog = await api('kb/catalog', { canonical: true }, { signal });
-          const selected = mergeStartupSources(Array.from(rows.querySelectorAll('input'), input => input.value), catalog);
-          rows.replaceChildren(); for (const path of selected) addRow(path);
-          configured.checked = true;
-          feedback.replaceChildren(element('p', {}, `${number(selected.length)} startup entries selected. This draft has not been saved or loaded.`));
-        } catch (error) {
-          if (error.name !== 'AbortError') {
-            feedback.setAttribute('role', 'alert');
-            feedback.replaceChildren(element('p', { className: 'error-panel' }, error.message));
-          }
-        } finally { selectAll.disabled = false; }
-      }, 'button secondary');
-      form.onsubmit = async event => {
-        event.preventDefault();
-        save.disabled = true;
-        try {
-          const pools = Object.fromEntries(['loader', 'inference', 'http'].map(pool => [pool,
-            Object.fromEntries(['start', 'max', 'spare'].map(key => [key, Number(fields[`${pool}.${key}`].value)]))]));
-          for (const profile of Object.values(pools)) {
-            if (!Number.isInteger(profile.start) || !Number.isInteger(profile.max) || !Number.isInteger(profile.spare)
-              || profile.start < 1 || profile.max > 128 || profile.start > profile.max || profile.spare < 0 || profile.spare > profile.max) {
-              throw new Error('Pool profiles require 1 ≤ startup ≤ maximum ≤ 128 and 0 ≤ spare ≤ maximum.');
-            }
-          }
-          const startupFiles = Array.from(rows.querySelectorAll('input')).map(input => input.value.trim());
-          if (startupFiles.some(path => !path)) throw new Error('Enter a source path or remove the empty startup row.');
-          const saved = await localAdmin('server/settings/save', { revision: config.revision,
-            settings: { startupConfigured: configured.checked, startupFiles, pools } });
-          config.revision = saved.revision;
-          rows.replaceChildren(); for (const file of saved.startupFiles) addRow(file);
-          feedback.setAttribute('role', 'status');
-          feedback.replaceChildren(element('p', {}, 'Saved for the next server start. No files were loaded and no running pools were resized.'),
-            ...(saved.issues ?? []).map(issue => element('p', {}, `${issue.path ?? ''} ${issue.message}`)));
-        } catch (error) {
-          feedback.setAttribute('role', 'alert');
-          feedback.replaceChildren(element('p', { className: 'error-panel' }, error.message));
-        } finally { save.disabled = false; }
-      };
-      profileSlot.replaceChildren(profiles);
-      contents.replaceChildren(...(config.issues ?? []).map(issue => element('p', { role: 'alert' }, issue.message)),
-      element('label', { className: 'field' }, element('span', {}, configured, ' Use the saved source list on server startup')),
-      element('p', { className: 'muted' }, 'Unchecked preserves the default initial KB. Checked with an empty list loads no KB. Explicit command-line sources always take precedence.'),
-      rows, button('Add source', () => addRow(''), 'button secondary'), selectAll,
-      button('Use currently loaded sources', () => { rows.replaceChildren(); for (const file of state.status?.files ?? []) addRow(file.path); configured.checked = true; }, 'button secondary'),
-      save, feedback);
-    } catch (error) {
-      if (error.name !== 'AbortError') contents.replaceChildren(errorPanel(error, load));
-    }
-  };
-  load();
-  return panel;
-}
-
-function tasksPanel(signal) {
-  const panel = element('section', { className: 'tasks-panel' }, element('h2', {}, 'Tasks and worker pools'));
-  const content = element('div', { role: 'status' }, 'Loading requested tasks…');
-  const requestedTask = parseRoute(location.hash).params.get('task');
-  let focusedTask = false;
-  let timer;
-  const stamp = value => value === null || value === undefined ? '—' : new Date(value * 1000).toLocaleString();
-  const refresh = async () => {
-    clearTimeout(timer);
-    if (signal.aborted) return;
-    if (document.hidden) { timer = setTimeout(refresh, 1000); return; }
-    try {
-      const data = await api('tasks', {}, { signal });
-      const pools = element('div', { className: 'worker-pool-list' });
-      for (const pool of data.pools ?? []) {
-        const profile = pool.profile;
-        const name = pool.pool === 'http' ? 'HTTP server-wide pool' : `${pool.pool} pool`;
-        const section = element('section', { 'data-pool': pool.pool },
-          element('h3', {}, name),
-          element('p', {}, `Actual ${pool.total} · busy ${pool.busy} · idle ${pool.idle} · queued ${pool.queued}`),
-          element('p', { className: 'muted' }, profile
-            ? `Running profile: startup ${profile.start}, maximum ${profile.max}, spare ${profile.spare}`
-            : pool.pool === 'http' ? 'This listener predates pool configuration. Restart normally to apply a saved profile.'
-              : 'This pool has not been initialized. Restart the server once to create its workers.'),
-          pool.statisticsBasis && element('p', { className: 'muted' }, pool.statisticsBasis),
-          pool.sparePolicy && element('p', { className: 'muted' }, pool.sparePolicy));
-        if (pool.pool !== 'http') {
-          const tasks = (data.tasks ?? []).filter(task => task.pool === pool.pool);
-          section.append(element('h4', {}, 'Requested tasks'),
-            tasks.length ? element('ul', { className: 'requested-tasks' }, tasks.map(task => {
-              const source = task.progress?.currentPath || task.progress?.source;
-              const item = element('li', { 'data-task-id': task.id, 'data-state': task.state },
-                element('strong', {}, `${task.label}: ${task.state}`),
-                element('code', {}, task.id),
-                element('p', { className: 'muted' }, `Requested ${stamp(task.createdAt)} · started ${stamp(task.startedAt)} · finished ${stamp(task.finishedAt)}`),
-                element('p', {}, `${task.progress?.phase ?? ''}${source ? ` — ${source}` : ''}`),
-                task.progress?.totalFiles ? element('p', {}, `${task.progress.completedFiles ?? 0}/${task.progress.totalFiles} files`) : null,
-                task.files?.length ? element('details', {}, element('summary', {}, `${task.files.length} selected files/paths`),
-                  element('pre', { className: 'prolog-output' }, task.files.join('\n'))) : null,
-                task.error ? requestErrorDetails(new APIError(task.error.message, 'task_failed', 422, task.error)) : null,
-                task.resultCount !== undefined && element('p', {}, `${task.resultCount} solutions returned`),
-                task.resultGeneration !== undefined && element('p', {}, `Published generation ${task.resultGeneration}`));
-              if (task.id === requestedTask) {
-                item.setAttribute('tabindex', '-1');
-                item.setAttribute('aria-current', 'true');
-              }
-              if (task.cancelable && ['queued', 'running'].includes(task.state)) {
-                item.append(button('Cancel task', async event => {
-                  event.currentTarget.disabled = true;
-                  try { await localAdmin('tasks/cancel', { id: task.id }); await refresh(); }
-                  catch (error) { showNotice(error.message, true); }
-                }, 'button secondary'));
-              }
-              return item;
-            })) : element('p', { className: 'muted' }, 'No requested tasks in this pool.'));
-        }
-        pools.append(section);
-      }
-      content.replaceChildren(pools,
-        ...(data.serviceErrors ?? []).map(error => element('p', { role: 'alert' }, `${error.pool}: ${error.message}`)),
-        element('p', { className: 'muted' }, `All active/queued tasks and the latest ${data.completedHistoryLimit} completed tasks are retained. ${data.persistence}`));
-      if (!focusedTask && requestedTask) {
-        const selected = [...content.querySelectorAll('[data-task-id]')].find(item => item.dataset.taskId === requestedTask);
-        if (selected) {
-          selected.focus({ preventScroll: true });
-          selected.scrollIntoView({ block: 'nearest' });
-          focusedTask = true;
-        }
-      }
-    } catch (error) {
-      if (error.name !== 'AbortError') content.replaceChildren(errorPanel(error, refresh));
-    } finally {
-      if (!signal.aborted) timer = setTimeout(refresh, 1000);
-    }
-  };
-  panel.append(button('Refresh tasks', refresh, 'button secondary'), content);
-  signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
-  refresh();
-  return panel;
+    applicationReloadControls());
 }
 
 function applicationReloadControls() {
   const feedback = element('div', { className: 'reload-feedback', 'aria-live': 'polite' });
   const reload = button('Reload changed files', async () => {
-    if (state.codeReloading) return;
-    setCodeReloading(true);
+    if (state.mutation) return;
+    setMutation(true);
     feedback.setAttribute('role', 'status');
     feedback.replaceChildren(element('p', {}, 'Reloading changed Prolog application code…'));
     try {
@@ -1388,20 +973,15 @@ function applicationReloadControls() {
       feedback.setAttribute('role', 'alert');
       feedback.replaceChildren(requestErrorDetails(error));
     } finally {
-      setCodeReloading(false);
+      setMutation(false);
     }
   });
-  reload.dataset.codeReload = '';
-  reload.disabled = state.codeReloading;
+  reload.dataset.mutation = '';
+  reload.disabled = state.mutation;
   return element('section', { className: 'application-reload' }, element('h2', {}, 'Prolog application code'),
-    element('p', {}, 'Reload only changed, already loaded application modules, including while source tasks are running. This does not recompile KBs, reload source data, or reset settings and draft selections.'),
+    element('p', {}, 'Reload only changed, already loaded application modules. This does not recompile KBs, reload source data, or reset settings and draft selections.'),
     element('p', { className: 'muted' }, 'If code reload fails, some modules may already have changed; SWI-Prolog cannot roll those changes back automatically.'),
     reload, feedback);
-}
-
-function setCodeReloading(value) {
-  state.codeReloading = value;
-  for (const control of document.querySelectorAll('[data-code-reload]')) control.disabled = value;
 }
 
 const pages = {
@@ -1416,8 +996,6 @@ async function renderRoute() {
   state.routeController?.abort();
   state.queryController?.abort();
   state.queryController = null;
-  state.refreshQuestions = null;
-  state.refreshSources = null;
   const controller = new AbortController();
   state.routeController = controller;
   const route = parseRoute(location.hash, state.settings);
@@ -1470,10 +1048,11 @@ function startLiveReload() {
         location.reload();
         return;
       }
-      {
+      if (['microtheory', 'microtheories'].includes(parseRoute(location.hash).name)) {
         const status = await api('status', {}, { signal: requestController.signal });
-        if (status.generation !== state.status?.generation || status.startup?.state !== state.status?.startup?.state) {
-          if (setStatus(status)) await refreshPublishedView();
+        if (status.generation !== state.status?.generation) {
+          setStatus(status);
+          await renderRoute();
         }
       }
       target.textContent = 'Interface live refresh enabled';

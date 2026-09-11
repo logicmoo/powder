@@ -24,7 +24,6 @@ ID uniqueness, physical line boundaries and the complete footer before returning
 :- use_module(library(lists)).
 :- use_module(library(uuid)).
 :- use_module(kb_symbols).
-:- use_module(kb_load_policy).
 
 cache_schema(logos_cache_v1).
 converter_version(logos_compiler_v2).
@@ -129,7 +128,6 @@ compound_group(Name, [], Name) :- !.
 compound_group(Name, Vars, Group) :- Group =.. [Name|Vars].
 
 write_cache(Path, Header0, Records, Header) :-
-    require_offline(kb_cache:write_cache/4),
     must_be(list, Records), maplist(validate_record, Records),
     crypto_context_new(Start,[algorithm(sha256),encoding(utf8)]),
     foldl(hash_record,Records,Start,End),crypto_context_hash(End,Digest),

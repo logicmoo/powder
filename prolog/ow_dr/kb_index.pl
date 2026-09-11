@@ -15,7 +15,6 @@ No executable directives, native handles or live variables are serialized.
 :- use_module(library(pairs)).
 :- use_module(kb_cache).
 :- use_module(kb_symbols).
-:- use_module(kb_load_policy).
 
 index_schema(logos_index_v1).
 
@@ -62,7 +61,6 @@ semantic_signature(Semantic,signature(Predicate,Arity)) :-
     ; Predicate=Name,Arity=N).
 
 build_index(Header,Records,Index) :-
-    require_offline(kb_index:build_index/3),
     findall(entry(Id,Signature,Mt,File,Line,Constants),
         (member(record(Id,S,Metadata),Records),
          semantic_signature(S,Signature),semantic_constants(S,Constants),
@@ -80,7 +78,6 @@ build_index(Header,Records,Index) :-
                 rankedPredicates:RankedPredicates}.
 
 write_index(Path,CacheHeader,Records,Header) :-
-    require_offline(kb_index:write_index/4),
     build_index(CacheHeader,Records,Index),
     index_terms(Index,Terms),
     terms_digest(Terms,Digest),

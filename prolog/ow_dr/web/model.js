@@ -109,17 +109,6 @@ export class SourceSelection {
     this.roots.forEach(count);
   }
 
-  updateActive(active, generation, preserveDraft = this.dirty) {
-    if (generation < this.generation) return;
-    const draft = preserveDraft ? new Set(this.selected) : null;
-    this.reset(active, generation);
-    if (draft) {
-      for (const path of this.files) {
-        if (this.selected.has(path) !== draft.has(path)) this.setSelected(path, draft.has(path));
-      }
-    }
-  }
-
   state(path) {
     const record = this.records.get(canonicalPath(path));
     if (!record) return { checked: false, indeterminate: false, disabled: true, selected: 0, total: 0 };
@@ -165,44 +154,6 @@ export class SourceSelection {
   }
 }
 
-export function mergeStartupSources(existing, catalog) {
-  const absolute = path => /^(?:[A-Za-z]:\/|\/)/u.test(path);
-  if (typeof catalog.canonicalRoot !== 'string' || !absolute(catalog.canonicalRoot.replaceAll('\\', '/'))
-    || typeof catalog.pathCaseSensitive !== 'boolean') {
-    throw new Error('Update the server code to use Select All Files. The startup selection has not changed.');
-  }
-  const key = value => {
-    const path = value.trim().replaceAll('\\', '/');
-    const full = absolute(path) ? path : `${catalog.canonicalRoot}/${path}`;
-    const prefix = full.startsWith('//') ? '//' : full.startsWith('/') ? '/' : '';
-    const rootLength = prefix === '//' ? 2 : /^[A-Za-z]:\//u.test(full) ? 1 : 0;
-    const segments = [];
-    for (const part of full.split('/')) {
-      if (!part || part === '.') continue;
-      if (part === '..') { if (segments.length > rootLength) segments.pop(); }
-      else segments.push(part);
-    }
-    const normalized = prefix + segments.join('/');
-    return catalog.pathCaseSensitive ? normalized : normalized.toLowerCase();
-  };
-  const selection = new SourceSelection(catalog.nodes);
-  const available = selection.files.map(path => {
-    const canonical = selection.records.get(path).canonicalPath;
-    if (typeof canonical !== 'string' || !absolute(canonical.replaceAll('\\', '/'))) {
-      throw new Error('Discovery did not provide complete canonical source paths. The startup selection has not changed.');
-    }
-    return canonical;
-  });
-  const seen = new Set();
-  return [...existing, ...available].filter(path => {
-    if (!path.trim()) return true;
-    const identity = key(path);
-    if (seen.has(identity)) return false;
-    seen.add(identity);
-    return true;
-  });
-}
-
 export class VersionTracker {
   constructor() { this.version = null; }
 
@@ -222,7 +173,6 @@ export class APIError extends Error {
     this.status = status;
     this.counts = details?.counts && typeof details.counts === 'object' && !Array.isArray(details.counts) ? details.counts : null;
     this.issues = Array.isArray(details?.issues) ? details.issues : [];
-    this.execution = details?.execution?.mode === 'prolog' ? details.execution : null;
   }
 }
 
@@ -241,12 +191,12 @@ export function compilationIssues(error) {
     issue && typeof issue === 'object' && (!issue.status || issue.status === 'failed' || issue.status === 'busy'));
 }
 
-export async function requestJSON(path, { method = 'GET', body, signal, headers = {}, fetch: fetcher = globalThis.fetch } = {}) {
+export async function requestJSON(path, { method = 'GET', body, signal, fetch: fetcher = globalThis.fetch } = {}) {
   let response;
   try {
     response = await fetcher(path, {
       method, signal, cache: 'no-store', credentials: 'same-origin',
-      headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
+      headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch (error) {

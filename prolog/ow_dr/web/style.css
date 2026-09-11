@@ -209,24 +209,6 @@ main:focus { outline: none; }
 .microtheory-directory .selected-context { border-color: var(--accent); }
 .context-count { color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .settings-form { display: grid; gap: 18px; max-width: 620px; margin-bottom: 24px; }
-.prolog-warning { padding: 12px 16px; border: 1px solid var(--warning); background: var(--warning-soft); color: var(--warning); font-size: .86rem; }
-.prolog-output { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: var(--surface); margin: 10px 0; }
-.prolog-results > h3 { margin-top: 18px; }
-.stored-questions { display: grid; gap: 10px; margin-bottom: 24px; }
-.stored-questions select { width: 100%; max-width: 100%; }
-.stored-questions > .button { justify-self: start; }
-.question-provenance { overflow-wrap: anywhere; }
-.server-settings, .tasks-panel { margin: 28px 0; }
-.server-settings-form, .startup-settings-fields, .pool-settings { display: grid; gap: 14px; margin: 18px 0; }
-.pool-settings { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
-.pool-settings fieldset { min-width: 0; border: 1px solid var(--line); display: grid; gap: 10px; }
-.startup-source-list { padding-left: 22px; display: grid; gap: 10px; }
-.startup-source-list li { display: flex; flex-wrap: wrap; gap: 6px; }
-.startup-source-list input { flex: 1 1 260px; min-width: 0; }
-.worker-pool-list > section { margin: 16px 0; padding: 16px; border: 1px solid var(--line); overflow-wrap: anywhere; }
-.requested-tasks { list-style: none; padding: 0; display: grid; gap: 14px; }
-.requested-tasks > li { padding: 12px 0; border-top: 1px solid var(--line); }
-.requested-tasks code { display: block; font-size: .8rem; }
 .source-lines { padding: 0; margin: 24px 0; list-style: none; background: var(--surface); border: 1px solid var(--line); }
 .source-lines li { display: flex; gap: 18px; padding: 3px 15px 3px 0; min-width: 0; font-size: .83rem; }
 .source-lines .line-number { flex: 0 0 64px; text-align: right; user-select: none; padding: 0 10px; color: var(--muted); border-right: 1px solid var(--soft-line); text-decoration: none; font-variant-numeric: tabular-nums; }

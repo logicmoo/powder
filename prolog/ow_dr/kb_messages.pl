@@ -91,14 +91,6 @@ prolog:message(error(implementation_changed_restart_required,_)) -->
     ['Compiler code changed on disk. Start a fresh compiler invocation, or use Settings > Reload changed files in the server. Refreshing the browser alone is not enough.'].
 prolog:message(error(application_reload_busy,_)) -->
     ['Application reload is busy or a source compilation is in progress. Retry when it finishes.'].
-prolog:message(error(task_pools_require_startup,_)) -->
-    ['Restart the Prolog server once to initialize its dedicated worker pools. Saving settings or reloading application code does not resize a running server.'].
-prolog:message(error(server_settings_conflict,_)) -->
-    ['Server settings changed since they were opened. Reopen them before saving.'].
-prolog:message(error(server_settings_busy,_)) -->
-    ['Another process is writing server settings. Retry when it finishes.'].
-prolog:message(error(task_queue_full(Pool),_)) -->
-    ['The ~w task queue is full. Wait for queued work to finish and retry.'-[Pool]].
 prolog:message(error(application_file_changed_during_reload(File),_)) -->
     ['Application file ~w changed during reload. Some code may already be loaded; retry or restart. No automatic rollback was performed.'-[File]].
 

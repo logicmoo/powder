@@ -1,4 +1,4 @@
-:- module(kb_limits, [setting_default/2, setting_maximum/2, validate_result_limit/2, server_defaults/1]).
+:- module(kb_limits, [setting_default/2, setting_maximum/2, validate_result_limit/2]).
 :- use_module(kb_paths).
 :- use_module(library(http/json)).
 :- use_module(library(error)).
@@ -16,7 +16,6 @@ load_definition :-
 
 setting_default(Key,Value) :- definition(D),get_dict(Key,D.defaults,Value).
 setting_maximum(Key,Value) :- definition(D),get_dict(Key,D.maximums,Value).
-server_defaults(Settings) :- definition(D),Settings=D.serverDefaults.
 validate_result_limit(Key,Value) :-
     must_be(integer,Value),setting_maximum(Key,Maximum),
     (between(1,Maximum,Value)->true;throw(error(domain_error(result_limit(Key,1,Maximum),Value),_))).

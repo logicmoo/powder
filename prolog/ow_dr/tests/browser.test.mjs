@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, mergeStartupSources, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON, supportedSource } from '../web/model.js';
+import { APIError, SourceSelection, VersionTracker, apiErrorSummary, canonicalPath, compilationIssues, contextRequestValue, fileMeasure, normalizeContextInput, pageRange, parseRoute, positiveInteger, requestJSON, supportedSource } from '../web/model.js';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, validateSettings } from '../web/settings.js';
-import { APP_BASE, apiPath, appPath } from '../web/paths.js';
 
 const file = (path, attributes = {}) => ({ type: 'file', path, name: path.split('/').at(-1), sizeBytes: 1024, ...attributes });
 const nodes = [
@@ -81,51 +80,6 @@ test('failed load has no implicit reset; successful replacement can unload the l
   assert.equal(model.dirty, false);
 });
 
-test('publication confirms a queued draft without discarding later source edits', () => {
-  const model = new SourceSelection(nodes, ['KBs/tinyKB.kif'], 4);
-  model.setSelected('KBs/alpha/a.kif', true);
-  const submitted = model.selectedFiles();
-  assert.deepEqual([...model.active], ['KBs/tinyKB.kif']);
-  assert.equal(model.generation, 4);
-  model.setSelected('KBs/alpha/b.krf', true);
-  model.updateActive(submitted, 5, true);
-  assert.deepEqual([...model.active], submitted);
-  assert.deepEqual(model.selectedFiles(), ['KBs/alpha/a.kif', 'KBs/alpha/b.krf', 'KBs/tinyKB.kif']);
-  assert.equal(model.state('KBs/alpha').selected, 2);
-  assert.equal(model.generation, 5);
-  assert.ok(model.dirty);
-  model.updateActive(model.selectedFiles(), 6, true);
-  assert.equal(model.dirty, false);
-  model.updateActive([], 5, true);
-  assert.equal(model.generation, 6);
-  assert.equal(model.active.size, 3);
-});
-
-test('resetting a draft during a queued load survives publication even when previously clean', () => {
-  const model = new SourceSelection(nodes, ['KBs/tinyKB.kif'], 4);
-  model.setSelected('KBs/alpha/a.kif', true);
-  const submitted = model.selectedFiles();
-  model.reset(['KBs/tinyKB.kif'], 4);
-  assert.equal(model.dirty, false);
-  model.updateActive(submitted, 5, true);
-  assert.deepEqual(model.selectedFiles(), ['KBs/tinyKB.kif']);
-  assert.deepEqual([...model.active], submitted);
-  assert.equal(model.state('KBs/alpha').selected, 0);
-  assert.ok(model.dirty);
-});
-
-test('unload publication updates a clean selection and preserves an independent dirty draft', () => {
-  const model = new SourceSelection(nodes, ['KBs/tinyKB.kif'], 4);
-  model.updateActive([], 5);
-  assert.deepEqual(model.selectedFiles(), []);
-  assert.equal(model.dirty, false);
-  model.setSelected('KBs/alpha/a.kif', true);
-  model.updateActive(['KBs/tinyKB.kif'], 6);
-  assert.deepEqual(model.selectedFiles(), ['KBs/alpha/a.kif']);
-  assert.deepEqual([...model.active], ['KBs/tinyKB.kif']);
-  assert.equal(model.state('KBs/alpha').indeterminate, true);
-});
-
 test('empty directories are disabled and catalog construction rejects false ancestry', () => {
   const model = new SourceSelection([...nodes, { type: 'directory', path: 'KBs/other', children: [file('KBs/escape.kif')] }]);
   assert.equal(model.state('KBs/empty').disabled, true);
@@ -144,23 +98,6 @@ test('large shallow trees keep exact selection counts', () => {
   assert.ok(!model.selected.has('KBs/large/5000.kif'));
 });
 
-test('startup Select All uses complete discovery and canonical identities without losing external entries', () => {
-  const files = Array.from({ length: 405 }, (_, index) => file(`KBs/all/${index}.krf`,
-    { canonicalPath: `C:/repo/KBs/all/${index}.krf` }));
-  const catalog = { canonicalRoot: 'C:/repo', pathCaseSensitive: false, nodes: [
-    { type: 'directory', path: 'KBs/all', children: [...files,
-      file('KBs/all/derived.krf.pl'), file('KBs/all/derived.krf.qlf'), file('KBs/all/derived.krf.pl.qlf'), file('KBs/all/derived.krf.inventory.json')] },
-  ] };
-  const existing = ['c:\\REPO\\kbs\\all\\0.krf', 'KBs/all/./0.krf', 'D:/other/KBs/all/0.krf'];
-  const selected = mergeStartupSources(existing, catalog);
-  assert.equal(selected.length, 406);
-  assert.deepEqual(selected.slice(0, 2), [existing[0], existing[2]]);
-  assert.ok(selected.includes('C:/repo/KBs/all/404.krf'));
-  assert.deepEqual(mergeStartupSources(selected, catalog), selected);
-  assert.throws(() => mergeStartupSources(existing, { nodes: files }), /Update the server/u);
-  assert.equal(existing.length, 3);
-});
-
 test('URL state preserves filters and safely bounds pagination', () => {
   const route = parseRoute('#/mappings?q=%23%24Thing&basis=guess&confidence=medium&offset=50&limit=20&row=id');
   assert.equal(route.name, 'mappings');
@@ -175,13 +112,6 @@ test('URL state preserves filters and safely bounds pagination', () => {
   assert.equal(parseRoute('#/search?limit=10000').limit, 400);
   assert.equal(parseRoute('#/search?offset=Infinity').offset, 0);
   assert.equal(positiveInteger('1.5', 3), 3);
-});
-
-test('shared mount keeps app assets and API requests below the nested powder subtree', () => {
-  assert.equal(APP_BASE, '/swish/powder/');
-  assert.equal(apiPath('status'), '/swish/powder/api/status');
-  assert.equal(apiPath('prolog/query'), '/swish/powder/api/prolog/query');
-  assert.equal(appPath('settings.json'), '/swish/powder/settings.json');
 });
 
 test('400 defaults and validated preferences persist and drive page limits', () => {
@@ -248,14 +178,14 @@ test('live-reload tracker seeds without refreshing and ignores missing versions'
 test('JSON client submits exact concrete paths with optimistic generation and no caching', async () => {
   let request;
   const status = { generation: 8, files: [] };
-  const response = await requestJSON(apiPath('kb/load'), {
+  const response = await requestJSON('/api/kb/load', {
     method: 'POST', body: { files: [], generation: 7 },
     fetch: async (url, options) => {
       request = { url, options };
       return { ok: true, status: 200, json: async () => status };
     },
   });
-  assert.equal(request.url, '/swish/powder/api/kb/load');
+  assert.equal(request.url, '/api/kb/load');
   assert.equal(request.options.cache, 'no-store');
   assert.equal(request.options.credentials, 'same-origin');
   assert.equal(request.options.headers['Content-Type'], 'application/json');
@@ -264,7 +194,7 @@ test('JSON client submits exact concrete paths with optimistic generation and no
 });
 
 test('JSON client presents structured busy/stale errors without treating them as success', async () => {
-  await assert.rejects(requestJSON(apiPath('kb/load'), {
+  await assert.rejects(requestJSON('/api/kb/load', {
     fetch: async () => ({ ok: false, status: 409, json: async () => ({ error: { code: 'stale_generation', message: 'Refresh before replacing this generation.' } }) }),
   }), error => error instanceof APIError && error.code === 'stale_generation' && error.status === 409 && error.message.includes('Refresh'));
 });
@@ -279,7 +209,7 @@ test('JSON errors retain 15 actionable issues and aggregate counts without succe
   const payload = { code: 'compile_failed', message: '15 source(s) failed to compile.', counts, issues,
     results: Array.from({ length: 42 }, (_, index) => ({ source: `cached-${index}`, status: 'cache_hit' })),
   };
-  await assert.rejects(requestJSON(apiPath('kb/load'), {
+  await assert.rejects(requestJSON('/api/kb/load', {
     fetch: async () => ({ ok: false, status: 422, json: async () => ({ error: payload }) }),
   }), error => {
     assert.deepEqual(error.counts, counts);
@@ -312,10 +242,10 @@ test('only failed, busy and unspecified issues are displayed, never cached or ge
 });
 
 test('JSON client differentiates network errors, invalid responses and cancellation', async () => {
-  await assert.rejects(requestJSON(apiPath('status'), { fetch: async () => { throw new Error('offline'); } }), { code: 'connection_failed' });
-  await assert.rejects(requestJSON(apiPath('status'), {
+  await assert.rejects(requestJSON('/api/status', { fetch: async () => { throw new Error('offline'); } }), { code: 'connection_failed' });
+  await assert.rejects(requestJSON('/api/status', {
     fetch: async () => ({ ok: false, status: 500, json: async () => { throw new Error('html'); } }),
   }), { code: 'invalid_response', status: 500 });
   const abort = new DOMException('Aborted', 'AbortError');
-  await assert.rejects(requestJSON(apiPath('query'), { fetch: async () => { throw abort; } }), error => error === abort);
+  await assert.rejects(requestJSON('/api/query', { fetch: async () => { throw abort; } }), error => error === abort);
 });

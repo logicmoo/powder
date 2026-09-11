@@ -5,7 +5,6 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchChromium } from './chromium.mjs';
-import { APP_BASE, apiPath } from '../web/paths.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const browser = process.env.LOGOS_CHROME;
@@ -19,31 +18,10 @@ test('real browser exercises the API contract, source transactions, rendering an
   let generation = 1;
   let active = ['KBs/alpha/a.kif', 'KBs/tinyKB.kif'];
   let failNextLoad = false;
-  let rejectNextLoad = false;
-  let failStatusRefresh = false;
   let failContextList = false;
   let failCodeReload = false;
-  let holdLoaderJobs = false;
-  let holdCodeReload = false;
-  let failNextLoaderPoll = false;
-  let extraCatalogNodes = [];
-  let failCanonicalDiscovery = false;
   let compilerDiagnostics = {};
   const requests = [];
-  const apiRequests = name => requests.filter(request => request.path === apiPath(name));
-  let serverConfig = { startupConfigured: false, startupFiles: [], revision: 'fixture-0', issues: [],
-    pools: Object.fromEntries(['loader', 'inference', 'http'].map(name => [name, { start: 5, max: 10, spare: 2 }])) };
-  const jobs = new Map();
-  const acceptJob = (pool, label, files, work) => {
-    const id = `task-${jobs.size + 1}`;
-    jobs.set(id, { id, pool, label, files, work, polls: 0, state: 'queued', createdAt: Date.now() / 1000,
-      startedAt: null, finishedAt: null, cancelable: true, progress: { phase: 'queued' } });
-    return { accepted: true, jobId: id, pool, state: 'queued' };
-  };
-  const publicJob = job => {
-    const { work, polls, ...publicData } = job;
-    return publicData;
-  };
   const file = path => ({ type: 'file', name: path.split('/').at(-1), path, lineCount: 40, sizeBytes: 1200, count: 3 });
   const expression = app('implies', app('and', app('isa', variable('?X'), symbol('Dog')), app('relatedTo', variable('?X'), symbol('Fido'))), app('isa', variable('?X'), symbol('Animal')));
   const assertions = ['x_A', 'x_B', 'x_A'].map((mt, index) => ({
@@ -61,11 +39,6 @@ test('real browser exercises the API contract, source transactions, rendering an
     [compoundC, app('ContextFn', symbol('A & B'), app('nested', symbol('C')))],
   ]);
   const normalizedMT = value => value === sourceA ? compoundA : value === sourceB ? compoundB : value;
-  const storedQuestions = Array.from({ length: 405 }, (_, index) => ({
-    id: `question-${index}`, identifier: `TQ${index}`, question: `Stored question ${index}`,
-    prolog: 'member(V1, [one,two]).', mt: compoundA, mtExpression: mtExpressions.get(compoundA),
-    source: 'KBs/alpha/a.kif', line: 10, variables: [{ prolog: 'V1', source: '?X' }],
-  }));
   const allContexts = [
     ...['x_B', 'x_A'].map(mt => ({ mt, mtExpression: { type: 'symbol', value: mt }, count: 2 })),
     ...[...mtExpressions].map(([mt, mtExpression]) => ({ mt, mtExpression, count: 1 })),
@@ -119,31 +92,17 @@ test('real browser exercises the API contract, source transactions, rendering an
           for await (const chunk of request) chunks.push(chunk);
           body = JSON.parse(Buffer.concat(chunks).toString());
         }
-        requests.push({ path: url.pathname, params: Object.fromEntries(url.searchParams), body,
-          token: request.headers['x-powder-local-token'] });
+        requests.push({ path: url.pathname, params: Object.fromEntries(url.searchParams), body });
         const json = (value, code = 200) => {
           response.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
           response.end(JSON.stringify(value));
         };
-        const mountedPath = url.pathname.startsWith(APP_BASE) ? `/${url.pathname.slice(APP_BASE.length)}` : null;
-        switch (mountedPath) {
-          case '/api/status': return failStatusRefresh
-            ? json({ error: { code: 'status_failed', message: 'Status refresh unavailable' } }, 503) : json(status());
-          case '/api/kb/catalog': {
-            const canonical = url.searchParams.get('canonical') === 'true';
-            if (canonical && failCanonicalDiscovery) return json({ error: { code: 'discovery_failed', message: 'Discovery unavailable' } }, 500);
-            const nodes = [
+        switch (url.pathname) {
+          case '/api/status': return json(status());
+          case '/api/kb/catalog': return json({ root: 'KBs', generation, active, nodes: [
             { type: 'directory', path: 'KBs/alpha', name: 'alpha', children: [file('KBs/alpha/a.kif'), file('KBs/alpha/b.krf'), file('KBs/alpha/c.metta')] },
-            { type: 'directory', path: 'KBs/empty', name: 'empty', children: [] },
             file('KBs/tinyKB.kif'),
-            ...extraCatalogNodes,
-            ];
-            const canonicalNodes = nodes => nodes.map(node => node.type === 'file'
-              ? { ...node, canonicalPath: `C:/fixture/${node.path}` }
-              : { ...node, children: canonicalNodes(node.children ?? []) });
-            return json({ root: 'KBs', generation, active, nodes: canonical ? canonicalNodes(nodes) : nodes,
-              ...(canonical ? { canonicalRoot: 'C:/fixture', pathCaseSensitive: false } : {}) });
-          }
+          ] });
           case '/api/search': return json(page(active.length ? [{ term: 'x_Dog', count: 3 }, { term: 'x_Animal', count: 2 }] : [], url));
           case '/api/predicates': return json(page(active.length ? [{ term: 'x_isa', count: 3, arity: 2 }] : [], url));
           case '/api/term': {
@@ -168,53 +127,8 @@ test('real browser exercises the API contract, source transactions, rendering an
             return json(page(filtered, url));
           }
           case '/api/version': return json({ version: 'fixture-v1' });
-          case '/api/server/settings': return json(serverConfig);
-          case '/api/server/settings/save':
-            serverConfig = { ...body.settings, revision: `fixture-${Date.now()}`, issues: [] };
-            return json(serverConfig);
-          case '/api/tasks': return json({
-            tasks: [...jobs.values()].map(publicJob), completedHistoryLimit: 100, persistence: 'Transient task history.',
-            pools: ['loader', 'inference', 'http'].map(pool => ({ pool, profile: { start: 5, max: 10, spare: 2 },
-              total: 5, busy: 0, idle: 5, queued: [...jobs.values()].filter(job => job.pool === pool && job.state === 'queued').length })),
-          });
-          case '/api/tasks/detail': {
-            const job = jobs.get(url.searchParams.get('id'));
-            if (!job) return json({ error: { code: 'not_found', message: 'No task' } }, 404);
-            if (job.pool === 'loader' && failNextLoaderPoll) {
-              failNextLoaderPoll = false;
-              return json({ error: { code: 'temporary_failure', message: 'Task polling temporarily unavailable' } }, 503);
-            }
-            if (job.state === 'queued') {
-              job.state = 'running'; job.startedAt = Date.now() / 1000;
-              job.progress = job.pool === 'loader' ? { phase: 'loading', currentPath: job.files[0] } : { phase: 'running' };
-            }
-            else if (job.state === 'running' && !(holdLoaderJobs && job.pool === 'loader')) {
-              Object.assign(job, job.work()); job.work = null;
-              job.state = job.error || ['exception', 'timeout'].includes(job.result?.status) ? 'failed' : 'succeeded';
-              job.finishedAt = Date.now() / 1000; job.cancelable = false;
-            }
-            return json(publicJob(job));
-          }
-          case '/api/tasks/cancel': {
-            const job = jobs.get(body.id);
-            if (job && ['queued', 'running'].includes(job.state)) {
-              job.state = 'cancelled'; job.finishedAt = Date.now() / 1000; job.cancelable = false;
-            }
-            return json(publicJob(job));
-          }
-          case '/api/test-questions': return json({ generation, ...page(active.length ? storedQuestions : [], url) });
-          case '/api/prolog/access': return json({ token: 'fixture-local-token' });
-          case '/api/prolog/query': {
-            const execution = { mode: 'prolog', status: 'success', generation, mt: body.mt,
-              output: 'captured output', errorOutput: '', exception: null,
-              solutions: [{ bindings: [{ name: 'V1', value: 'one' }] }] };
-            return json(acceptJob('inference', 'Prolog query', [], () => ({ result: body.query.includes('throw')
-              ? { ...execution, status: 'exception', exception: { term: 'test_exception', message: 'test exception' } }
-              : execution })), 202);
-          }
           case '/api/app/reload':
             await new Promise(resolve => setTimeout(resolve, 40));
-            while (holdCodeReload) await new Promise(resolve => setTimeout(resolve, 20));
             if (failCodeReload) return json({ error: { code: 'application_reload_failed',
               message: 'Some application code changed; reload failed and cannot be rolled back.',
               issues: [{ source: 'prolog/ow_dr/kb_example.pl', status: 'failed', message: 'Syntax error' }] } }, 500);
@@ -222,33 +136,29 @@ test('real browser exercises the API contract, source transactions, rendering an
               message: 'Reloaded 1 changed Prolog application file. KB generation and sources are unchanged.' });
           case '/api/query': {
             const contexts = body.query === '(compoundQuery ?X)' && !body.mt ? [compoundA, compoundB] : [normalizedMT(body.mt) || 'x_A'];
-            return json(acceptJob('inference', 'KB inference', [], () => ({ result: { solutions: contexts.map(mt => ({
+            return json({ solutions: contexts.map(mt => ({
               mt, mtExpression: mtExpressions.get(mt), bindings: [{ name: '?X', value: symbol('Fido') }],
               proof: [{ id: assertions[0].id, kind: 'fact', before: 0, after: 1, expression: app('isa', symbol('Fido'), symbol('Dog')) }],
-            })) } })), 202);
+            })) });
           }
           case '/api/kb/load':
-            if (rejectNextLoad) {
-              const error = rejectNextLoad; rejectNextLoad = false;
-              return json({ error }, 409);
-            }
             if (failNextLoad) {
               const error = typeof failNextLoad === 'object' ? failNextLoad : { code: 'compile_failed', message: 'Fixture compile failure' };
               failNextLoad = false;
-              return json(acceptJob('loader', 'Load sources', body.files, () => ({ error })), 202);
+              return json({ error }, error.code === 'busy' ? 503 : 422);
             }
             if (body.generation !== generation) return json({ error: { code: 'stale_generation', message: 'Stale generation' } }, 409);
-            return json(acceptJob('loader', 'Load sources', body.files, () => {
-              active = body.files; generation++; return { result: status() };
-            }), 202);
+            active = body.files;
+            generation++;
+            return json(status());
           case '/api/kb/unload':
             if (body.generation !== generation) return json({ error: { code: 'stale_generation', message: 'Stale generation' } }, 409);
-            return json(acceptJob('loader', 'Unload source', [body.path], () => {
-              active = active.filter(path => path !== body.path); generation++; return { result: status() };
-            }), 202);
+            active = active.filter(path => path !== body.path);
+            generation++;
+            return json(status());
           default: {
-            const asset = mountedPath === '/' ? 'index.html' : mountedPath?.slice(1);
-            if (!['index.html', 'app.js', 'style.css', 'render.js', 'model.js', 'diagnostics.js', 'settings.js', 'settings.json', 'paths.js', 'paths.json'].includes(asset)) { response.writeHead(404); response.end(); return; }
+            const asset = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
+            if (!['index.html', 'app.js', 'style.css', 'render.js', 'model.js', 'diagnostics.js', 'settings.js', 'settings.json'].includes(asset)) { response.writeHead(404); response.end(); return; }
             response.writeHead(200, { 'Content-Type': asset.endsWith('.html') ? 'text/html' : asset.endsWith('.css') ? 'text/css' : asset.endsWith('.json') ? 'application/json' : 'text/javascript', 'Cache-Control': 'no-store' });
             response.end(await readFile(join(here, '..', 'web', asset)));
           }
@@ -259,7 +169,7 @@ test('real browser exercises the API contract, source transactions, rendering an
       }
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const base = `http://127.0.0.1:${server.address().port}${APP_BASE}`;
+    const base = `http://127.0.0.1:${server.address().port}`;
     browserSession = await launchChromium(browser);
     const { send: cdp, evaluate, wait, route, exceptions } = browserSession;
     const noOverflow = async () => assert.equal(await evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'), true, 'No horizontal page overflow');
@@ -275,7 +185,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     await route('#/microtheories');
     assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), allContexts.length);
     assert.ok(await evaluate('document.querySelector(\'li[data-mt="x_Unseen400Mt"]\') !== null'));
-    assert.equal(apiRequests('microtheories').at(-1).params.limit, undefined);
+    assert.equal(requests.filter(request => request.path === '/api/microtheories').at(-1).params.limit, undefined);
     failContextList = true;
     await evaluate('location.hash = "#/microtheories?retry=1"');
     await wait('document.querySelector(".microtheory-directory .error-panel") !== null && document.querySelector("main").getAttribute("aria-busy") === "false"');
@@ -302,7 +212,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     failNextLoad = true;
     await evaluate('document.querySelector(".source-actions .button").click()');
     await wait('document.querySelector("#notice").textContent.includes("Fixture compile failure")');
-    assert.deepEqual(apiRequests('kb/load').at(-1).body,
+    assert.deepEqual(requests.filter(request => request.path === '/api/kb/load').at(-1).body,
       { files: ['KBs/alpha/a.kif', 'KBs/alpha/b.krf', 'KBs/tinyKB.kif'], generation: 1 });
     assert.deepEqual(active, ['KBs/alpha/a.kif', 'KBs/tinyKB.kif']);
     assert.equal(await evaluate(`${directory}.indeterminate`), true);
@@ -359,75 +269,14 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelector("#notice .compile-issue-heading .badge").textContent'), 'Busy');
     assert.equal(generation, 1);
     assert.equal(await evaluate(`${directory}.indeterminate`), true);
-    for (const rejected of [false, true]) {
-      const error = { code: 'stale_generation', message: rejected ? 'Submission generation conflict' : 'Publication generation conflict' };
-      if (rejected) rejectNextLoad = error;
-      else failNextLoad = error;
-      failStatusRefresh = true;
-      await evaluate('document.querySelector(".source-actions .button").click()');
-      await wait(`document.querySelector("#notice .failure-summary")?.textContent === ${JSON.stringify(error.message)} && document.querySelector("#notice .status-refresh-error") !== null`);
-      assert.ok(await evaluate('document.querySelector("#notice .status-refresh-error").textContent.includes("Status refresh unavailable")'));
-      assert.ok(await evaluate('document.querySelector("#notice .status-refresh-error").textContent.includes("last confirmed status")'));
-      assert.equal(await evaluate('document.querySelector("#generation-state").textContent.startsWith("Generation 1")'), true);
-      assert.equal(await evaluate('document.querySelector(\'input[aria-label="Select KBs/alpha/b.krf"]\').checked'), true);
-      assert.equal(await evaluate('document.querySelector(".source-actions .button").disabled'), false);
-      assert.equal(generation, 1);
-      failStatusRefresh = false;
-    }
-    holdLoaderJobs = true;
-    failNextLoaderPoll = true;
-    const loadsBeforeQueue = apiRequests('kb/load').length;
-    assert.equal(await evaluate('document.querySelector(".source-actions .button").textContent'), 'Queue Selected for Loading');
-    await evaluate('const queue = document.querySelector(".source-actions .button"); queue.click(); queue.click()');
-    await wait('document.querySelector("#notice").textContent.includes("tracking is reconnecting")');
-    await wait('!document.querySelector(".source-actions .button").disabled');
-    const queuedTask = [...jobs.values()].at(-1);
-    assert.equal(apiRequests('kb/load').length, loadsBeforeQueue + 1);
-    assert.equal(generation, 1, 'Acceptance must not publish a generation');
-    assert.equal(await evaluate('document.querySelector("#loaded-count").textContent'), '2 loaded sources');
-    assert.equal(await evaluate('document.querySelectorAll(".loaded-files .unload-button").length'), 2);
-    assert.ok(await evaluate('document.querySelector(".draft-count").textContent.includes("unsaved selection")'));
-    assert.equal(await evaluate('document.querySelector(\'input[aria-label="Select all supported files in KBs/empty"]\').disabled'), true);
-    await wait('document.querySelector("#notice").textContent.includes("loading — KBs/alpha/a.kif")');
-    await evaluate('document.querySelector(\'input[aria-label="Select KBs/alpha/c.metta"]\').click()');
-    await evaluate('document.querySelector("#notice a").click()');
-    await wait(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"]') !== null`);
-    assert.ok(await evaluate(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"]').textContent.includes("Load sources")`));
-    assert.ok(await evaluate(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"]').textContent.includes("KBs/alpha/b.krf")`));
-    assert.ok(await evaluate(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"]').textContent.includes("loading — KBs/alpha/a.kif")`));
-    queuedTask.progress = { phase: 'loading', source: 'KBs/alpha/b.krf' };
-    await wait('document.querySelector("#notice").textContent.includes("loading — KBs/alpha/b.krf")');
-    await wait(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"]').textContent.includes("loading — KBs/alpha/b.krf")`);
-    assert.equal(await evaluate('document.querySelector(".application-reload button").disabled'), false);
-    holdCodeReload = true;
-    await evaluate('const reload = document.querySelector(".application-reload button"); reload.click(); reload.click()');
-    await wait('document.querySelector(".reload-feedback").textContent.includes("Reloading changed")');
-    await route('#/sources');
-    assert.equal(await evaluate('document.querySelector(".source-actions .button").disabled'), false, 'Code reload must not lock source controls');
-    assert.equal(await evaluate('document.querySelector(\'input[aria-label="Select KBs/alpha/c.metta"]\').checked'), true);
-    assert.equal(apiRequests('tasks/cancel').length, 0, 'Navigation must not cancel source jobs');
-    assert.equal(apiRequests('app/reload').length, 1, 'Only the reload button itself is guarded against double submission');
-    assert.equal(generation, 1);
-    holdCodeReload = false;
-    await route('#/settings');
-    await wait('!document.querySelector(".application-reload button").disabled');
-    assert.ok(['queued', 'running'].includes(queuedTask.state), 'Application reload completes while the source job is still pending');
-    holdLoaderJobs = false;
+    await evaluate('document.querySelector(".source-actions .button").click()');
     await wait('document.querySelector("#generation-state").textContent.startsWith("Generation 2") && document.querySelector("main").getAttribute("aria-busy") === "false"');
     assert.equal(active.length, 3);
-    await wait(`document.querySelector('.tasks-panel [data-task-id="${queuedTask.id}"][data-state="succeeded"]') !== null`);
-    assert.equal(await evaluate('document.querySelector("h1").textContent'), 'Settings', 'Publication must not interrupt the settings page');
-    await route('#/sources');
-    assert.equal(await evaluate('document.querySelectorAll(".loaded-files .unload-button").length'), 3);
-    assert.equal(await evaluate('document.querySelector(\'input[aria-label="Select KBs/alpha/c.metta"]\').checked'), true);
-    assert.ok(await evaluate('document.querySelector(".draft-count").textContent.includes("unsaved selection")'), 'Post-acceptance edits remain a draft');
-    assert.ok(await evaluate('document.querySelector(".draft-note").textContent.startsWith("Selection generation 2.")'));
-    await evaluate('document.querySelector(".source-actions .secondary").click()');
     assert.equal(await evaluate('document.querySelector("#notice .compile-issue")'), null);
     await route('#/query?mt=x_A');
     await evaluate(`document.querySelector('textarea').value = '(isa ?X Dog)'; document.querySelector('.query-form').requestSubmit()`);
     await wait('document.querySelectorAll(".solution").length === 1');
-    assert.equal(apiRequests('query').at(-1).body.mt, 'x_A');
+    assert.equal(requests.filter(request => request.path === '/api/query').at(-1).body.mt, 'x_A');
     assert.ok(await evaluate('document.querySelector(".proof").textContent.includes("Bound slots 0 → 1")'));
     await route('#/term?term=x_compoundDemo');
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".mt-block > summary .mt-link")).map(link => new URLSearchParams(link.hash.split("?")[1]).get("mt"))'),
@@ -438,7 +287,7 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.ok(!(await evaluate('document.body.textContent')).includes('mt:x_'));
     await evaluate('document.querySelector(".mt-block > summary .mt-link").click()');
     await wait(`document.querySelector('h1')?.textContent === ${JSON.stringify(sourceA)}`);
-    assert.equal(apiRequests('microtheory').at(-1).params.mt, compoundA);
+    assert.equal(requests.filter(request => request.path === '/api/microtheory').at(-1).params.mt, compoundA);
     assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), allContexts.length);
     assert.equal(await evaluate('new URLSearchParams(document.querySelector(".microtheory-directory [aria-current=page]").hash.split("?")[1]).get("mt")'), compoundA);
     assert.ok(await evaluate('document.querySelector(".mt-block").open'));
@@ -447,11 +296,11 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelector(\'input[name="mt"]\').value'), sourceA);
     await evaluate('document.querySelector("textarea").value = "(isa ?X Dog)"; document.querySelector(".query-form").requestSubmit()');
     await wait('document.querySelectorAll(".solution").length === 1');
-    assert.equal(apiRequests('query').at(-1).body.mt, compoundA);
+    assert.equal(requests.filter(request => request.path === '/api/query').at(-1).body.mt, compoundA);
     assert.equal(await evaluate('new URLSearchParams(location.hash.split("?")[1]).get("mt")'), compoundA);
     await evaluate(`document.querySelector('input[name="mt"]').value = ${JSON.stringify(sourceB)}; document.querySelector('input[name="mt"]').dispatchEvent(new Event('input', { bubbles: true })); document.querySelector(".query-form").requestSubmit()`);
     await wait('document.querySelectorAll(".solution").length === 1');
-    assert.equal(apiRequests('query').at(-1).body.mt, sourceB);
+    assert.equal(requests.filter(request => request.path === '/api/query').at(-1).body.mt, sourceB);
     assert.equal(await evaluate('new URLSearchParams(document.querySelector(".solution .mt-link").hash.split("?")[1]).get("mt")'), compoundB);
     await route(`#/assertion?id=${compoundAssertions[1].id}`);
     assert.ok(!(await evaluate('document.body.textContent')).includes('mt:x_'));
@@ -459,10 +308,10 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelector(\'input[name="mt"]\').value'), '(ContextFn |A & B| (nested C))');
     await evaluate('document.querySelector("textarea").value = "(isa ?X Dog)"; document.querySelector(".query-form").requestSubmit()');
     await wait('document.querySelectorAll(".solution").length === 1');
-    assert.equal(apiRequests('query').at(-1).body.mt, compoundC);
+    assert.equal(requests.filter(request => request.path === '/api/query').at(-1).body.mt, compoundC);
     await evaluate('document.querySelector(".context-input-help button").click(); document.querySelector("textarea").value = "(compoundQuery ?X)"; document.querySelector(".query-form").requestSubmit()');
     await wait('document.querySelectorAll(".solution").length === 2');
-    assert.equal(apiRequests('query').at(-1).body.mt, '');
+    assert.equal(requests.filter(request => request.path === '/api/query').at(-1).body.mt, '');
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".solution .mt-link")).map(link => new URLSearchParams(link.hash.split("?")[1]).get("mt"))'), [compoundA, compoundB]);
     await route('#/microtheories');
     assert.ok(!(await evaluate('document.body.textContent')).includes('mt:x_'));
@@ -501,72 +350,13 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelectorAll(".mapping-table tbody tr").length'), 1);
     assert.ok(await evaluate('document.querySelector(".selected-mapping") !== null'));
     await route('#/settings');
-    await wait('document.querySelector(\'input[name="server_loader_start"]\') !== null');
-    assert.equal(await evaluate('document.querySelector(\'input[name="server_loader_start"]\').value'), '5');
-    assert.equal(await evaluate('document.querySelector(\'input[name="server_inference_max"]\').value'), '10');
-    assert.equal(await evaluate('document.querySelector(\'input[name="server_http_spare"]\').value'), '2');
-    const configGeneration = generation;
-    await evaluate('Array.from(document.querySelectorAll(".server-settings button")).find(button => button.textContent === "Use currently loaded sources").click(); document.querySelector(".server-settings-form").requestSubmit()');
-    await wait('document.querySelector(".server-settings").textContent.includes("Saved for the next server start")');
-    assert.equal(generation, configGeneration);
-    assert.equal(serverConfig.startupConfigured, true);
-    assert.deepEqual(serverConfig.startupFiles, active);
-    await wait('document.querySelectorAll(".tasks-panel [data-pool]").length === 3');
-    assert.ok(await evaluate('document.querySelector(\'[data-pool="loader"]\').textContent.includes("Requested tasks")'));
-    assert.ok(await evaluate('document.querySelector(\'[data-pool="inference"]\').textContent.includes("Requested tasks")'));
-    assert.equal(await evaluate(`(() => {
-      const startup = document.querySelector(".startup-settings");
-      const form = document.querySelector(".server-settings-form");
-      return form.lastElementChild === startup
-        && !form.parentElement.nextElementSibling
-        && Array.from(document.querySelectorAll('.settings-form, .application-reload, .pool-settings, .tasks-panel [data-pool]'))
-          .every(node => Boolean(node.compareDocumentPosition(startup) & Node.DOCUMENT_POSITION_FOLLOWING))
-        && Array.from(form.querySelectorAll("input, button")).every(input => input.form === form);
-    })()`), true);
-    assert.equal(apiRequests('server/settings/save').length, 1);
-    assert.deepEqual(serverConfig.pools, Object.fromEntries(['loader', 'inference', 'http'].map(pool => [pool, { start: 5, max: 10, spare: 2 }])));
-    extraCatalogNodes = [{ type: 'directory', path: 'KBs/unseen', children: [
-      ...Array.from({ length: 405 }, (_, i) => file(`KBs/unseen/${i}.krf`)),
-      file('KBs/unseen/generated.krf.pl'), file('KBs/unseen/generated.krf.qlf'), file('KBs/unseen/generated.krf.pl.qlf'),
-      file('KBs/unseen/generated.krf.inventory.json'),
-    ] }];
-    await evaluate(`(() => {
-      const add = Array.from(document.querySelectorAll(".startup-settings button")).find(button => button.textContent === "Add source");
-      for (const path of ["c:\\\\fixture\\\\kbs\\\\alpha\\\\a.kif", "D:/other/KBs/alpha/a.kif"]) {
-        add.click(); document.querySelector(".startup-source-list li:last-child input").value = path;
-      }
-    })()`);
-    const selectAll = 'Array.from(document.querySelectorAll(".startup-settings button")).find(button => button.textContent === "Select All Files")';
-    assert.equal(await evaluate(`${selectAll}.type`), 'button');
-    const beforeSelect = { saves: apiRequests('server/settings/save').length, loads: apiRequests('kb/load').length, generation };
-    await evaluate(`${selectAll}.click()`);
-    await wait('document.querySelector(".startup-settings").textContent.includes("draft has not been saved or loaded")');
-    const selectedStartup = await evaluate('Array.from(document.querySelectorAll(".startup-source-list input"), input => input.value)');
-    assert.equal(selectedStartup.length, 410);
-    assert.ok(selectedStartup.includes('C:/fixture/KBs/unseen/404.krf'));
-    assert.ok(selectedStartup.includes('D:/other/KBs/alpha/a.kif'));
-    assert.ok(!selectedStartup.some(path => /\.(pl|qlf|json)$/u.test(path)));
-    assert.deepEqual(apiRequests('kb/catalog').at(-1).params, { canonical: 'true' });
-    assert.equal(apiRequests('server/settings/save').length, beforeSelect.saves);
-    assert.equal(apiRequests('kb/load').length, beforeSelect.loads);
-    assert.equal(generation, beforeSelect.generation);
-    assert.deepEqual(serverConfig.startupFiles, active);
-    failCanonicalDiscovery = true;
-    await evaluate(`${selectAll}.click()`);
-    await wait('document.querySelector(".startup-settings [role=alert]")?.textContent.includes("Discovery unavailable")');
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".startup-source-list input"), input => input.value)'), selectedStartup);
-    assert.equal(apiRequests('server/settings/save').length, beforeSelect.saves);
-    failCanonicalDiscovery = false; extraCatalogNodes = [];
-    await evaluate(`${selectAll}.click()`);
-    await wait('document.querySelector(".startup-settings").textContent.includes("draft has not been saved or loaded")');
-    await evaluate('Array.from(document.querySelectorAll(".startup-settings button")).find(button => button.textContent === "Use currently loaded sources").click()');
     assert.equal(await evaluate('document.querySelector(\'input[name="pageSize"]\').value'), '400');
     assert.equal(await evaluate('document.querySelector(\'input[name="queryLimit"]\').value'), '400');
     await evaluate('document.querySelector(\'input[name="pageSize"]\').value = "0"; document.querySelector(".settings-form").requestSubmit()');
     assert.ok(await evaluate('document.querySelector(".settings-feedback[role=alert]").textContent.includes("not saved")'));
     await evaluate('document.querySelector(\'input[name="pageSize"]\').value = "125"; document.querySelector(\'input[name="queryLimit"]\').value = "350"; document.querySelector(".settings-form").requestSubmit()');
     await route('#/search');
-    assert.equal(apiRequests('search').at(-1).params.limit, '125');
+    assert.equal(requests.filter(request => request.path === '/api/search').at(-1).params.limit, '125');
     await route('#/query');
     assert.equal(await evaluate('document.querySelector(\'input[name="limit"]\').value'), '350');
     await cdp('Page.reload');
@@ -576,11 +366,10 @@ test('real browser exercises the API contract, source transactions, rendering an
     await evaluate('document.querySelector(".source-tree input:not(:disabled)").click()');
     await route('#/settings');
     const beforeReload = { generation, active: [...active] };
-    const reloadRequestsBefore = apiRequests('app/reload').length;
     await evaluate('const button = document.querySelector(".application-reload button"); button.click(); button.click()');
     await wait('document.querySelector(".reload-feedback").textContent.includes("Reloaded 1")');
-    assert.equal(apiRequests('app/reload').length, reloadRequestsBefore + 1);
-    assert.deepEqual(apiRequests('app/reload')[0].body, {});
+    assert.equal(requests.filter(request => request.path === '/api/app/reload').length, 1);
+    assert.deepEqual(requests.filter(request => request.path === '/api/app/reload')[0].body, {});
     assert.equal(generation, beforeReload.generation);
     assert.deepEqual(active, beforeReload.active);
     failCodeReload = true;
@@ -594,21 +383,6 @@ test('real browser exercises the API contract, source transactions, rendering an
     await route('#/settings');
     assert.equal(await evaluate('document.querySelector(\'input[name="pageSize"]\').value'), '125');
     assert.equal(await evaluate('document.querySelector(\'input[name="queryLimit"]\').value'), '350');
-    await route('#/query');
-    await wait('document.querySelectorAll(\'select[name="storedQuestion"] option\').length === 406');
-    const executionsBefore = apiRequests('prolog/query').length;
-    await evaluate('const select = document.querySelector(\'select[name="storedQuestion"]\'); select.value = "question-404"; select.dispatchEvent(new Event("change", { bubbles: true }))');
-    assert.equal(await evaluate('document.querySelector("textarea").value'), 'member(V1, [one,two]).');
-    assert.equal(apiRequests('prolog/query').length, executionsBefore);
-    await evaluate('document.querySelector(\'[data-query-mode="prolog"]\').click()');
-    await wait('document.querySelector(".prolog-results") !== null');
-    assert.ok(await evaluate('document.querySelector(".prolog-output").textContent.includes("captured output")'));
-    assert.equal(apiRequests('prolog/query').at(-1).token, 'fixture-local-token');
-    assert.equal(apiRequests('prolog/query').at(-1).body.mt, compoundA);
-    await evaluate('document.querySelector("textarea").value = "throw(test_exception)."; document.querySelector(\'[data-query-mode="prolog"]\').click()');
-    await wait('document.querySelector(".prolog-results[role=alert]") !== null');
-    assert.ok(await evaluate('document.querySelector(".prolog-results").textContent.includes("test_exception")'));
-    assert.ok(await evaluate('document.querySelector(".prolog-results").textContent.includes("captured output")'));
     await route('#/microtheories');
     assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), allContexts.length);
     await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
@@ -640,7 +414,6 @@ test('real browser exercises the API contract, source transactions, rendering an
     assert.equal(await evaluate('document.querySelectorAll(".microtheory-directory li[data-mt]").length'), 0);
     assert.ok(await evaluate('document.querySelector(".microtheory-directory").textContent.includes("No microtheories loaded")'));
     assert.deepEqual(exceptions, []);
-    assert.deepEqual(requests.filter(request => !request.path.startsWith(APP_BASE)).map(request => request.path), []);
   } finally {
     if (browserSession) await browserSession.close();
     if (server) {
