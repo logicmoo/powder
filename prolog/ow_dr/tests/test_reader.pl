@@ -5,6 +5,7 @@
 :- use_module(library(crypto)).
 :- use_module(library(memfile)).
 :- use_module(library(readutil)).
+:- use_module(library(prolog_wrap)).
 
 :- prolog_load_context(directory,Dir), asserta(test_directory(Dir)).
 
@@ -301,14 +302,14 @@ test(genformat_physics_predicates_keep_same_descriptor_shape) :-
 
 test(genformat_literal_descriptor_bypasses_sumo_mapping) :-
     one("(genFormat instance \"~a\" (1 (2 Class) (3 (Entity A-THE-WORD))))",
-        kif,[sumo_mappings(true)],
+        kif,[semantic_shape_checks(true),sumo_mappings(true)],
         x_genFormat(x_isa,"~a",[1,[2,x_Class],[3,[x_Entity,'x_A-THE-WORD']]]),
         [],_,Properties,_),
     Properties=[mapping_rows-['instance-isa',note(Message)],notices-[Message]],string(Message).
 
 test(genformat_krf_still_never_applies_mappings) :-
     one("(genFormat instance \"~a\" (1 (2 Class)))",
-        krf,[sumo_mappings(true),strict_mappings(true)],
+        krf,[semantic_shape_checks(true),sumo_mappings(true),strict_mappings(true)],
         x_genFormat(x_instance,"~a",[1,[2,x_Class]]),[],_,Properties,_),
     Properties=[mapping_rows-[note(Message)],notices-[Message]],string(Message).
 
@@ -340,7 +341,7 @@ test(ordinary_numeric_application_warns_and_continues_without_list_coercion) :-
            with_source("\n(ordinary (1 2))\n(p after)",Dialect,iso_latin_1,
                        check_ordinary_numeric_application)).
 check_ordinary_numeric_application(Path) :-
-    read_source(Path,[diagnostics(false),strict_mappings(true),sumo_mappings(true)],
+    read_source(Path,[semantic_shape_checks(true),diagnostics(false),strict_mappings(true),sumo_mappings(true)],
                 [assertion(x_ordinary(Value),[],_,2,Properties,_),
                  assertion(x_p(x_after),[],_,3,_,_)],Info),
     Value==t(1,2),\+is_list(Value),
@@ -354,7 +355,7 @@ test(genformat_first_slot_numeric_form_is_not_list_data) :-
     with_source("(genFormat (1 2) \"format\" (1 (2 A-THE-WORD)))",
                 krf,iso_latin_1,check_genformat_first_slot).
 check_genformat_first_slot(Path) :-
-    read_source(Path,[diagnostics(false),strict_mappings(true)],
+    read_source(Path,[semantic_shape_checks(true),diagnostics(false),strict_mappings(true)],
                 [assertion(x_genFormat(t(1,2),"format",[1,[2,'x_A-THE-WORD']]),
                            [],_,_,_,_)],Info),
     length(Info.warnings,1).
@@ -369,7 +370,7 @@ check_compound_predicate(Path) :-
 test(ordinary_string_head_is_preserved_as_application_data) :-
     with_source("(ordinary (\"label\" x))",krf,iso_latin_1,check_string_head).
 check_string_head(Path) :-
-    read_source(Path,[diagnostics(false),strict_mappings(true)],
+    read_source(Path,[semantic_shape_checks(true),diagnostics(false),strict_mappings(true)],
                 [assertion(x_ordinary(t("label",x_x)),[],_,_,_,_)],Info),
     Info.warnings=[warning(Path,1,11,_)].
 
@@ -383,7 +384,7 @@ check_ordinary_scalars(Path) :-
 test(recoverable_application_warning_does_not_hide_genuine_syntax_error) :-
     State=warnings([]),
     catch(parse_text("(ordinary (1 2))\n(unclosed",krf,
-                     [diagnostics(false),strict_mappings(true),
+                     [semantic_shape_checks(true),diagnostics(false),strict_mappings(true),
                       warning_observer(plunit_logos_reader:remember_warning(State))],_),
           error(source_error('<text>',2,1,_),_),Caught=true),
     Caught==true,arg(1,State,[warning('<text>',1,11,_)]).
@@ -397,7 +398,7 @@ test(genformat_interpretation_adds_note_and_continues_following_assertions) :-
     with_source(Text,kif,iso_latin_1,check_genformat_warning).
 check_genformat_warning(Path) :-
     State=warnings([]),
-    read_source(Path,[diagnostics(false),
+    read_source(Path,[semantic_shape_checks(true),diagnostics(false),
                      warning_observer(plunit_logos_reader:remember_warning(State))],
                 [assertion(x_genFormat('x_ist-Information',"~a",[2]),[],_,1,Props,_),
                  assertion(x_p(x_after),[],_,2,FollowingProps,_)],Info),
@@ -411,7 +412,7 @@ test(genformat_nested_krf_note_is_nonfatal_in_strict_mapping_mode) :-
     Text="(genFormat isa \"~a\"\n  (1 (2 A-THE-WORD)))\n(p after)",
     with_source(Text,krf,iso_latin_1,check_strict_genformat_warning).
 check_strict_genformat_warning(Path) :-
-    read_source(Path,[diagnostics(false),strict_mappings(true),sumo_mappings(true)],
+    read_source(Path,[semantic_shape_checks(true),diagnostics(false),strict_mappings(true),sumo_mappings(true)],
                 [assertion(x_genFormat(x_isa,"~a",[1,[2,'x_A-THE-WORD']]),[],_,1,Props,_),
                  assertion(x_p(x_after),[],_,3,_,_)],Info),
     Props=[mapping_rows-[note(Message)],notices-[Message]],Info.mappingHash==none,
@@ -423,7 +424,7 @@ test(genformat_note_is_metadata_not_warning_output) :-
     with_source("(genFormat isa \"~a\"\n  (1 (2 A-THE-WORD)))\n(p after)",
                 krf,iso_latin_1,check_genformat_diagnostic).
 check_genformat_diagnostic(Path) :-
-    capture_stderr(read_source(Path,[strict_mappings(true)],Assertions,Info),Output),
+    capture_stderr(read_source(Path,[semantic_shape_checks(true),strict_mappings(true)],Assertions,Info),Output),
     Assertions=[assertion(_,_,_,_,[mapping_rows-[note(Message)],notices-[Message]],_),_],
     Info.warnings==[],Output=="",
     once(sub_string(Message,_,_,_,"source line 2, column 3")),
@@ -449,6 +450,17 @@ check_genformat_nil(Path) :-
                  assertion(x_genFormat(x_isa,"~a is ~a",'NIL'),[],_,3,P3,_)],Info),
     Info.warnings==[],arg(1,State,[]),
     P1==[mapping_rows-[]],P2==[mapping_rows-[]],P3==[mapping_rows-[]].
+
+test(normal_ingestion_accepts_shapes_without_analysis_or_diagnostic_callbacks) :-
+    State=warnings([]),
+    setup_call_cleanup(
+      wrap_predicate(kb_reader:interpretation_analysis(_,_,_,_,_),disabled_analysis,_,
+        throw(error(unexpected_semantic_analysis,_))),
+      (capture_stderr(parse_text("(ordinary (4 a) (\"head\" a) ())",krf,
+        [warning_observer(plunit_logos_reader:remember_warning(State))],
+        [assertion(x_ordinary(t(4,x_a),t("head",x_a),x_TheEmptyList),[],_,_,Properties,_)]),Output),
+       assertion(Output==""),assertion(Properties==[mapping_rows-[]]),arg(1,State,[])),
+      unwrap_predicate(kb_reader:interpretation_analysis(_,_,_,_,_),disabled_analysis)).
 
 test(genformat_nil_symbol_is_not_the_literal_string) :-
     parse_text("(genFormat isa \"~a\" NIL)\n(genFormat isa \"~a\" \"NIL\")",krf,[],
@@ -487,7 +499,7 @@ test(doannounce_other_arguments_keep_application_semantics) :-
     Text="(doAnnounce (ordinary (1 2)) (1 (2 A-THE-WORD)) (3 4))\n(p after)",
     with_source(Text,krf,iso_latin_1,check_doannounce_other_arguments).
 check_doannounce_other_arguments(Path) :-
-    read_source(Path,[diagnostics(false),strict_mappings(true)],
+    read_source(Path,[semantic_shape_checks(true),diagnostics(false),strict_mappings(true)],
                 [assertion(x_doAnnounce(x_ordinary(t(1,2)),t(1,t(2,'x_A-THE-WORD')),t(3,4)),
                            [],_,1,_,_),
                  assertion(x_p(x_after),[],_,2,_,_)],Info),
@@ -502,10 +514,10 @@ test(doannounce_queries_keep_variables_and_literal_descriptor_lists) :-
 
 test(doannounce_descriptor_bypasses_mapping_without_affecting_other_slots) :-
     Source="(doAnnounce \"message\" (Class (1 A-THE-WORD)) Entity)",
-    one(Source,kif,[sumo_mappings(true),strict_mappings(true)],
+    one(Source,kif,[semantic_shape_checks(true),sumo_mappings(true),strict_mappings(true)],
         x_doAnnounce("message",[x_Class,[1,'x_A-THE-WORD']],x_Thing),[],_,KifProps,_),
     KifProps=[mapping_rows-['entity-thing',note(KifMessage)],notices-[KifMessage]],string(KifMessage),
-    one(Source,krf,[sumo_mappings(true),strict_mappings(true)],
+    one(Source,krf,[semantic_shape_checks(true),sumo_mappings(true),strict_mappings(true)],
         x_doAnnounce("message",[x_Class,[1,'x_A-THE-WORD']],x_Entity),[],_,KrfProps,_),
     KrfProps=[mapping_rows-[note(KrfMessage)],notices-[KrfMessage]],string(KrfMessage).
 
@@ -514,7 +526,7 @@ test(doannounce_note_has_context_without_warning_counts) :-
                 krf,iso_latin_1,check_doannounce_warning).
 check_doannounce_warning(Path) :-
     State=warnings([]),
-    read_source(Path,[diagnostics(false),strict_mappings(true),
+    read_source(Path,[semantic_shape_checks(true),diagnostics(false),strict_mappings(true),
                      warning_observer(plunit_logos_reader:remember_warning(State))],
                 [assertion(x_doAnnounce("~a",[1,[2,'x_A-THE-WORD']]),[],_,1,Props,_),
                  assertion(x_p(x_after),[],_,3,_,_)],Info),
@@ -552,7 +564,7 @@ test(interpretation_severities_are_exact_inert_rows_on_each_owning_assertion) :-
     Text="(genFormat isa \"~a\" (2))\n(doAnnounce \"~a\" (1 (2 A-THE-WORD)))\n(ordinary (1 2))\n(p after)",
     with_source(Text,krf,iso_latin_1,check_inert_warning_rows).
 check_inert_warning_rows(Path) :-
-    read_source(Path,[diagnostics(false),strict_mappings(true)],
+    read_source(Path,[semantic_shape_checks(true),diagnostics(false),strict_mappings(true)],
                 [assertion(S1,[],_,1,P1,_),assertion(S2,[],_,2,P2,_),
                  assertion(S3,[],_,3,P3,_),assertion(x_p(x_after),[],_,4,P4,_)],Info),
     Info.warnings=[warning(Path,3,_,M3)],
@@ -572,7 +584,7 @@ test(mixed_note_warning_order_is_preserved_and_only_warnings_reach_callbacks) :-
 check_mixed_diagnostic_rows(Path) :-
     Observer=warnings([]),Display=warnings([]),
     read_source(Path,
-                [warning_observer(plunit_logos_reader:remember_warning(Observer)),
+                [semantic_shape_checks(true),warning_observer(plunit_logos_reader:remember_warning(Observer)),
                  diagnostic_handler(plunit_logos_reader:remember_warning(Display)),
                  strict_mappings(true)],
                 [assertion(_,[],_,1,Properties,_)],Info),
@@ -604,7 +616,7 @@ test(first_class_diagnostics_remain_available_without_mapping_rows) :-
     with_source("(and (genFormat isa \"~a\" (1)) (ordinary (1 2)))",
                 krf,iso_latin_1,check_independent_diagnostics).
 check_independent_diagnostics(Path) :-
-    read_source(Path,[diagnostics(false)],
+    read_source(Path,[semantic_shape_checks(true),diagnostics(false)],
                 [assertion(_,[],_,_,Properties,_)],Info),
     selectchk(mapping_rows-Markers,Properties,Independent),
     Independent=[notices-[Notice],warnings-[Warning]],
@@ -616,7 +628,7 @@ test(mapping_ids_and_repeated_notes_preserve_order_without_warning_severity) :-
     Text="(and (genFormat instance \"~a\" (1)) (genFormat instance \"~a\" (1)))",
     with_source(Text,kif,iso_latin_1,check_repeated_note_rows).
 check_repeated_note_rows(Path) :-
-    read_source(Path,[diagnostics(false),sumo_mappings(true)],
+    read_source(Path,[semantic_shape_checks(true),diagnostics(false),sumo_mappings(true)],
                 [assertion(_,[],_,_,Properties,_)],Info),
     Properties=[mapping_rows-['and-and','instance-isa','instance-isa',note(N1),note(N2)],
                 notices-[N1,N2]],
@@ -639,13 +651,13 @@ check_mapping_anomaly_row(Path) :-
 
 test(mapping_id_order_and_multiplicity_are_preserved_before_warning_rows) :-
     Text="(and (instance a Entity) (ordinary (1 2)) (instance b Entity))",
-    one(Text,kif,[sumo_mappings(true)],_,[],_,Properties,_),
+    one(Text,kif,[semantic_shape_checks(true),sumo_mappings(true)],_,[],_,Properties,_),
     Properties=[mapping_rows-['and-and','instance-isa','entity-thing',
                               'instance-isa','entity-thing',warnings(Message)],warnings-[Message]],
     string(Message).
 
 test(repeated_warning_rows_keep_occurrence_multiplicity) :-
-    one("(and (ordinary (1 2)) (ordinary (1 2)))",krf,[],_,[],_,Properties,_),
+    one("(and (ordinary (1 2)) (ordinary (1 2)))",krf,[semantic_shape_checks(true)],_,[],_,Properties,_),
     Properties=[mapping_rows-[warnings(First),warnings(Second)],warnings-[First,Second]],
     First==Second,string(First),ground(Properties).
 

@@ -13,6 +13,8 @@ The caller must distinguish repeated occurrences with the same key.
 
 Options include strict_mappings(Boolean), features(List), encoding(Encoding),
 diagnostics(Boolean), and sumo_mappings(Boolean) for explicit KIF selection.
+The optional semantic_shape_checks(true) analysis pass is disabled by default.
+Normal ingestion preserves parsed data without advisory shape diagnostics.
 KRF and MeTTa always bypass mappings regardless of options or source contents.
 Query normalization also bypasses all mappings and source declarations.
 Trusted host code may supply diagnostic_handler(Module:Closure). The closure
@@ -342,6 +344,10 @@ interpretation_event_diagnostics([warning(File,Line,Column,Message)|Events],
     interpretation_event_diagnostics(Events,Diagnostics,Warnings).
 
 interpretation_events(Node,Dialect,File,Options,Events) :-
+    option(semantic_shape_checks(Enabled),Options,false),must_be(boolean,Enabled),
+    (Enabled==true->interpretation_analysis(Node,Dialect,File,Options,Events);Events=[]).
+
+interpretation_analysis(Node,Dialect,File,Options,Events) :-
     (Dialect==metta->Interpretations=[];
       interpretation_event_nodes([Node],File,Options,Interpretations,[])),
     findall(note(Message),exceptional_constant_notice(Node,Message),Notices),
