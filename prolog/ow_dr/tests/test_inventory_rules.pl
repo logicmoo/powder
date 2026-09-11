@@ -28,4 +28,21 @@ test(negations_and_arbitrary_nonground_data_are_not_rules) :-
 test(executable_envelope_is_distinct) :-
     rule_classification((x_p(X):-and(x_q(X))),Info),
     assertion(Info.semanticRule==true),assertion(Info.executableRule==true).
+test(existential_wrappers_around_rules_are_static_rule_shapes) :-
+    rule_classification(x_exists([X],x_implies(x_q(X),x_p(X))),Info),
+    assertion(Info.kind==implication),assertion(Info.executableRule==false),
+    assertion(Info.heads=[_{predicate:x_p,arity:1,role:consequent,polarity:positive}]).
+test(grouped_rules_do_not_promote_grouped_facts_to_definitions) :-
+    rule_classification(x_and(x_p(x_a),x_implies(x_q(X),x_r(X))),Info),
+    assertion(Info.heads=[_{predicate:x_r,arity:1,role:consequent,polarity:positive}]).
+test(quantified_ordinary_fact_remains_a_non_rule) :-
+    rule_classification(x_thereExists(X,x_p(X)),Info),
+    assertion(Info.semanticRule==false),assertion(Info.heads==[]).
+test(logical_operators_and_binders_are_not_conclusion_predicates) :-
+    rule_classification(x_implies(x_p(X),x_forAll(x_badBinder,x_q(X))),Info),
+    assertion(Info.heads==[]),assertion(var(X)).
+test(rule_parts_preserve_variable_sharing_without_execution) :-
+    Term=x_forAll(X,'x_<=='(x_p(X),x_q(X))),
+    rule_parts(Term,[rule(two_equals_operator_data,false,[x_q(Y)],[head-x_p(Z)])]),
+    assertion(X==Y),assertion(Y==Z),assertion(var(X)).
 :- end_tests(inventory_rules).
