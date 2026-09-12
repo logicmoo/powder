@@ -291,10 +291,11 @@ native_update(Changes,Expected,Reply) :-
     must_be(list,Changes),length(Changes,N),require(N=<500,resource_error(native_update_count)),
     must_be(ground,Changes),
     maplist(normalize_change,Changes,Normalized),
-    native_access(
-      (synchronize(Before),check_revision(Expected,Before.revision),
+    native_access(update_locked(Normalized,Expected,Reply)).
+update_locked(Normalized,Expected,Reply) :-
+       synchronize(Before),check_revision(Expected,Before.revision),
        foldl(apply_change,Normalized,Before.records,Raw),msort(Raw,Records),
-       commit_update(Before,Records,After),state_status(After,Reply))).
+       commit_update(Before,Records,After),state_status(After,Reply).
 normalize_change(put(F0,E0,P0,Record),put(F,E,P,Record)) :- !,
     family(F0,F),family_property(F,P0,P),native_entity(E0,E,_),validate_native_record(F,Record).
 normalize_change(remove(F0,E0,P0),remove(F,E,P)) :- !,
@@ -317,22 +318,24 @@ commit_update(Before,Records,After) :-
         install_memory(After,durable)))).
 
 initialize_defaults(Expected,Reply) :-
-    native_access(
-      (synchronize(Before),check_revision(Expected,Before.revision),
+    native_access(initialize_defaults_locked(Expected,Reply)).
+initialize_defaults_locked(Expected,Reply) :-
+       synchronize(Before),check_revision(Expected,Before.revision),
        foldl(apply_change,[put(nars,default,null,nars_truth_value(0.5,0.0)),
          put(opencog,default,null,stv(0.5,0.0)),put(cyc,default,utility,0.5)],
          Before.records,Base),
        foldl(initial_setting,[monotonic_strength-1.0,default_strength-0.7,
          asserted_positive_truth-1.0,asserted_monotonic_confidence-0.97,
          asserted_default_confidence-0.66,missing_assertion_strength-':DEFAULT',direction-':BACKWARD'],Base,Raw),
-       msort(Raw,Records),commit_update(Before,Records,After),state_status(After,Reply))).
+       msort(Raw,Records),commit_update(Before,Records,After),state_status(After,Reply).
 initial_setting(P-V,Before,After) :-
     (member(Fact,Before),matches_key(cyc,default,P,Fact)->After=Before
     ;After=[cyc_bayes_value(default,P,V)|Before]).
 
 reset_global_defaults(Expected,Reply) :-
-    native_access(
-      (synchronize(Before),check_revision(Expected,Before.revision),
+    native_access(reset_defaults_locked(Expected,Reply)).
+reset_defaults_locked(Expected,Reply) :-
+       synchronize(Before),check_revision(Expected,Before.revision),
        findall(put(cyc,default,P,V),
          member(P-V,[utility-0.5,monotonic_strength-1.0,default_strength-0.7,
            asserted_positive_truth-1.0,asserted_monotonic_confidence-0.97,
@@ -340,7 +343,7 @@ reset_global_defaults(Expected,Reply) :-
        append([put(nars,default,null,nars_truth_value(0.5,0.0)),
                put(opencog,default,null,stv(0.5,0.0))],Cyc,Changes),
        foldl(apply_change,Changes,Before.records,Raw),msort(Raw,Records),
-       commit_update(Before,Records,After),settings_reply(After,default,null,Reply))).
+       commit_update(Before,Records,After),settings_reply(After,default,null,Reply).
 
 keys(Entity,Context,Keys) :-
     (Context==null->Candidates=[atom-Entity,default-default]
@@ -418,14 +421,15 @@ shape_summary(Value,Summary) :-
 native_detail(Entity0,Context0,Family0,Property0,Expected,Reply) :-
     native_entity(Entity0,Entity,Key),context(Context0,Context,ContextKey),
     family(Family0,Family),family_property(Family,Property0,Prop),
-    native_access(
-      (synchronize(State),effective(State.records,Entity,Context,Family,Prop,E,Records),
+    native_access(detail_locked(Entity,Key,Context,ContextKey,Family,Prop,Expected,Reply)).
+detail_locked(Entity,Key,Context,ContextKey,Family,Prop,Expected,Reply) :-
+       synchronize(State),effective(State.records,Entity,Context,Family,Prop,E,Records),
        check_record_revision(Expected,E.recordRevision),maplist(record_detail,Records,Details),
        (Family==cyc->atom_string(Prop,PropertyName);PropertyName=null),
        term_ast(Entity,[],EntityExpression),context_expression(Context,ContextExpression),
        Reply=_{revision:State.revision,entity:Key,context:ContextKey,family:Family,
          entityExpression:EntityExpression,contextExpression:ContextExpression,
-         property:PropertyName,effective:E,records:Details})).
+         property:PropertyName,effective:E,records:Details}.
 check_record_revision(Expected,Actual) :-
     text_atom(Expected,R),require(R==Actual,native_tva_record_revision_conflict(R,Actual)).
 record_detail(Record,_{data:DTO,text:Text}) :-
@@ -450,15 +454,16 @@ native_batch(Inputs,Context0,Options,Reply) :-
     context(Context0,Context,ContextKey),maplist(entity_pair,Inputs,Entities0),
     context_expression(Context,ContextExpression),
     list_to_set(Entities0,Entities),batch_options(Options,Config),
-    native_access(
-      (synchronize(State),maplist(batch_summary(State,Context,ContextKey,Config),Entities,Rows),
+    native_access(batch_locked(Entities,Context,ContextKey,ContextExpression,Config,Reply)).
+batch_locked(Entities,Context,ContextKey,ContextExpression,Config,Reply) :-
+       synchronize(State),maplist(batch_summary(State,Context,ContextKey,Config),Entities,Rows),
        findall(SortKey-Row,(member(Row,Rows),batch_match(Config,Row,SortKey)),Pairs),
        keysort(Pairs,Sorted0),
        (Config.order==desc->reverse(Sorted0,Sorted);Sorted=Sorted0),pairs_values(Sorted,All),
        length(All,Total),page(All,Config.offset,Config.limit,Items),
        Reply=_{revision:State.revision,context:ContextKey,items:Items,total:Total,
           contextExpression:ContextExpression,
-          offset:Config.offset,limit:Config.limit})).
+          offset:Config.offset,limit:Config.limit}.
 entity_pair(Input,Term-Key) :- native_entity(Input,Term,Key).
 batch_summary(State,Context,ContextKey,Config,Entity-Key,Row) :-
     summary(State,Entity,Key,Context,ContextKey,Base),
@@ -569,10 +574,11 @@ save_native_settings(Context0,Patch,Expected,Reply) :-
     dict_pairs(Patch,_,GroundPairs),must_be(ground,GroundPairs),
     findall(Key,setting_key(Key),Allowed),known_options(Patch,Allowed),
     dict_pairs(Patch,_,Pairs),maplist(setting_change(Entity),Pairs,Changes),
-    native_access(
-      (synchronize(Before),check_revision(Expected,Before.revision),
+    native_access(save_settings_locked(Entity,ContextKey,Changes,Expected,Reply)).
+save_settings_locked(Entity,ContextKey,Changes,Expected,Reply) :-
+       synchronize(Before),check_revision(Expected,Before.revision),
        foldl(apply_change,Changes,Before.records,Raw),msort(Raw,Records),
-       commit_update(Before,Records,State),settings_reply(State,Entity,ContextKey,Reply))).
+       commit_update(Before,Records,State),settings_reply(State,Entity,ContextKey,Reply).
 setting_change(Entity,Prop-null,remove(cyc,Entity,Prop)) :- !,
     (Prop==missing_assertion_strength->require(Entity==default,domain_error(global_only_setting,Prop));true).
 setting_change(Entity,Prop-Value0,put(cyc,Entity,Prop,Value)) :-
@@ -620,13 +626,14 @@ save_native_pair(Context0,Family0,Pair,Expected,Replace,Reply) :-
     must_be(boolean,Replace),
     (Pair==null->Change=remove(Family,Entity,null)
     ;typed_pair(Family,Pair,Record),Change=put(Family,Entity,null,Record)),
-    native_access(
-      (synchronize(Before),check_revision(Expected,Before.revision),
+    native_access(save_pair_locked(Entity,ContextKey,Family,Change,Expected,Replace,Reply)).
+save_pair_locked(Entity,ContextKey,Family,Change,Expected,Replace,Reply) :-
+       synchronize(Before),check_revision(Expected,Before.revision),
        pair_setting(Before.records,Entity,Family,Existing),
        require((Existing.replacementRequired==false;Replace==true),
          native_pair_replacement_required(Family,Entity)),
        apply_change(Change,Before.records,Raw),msort(Raw,Records),
-       commit_update(Before,Records,After),pair_settings_reply(After,Entity,ContextKey,Reply))).
+       commit_update(Before,Records,After),pair_settings_reply(After,Entity,ContextKey,Reply).
 
 assertion_annotation_settings(Entity0,Context0,Reply) :-
     assertion_editor_entity(Entity0,Entity),context(Context0,Context,ContextKey),
@@ -686,11 +693,13 @@ save_assertion_annotations(Entity0,Context0,Patch,Expected,Reply) :-
        require(Generation==Expected.generation,generation_conflict(Expected.generation,Generation)),
        editor_source(Entity,SourceData,Identity),
        require(Identity==ExpectedIdentity,native_assertion_identity_conflict),
-       native_access(
-         (synchronize(Before),check_revision(Expected.revision,Before.revision),
-          foldl(apply_change,Changes,Before.records,Raw),msort(Raw,Records),
-          commit_update(Before,Records,After),
-          assertion_editor_reply(After,Entity,Context,ContextKey,Generation,SourceData,Identity,Reply))))).
+       native_access(save_assertion_locked(Expected,Changes,Entity,Context,ContextKey,
+         Generation,SourceData,Identity,Reply)))).
+save_assertion_locked(Expected,Changes,Entity,Context,ContextKey,Generation,SourceData,Identity,Reply) :-
+    synchronize(Before),check_revision(Expected.revision,Before.revision),
+    foldl(apply_change,Changes,Before.records,Raw),msort(Raw,Records),
+    commit_update(Before,Records,After),
+    assertion_editor_reply(After,Entity,Context,ContextKey,Generation,SourceData,Identity,Reply).
 
 assertion_interpretation(Entity0,Context0,Reply) :-
     native_entity(Entity0,Entity,Key),context(Context0,Context,ContextKey),
@@ -706,10 +715,11 @@ assertion_interpretations(Inputs,Context0,Reply) :-
     maplist(entity_pair,Inputs,Entities0),list_to_set(Entities0,Entities),
     with_mutex(openworld_store,
       (source_generation(Generation),maplist(capture_source,Entities,Sources))),
-    native_access(
-      (synchronize(State),
-       maplist(interpretation(State,Context,ContextKey,Generation),Sources,Items),
-       Reply=_{revision:State.revision,generation:Generation,context:ContextKey,items:Items})).
+    native_access(interpretations_locked(Sources,Context,ContextKey,Generation,Reply)).
+interpretations_locked(Sources,Context,ContextKey,Generation,Reply) :-
+    synchronize(State),
+    maplist(interpretation(State,Context,ContextKey,Generation),Sources,Items),
+    Reply=_{revision:State.revision,generation:Generation,context:ContextKey,items:Items}.
 
 interpretation(State,Context,ContextKey,Generation,
                Entity-Key-source(Source,Directions,Labels,Polarity),Reply) :-
@@ -939,8 +949,9 @@ import_native_state(State) :-
     validate_state(State),
     restore_access((install_memory(State,imported),clear_transient)).
 persist_native_state(Reply) :-
-    native_access(
-      (synchronize(State),storage_file(File),
+    native_access(persist_locked(Reply)).
+persist_locked(Reply) :-
+       synchronize(State),storage_file(File),
        storage_lock(File,
          (read_state(File,Disk,Exists),
           require((Disk.revision==State.revision;
@@ -950,4 +961,4 @@ persist_native_state(Reply) :-
           kb_cache:terms_digest(State.records,Digest),
           retractall(baseline(_,_,_,_)),
           assertz(baseline(State.revision,State.sequence,Digest,durable)))),
-       state_status(State,Reply))).
+       state_status(State,Reply).

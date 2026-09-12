@@ -3,6 +3,7 @@
 :- use_module('../kb_cache',[]).
 :- use_module('../kb_store',[]).
 :- use_module('../kb_activity',[]).
+:- use_module('../kb_reload',[]).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
 :- use_module(library(process)).
@@ -51,11 +52,14 @@ test(public_facade_keeps_native_context_after_real_module_reload,
     source_file(kb_activity:with_application(_),Activity),
     source_file(kb_native_annotations:native_status(_),Native),
     load_files(kb_activity:Activity,[if(true),silent(true),register(false)]),
-    load_files(kb_native_annotations:Native,[if(true),silent(true),register(false)]),
+    setup_call_cleanup(asserta(kb_reload:reloading,ReloadRef),
+      kb_reload:reload_file(Native,result(_,ok,_)),erase(ReloadRef)),
     native_status(After),assertion(After.revision==Before.revision),
     native_pair_settings(null,Pairs),
     assertion(Pairs.families.nars.exact.summary.frequency=:=0.5),
-    assertion(Pairs.families.opencog.exact.summary.confidence=:=0.0).
+    assertion(Pairs.families.opencog.exact.summary.confidence=:=0.0),
+    native_batch([x_ReloadEntity],null,json{},Batch),
+    assertion(Batch.total==1).
 
 test(copy_only_cold_empty_creates_no_state_or_directory,[setup(fixture(F)),cleanup(dispose(F))]) :-
     F=fixture(Directory,_,_),directory_file_path(Directory,'never-created',Missing),
