@@ -5,6 +5,8 @@ import {
   annotationSummary, cycPropertyUnion, selectTVARows, createTVAClient,
   createTVASettingsController, validateTVASettingsPatch, TVA_SETTING_FIELDS,
   ASSERTION_PRIOR_FIELDS, assertionPriorSummary,
+  createAssertionAnnotationController, createNativePairController,
+  validateAssertionAnnotationPatch, validateNativePair,
 } from '../web/native-tva.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -38,6 +40,123 @@ const settingsReply = (context = null, revision = 'r1', overrides = {}) => {
   const global = Object.fromEntries(keys.map(key => [key, missing()]));
   return { context, revision, global, effective: { ...global }, overrides: Object.fromEntries(keys.map(key => [key, overrides[key] ?? false])) };
 };
+const editorReply = (context = null, revision = 'r1', generation = 7, identity = 'source-1') => ({
+  entity: 'a123', context, revision, generation, identity,
+  recorded: { monotonicity: [':MONOTONIC'], direction: [':FORWARD'] },
+  overrides: { monotonicity: missing(), direction: missing() },
+  effective: { monotonicity: effective(native(':MONOTONIC'), { origin: 'source' }),
+    direction: effective(native(':FORWARD'), { origin: 'source' }) },
+});
+const pairReply = (context = null, revision = 'r1', replacementRequired = false) => {
+  const e = replacementRequired ? effective({ renderer: 'native_data', kind: 'compound', functor: 'vendor', arity: 3 })
+    : effective({ renderer: 'nars_truth_value', frequency: .5, confidence: 0 }, { origin: 'default' });
+  return { context, revision, families: { nars: { exact: e, effective: e, replacementRequired, editable: !replacementRequired } } };
+};
+
+test('typed assertion and native pair validators reject arbitrary fields, missing parts and nonfinite values', () => {
+  assert.deepEqual(validateAssertionAnnotationPatch({ monotonicity: ':DEFAULT', direction: null }),
+    { monotonicity: ':DEFAULT', direction: null });
+  for (const patch of [{ direction: 'call(halt)' }, { monotonicity: 0 }, { arbitrary: ':DEFAULT' }]) {
+    assert.throws(() => validateAssertionAnnotationPatch(patch));
+  }
+  assert.deepEqual(validateNativePair('nars', { frequency: '0', confidence: '.97' }), { frequency: 0, confidence: .97 });
+  assert.deepEqual(validateNativePair('opencog', { strength: 1, confidence: '0e0' }), { strength: 1, confidence: 0 });
+  for (const value of [false, null, [], '', ' ', '-1', '1.01', 'Infinity', '1e9999', '0x1', NaN]) {
+    assert.throws(() => validateNativePair('nars', { frequency: value, confidence: 0 }));
+  }
+  assert.throws(() => validateNativePair('nars', { frequency: 0 }));
+  assert.throws(() => validateNativePair('nars', { frequency: 0, confidence: 0, evidence: 100 }));
+  assert.throws(() => validateNativePair('cyc', { strength: 0, confidence: 0 }));
+});
+
+test('assertion save preserves independent dirty selections after conflicts and rereads identity/generation', async () => {
+  const calls = [], saved = [];
+  let snapshot = editorReply(), conflict = true;
+  const editor = createAssertionAnnotationController({ entity: 'a123',
+    readAssertion: async request => { assert.equal(request.entity, 'a123'); return snapshot; },
+    saveAssertion: async request => {
+      calls.push(request);
+      if (conflict) throw Object.assign(new Error('Assertion generation conflict'), { status: 409 });
+      return editorReply(null, 'r3', 8, 'source-2');
+    }, onSaved: reply => saved.push(reply),
+  });
+  await editor.load(); assert.equal(calls.length, 0);
+  editor.edit('monotonicity', ':DEFAULT'); editor.edit('direction', null);
+  assert.equal(await editor.save(), false);
+  assert.deepEqual(editor.get().draft, { monotonicity: ':DEFAULT', direction: null });
+  assert.deepEqual(calls[0], { entity: 'a123', context: null, patch: { monotonicity: ':DEFAULT', direction: null },
+    revision: 'r1', generation: 7, identity: 'source-1' });
+  snapshot = editorReply(null, 'r2', 8, 'source-2'); await editor.load(); conflict = false;
+  assert.equal(editor.get().dirty, true); assert.equal(await editor.save(), true);
+  assert.equal(calls[1].identity, 'source-2'); assert.equal(calls[1].generation, 8); assert.equal(calls[1].revision, 'r2');
+  assert.equal(editor.get().dirty, false); assert.equal(saved.length, 1);
+  editor.edit('direction', ':BACKWARD'); await editor.save();
+  assert.deepEqual(calls[2].patch, { direction: ':BACKWARD' });
+  editor.dispose();
+});
+
+test('assertion controller rejects switched identity, retains context drafts and aborts stale reads', async () => {
+  const gate = deferred(), controller = new AbortController();
+  let old = true;
+  const editor = createAssertionAnnotationController({ entity: 'a123', signal: controller.signal,
+    readAssertion: ({ context }) => old && context === null ? gate.promise : Promise.resolve(editorReply(context)),
+    saveAssertion: async () => ({ ...editorReply('x_Mt'), entity: 'a999' }),
+  });
+  const first = editor.load(); old = false; await editor.setContext('x_Mt');
+  editor.edit('monotonicity', ':MONOTONIC');
+  gate.resolve(editorReply()); await first;
+  assert.equal(editor.get().context, 'x_Mt');
+  assert.equal(await editor.save(), false); assert.equal(editor.get().dirty, true);
+  assert.match(editor.get().error.message, /Invalid editor response/u);
+  await editor.setContext(null); assert.equal(editor.get().dirty, false);
+  await editor.setContext('x_Mt'); assert.equal(editor.get().draft.monotonicity, ':MONOTONIC');
+  controller.abort(); assert.equal(await editor.save(), false);
+});
+
+test('native pair edits send a whole canonical pair and explicit zeros, retaining drafts on revision conflict', async () => {
+  let snapshot = pairReply('mt:x_MtFn(x_A)'), conflict = true;
+  const writes = [];
+  const editor = createNativePairController({ family: 'nars', initialContext: snapshot.context,
+    readPairs: async () => snapshot,
+    savePair: async request => { writes.push(request); if (conflict) throw new Error('Revision conflict'); return pairReply(snapshot.context, 'r3'); },
+  });
+  await editor.load(); assert.equal(writes.length, 0);
+  editor.edit('frequency', '0'); assert.equal(await editor.save(), false);
+  assert.deepEqual(writes[0].pair, { frequency: 0, confidence: 0 });
+  assert.equal(editor.get().draft.frequency, '0');
+  snapshot = pairReply(snapshot.context, 'r2'); await editor.load(); conflict = false; await editor.save();
+  assert.equal(writes[1].revision, 'r2'); assert.equal(editor.get().dirty, false);
+  editor.edit('clear', true); await editor.save(); assert.equal(writes[2].pair, null);
+  assert.equal(writes[2].replace, false); editor.dispose();
+});
+
+test('unknown native forms require explicit replacement and both typed fields; no extra fields are lost implicitly', async () => {
+  const writes = [];
+  const editor = createNativePairController({ family: 'nars',
+    readPairs: async () => pairReply(null, 'r1', true),
+    savePair: async request => { writes.push(request); return pairReply(null, 'r2'); },
+  });
+  await editor.load(); editor.edit('frequency', 0); editor.edit('confidence', 0);
+  assert.equal(await editor.save(), false); assert.equal(writes.length, 0);
+  assert.match(editor.get().error.message, /Explicitly choose replacement/u);
+  editor.discard(); editor.edit('replace', true); assert.equal(await editor.save(), false);
+  assert.equal(writes.length, 0);
+  editor.edit('frequency', 0); editor.edit('confidence', 0); assert.equal(await editor.save(), true);
+  assert.deepEqual(writes[0], { context: null, family: 'nars', pair: { frequency: 0, confidence: 0 }, revision: 'r1', replace: true });
+  editor.dispose();
+});
+
+test('typed editor does not double-submit or move context while a save is pending', async () => {
+  const gate = deferred(); let calls = 0;
+  const editor = createAssertionAnnotationController({ entity: 'a123',
+    readAssertion: async () => editorReply(),
+    saveAssertion: () => { calls++; return gate.promise; },
+  });
+  await editor.load(); editor.edit('direction', ':FORWARD'); const saved = editor.save();
+  assert.equal(await editor.save(), false);
+  await assert.rejects(editor.setContext('x_Mt'), /Wait/u);
+  assert.equal(calls, 1); gate.resolve(editorReply(null, 'r2')); await saved; editor.dispose();
+});
 
 test('family registry is extensible and visibility defaults are independently off', () => {
   assert.deepEqual(TVA_FAMILIES.map(item => item.label), ['NARS', 'OpenCog/PLN', 'Cyc']);

@@ -71,7 +71,7 @@ window.second=createTVAInspector({client,target:'a60a2418202240',currentMt:null,
 document.querySelector('#inspectors').append(first,second);
 window.originalEditor=document.querySelector('#editor');window.originalMain=document.querySelector('main');
 window.settingRevision='s1';window.conflict=true;window.saved=new Map();
-const keys=['monotonic_strength','default_strength','direction','utility','asserted_positive_truth','asserted_monotonic_confidence','asserted_default_confidence'];
+const keys=['monotonic_strength','default_strength','direction','utility','missing_assertion_strength','asserted_positive_truth','asserted_monotonic_confidence','asserted_default_confidence'];
 window.showPrior=polarity=>{
  const prior={kind:'configured_assertion_prior',status:polarity==='negative'?'unsupported':'initialized',reason:polarity==='negative'?'negative_assertion_prior_unspecified':'configured_asserted_positive',
  polarity,source:{assertionId:'a60a2418202240',file:'KBs/isolated.krf',line:21},sourceMonotonicity:[':MONOTONIC'],observed:false,affectsNativeTVA:false,

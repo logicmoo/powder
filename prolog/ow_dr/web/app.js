@@ -11,7 +11,7 @@ import { createAssertionView } from './assertion-view.js';
 import { filterContextItems, pageTermNavigation, termContextModel } from './term-context.js';
 import { colorAssertionBalls } from './assertion-markers.js';
 import { createAnnotationHost } from './annotation-host.js';
-import { renderTVASettings } from './native-tva.js';
+import { renderTVASettings, renderAssertionAnnotationEditor } from './native-tva.js';
 import { loadedMTTree } from './mt-inheritance.js';
 
 const $ = selector => document.querySelector(selector);
@@ -64,11 +64,16 @@ function annotateCards(container, items, { detail = false, context = annotationC
   return container;
 }
 
-function annotationContextControl(route, signal) {
+function annotationContextControl(route, signal, onContext) {
   const selected = annotationContext(route);
+  let request = 0;
   const select = element('select', { name: 'annotation-context', 'aria-label': 'Current MT for native annotations',
-    onchange: () => {
+    onchange: async () => {
       const value = select.value || null;
+      const current = ++request;
+      try { await onContext?.(value); }
+      catch (error) { select.value = annotationContext() ?? ''; feedback.textContent = error.message; return; }
+      if (current !== request || signal.aborted) return;
       const params = Object.fromEntries(parseRoute(location.hash).params);
       params.annotationMt = value ?? '';
       const query = new URLSearchParams(params);
@@ -1151,10 +1156,20 @@ async function assertionPage(route, signal) {
   ]);
   const [assertion] = await annotateAssertions([original], signal);
   const mapping = splitMappingRows(mappingRowsOf(assertion));
+  const editor = renderAssertionAnnotationEditor({
+    entity: id, initialContext: annotationContext(route), signal, reference: nativeReference,
+    readAssertion: (body, options) => api('tva/assertion', {}, { ...options, method: 'POST', body }),
+    saveAssertion: (body, options) => api('tva/assertion/save', {}, { ...options, method: 'POST', body }),
+    onSaved: reply => {
+      annotationRevision = reply.revision;
+      annotations.invalidate({ revision: reply.revision, generation: reply.generation });
+    },
+  });
   return element('div', {},
     heading('Assertion detail', id, copyButton('Copy expression', expressionText(assertion.expression))),
-    annotationContextControl(route, signal),
+    annotationContextControl(route, signal, context => editor.setContext(context)),
     assertionGroups([assertion], { detail: true }),
+    editor,
     compiledClausePanel(assertion.id, original.generation, signal),
     element('section', { className: 'provenance-section' }, element('h2', {}, 'Source provenance'),
       propertyList([
@@ -2008,6 +2023,9 @@ function uiSettingsPage(_route, signal) {
     signal, reference: nativeReference, sourceLink,
     readSettings: ({ context }, options) => api('tva/settings', { context }, options),
     saveSettings: (body, options) => api('tva/settings/save', {}, { ...options, method: 'POST', body }),
+    readPairs: ({ context }, options) => api('tva/pairs', { context }, options),
+    savePair: (body, options) => api('tva/pairs/save', {}, { ...options, method: 'POST', body }),
+    fetchDetail: (body, options) => api('tva/detail', {}, { ...options, method: 'POST', body }),
     resetDefaults: (body, options) => api('tva/reset', {}, { ...options, method: 'POST', body }),
     listMicrotheories: async ({ offset, limit }, options) => {
       contexts ??= await api('microtheories', {}, options);

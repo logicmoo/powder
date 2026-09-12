@@ -4,7 +4,8 @@ import { spawn } from 'node:child_process';
 import { readdir, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { annotationSummary, assertionPriorSummary, createTVAClient, cycPropertyUnion, selectTVARows } from '../web/native-tva.js';
+import { annotationSummary, assertionPriorSummary, createTVAClient, cycPropertyUnion, selectTVARows,
+  createAssertionAnnotationController, createNativePairController } from '../web/native-tva.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const application = dirname(here);
@@ -49,8 +50,16 @@ test('frontend consumes actual native backend DTOs from an isolated SWI process'
     kb_native_annotations:assertion_interpretation(a124,x_MtFn(x_FullContext),NegativePrior),
     kb_native_annotations:assertion_interpretation(a125,x_MtFn(x_FullContext),DefaultPrior),
     kb_native_annotations:native_summary(x_Target,x_MtFn(x_FullContext),NativeAfter),
+    kb_native_annotations:native_pair_settings(null,PairBefore),
+    get_dict(revision,PairBefore,PairRevision),
+    kb_native_annotations:save_native_pair(null,nars,_{frequency:0,confidence:0},PairRevision,false,PairAfter),
+    kb_native_annotations:assertion_annotation_settings(a123,x_MtFn(x_FullContext),EditorBefore),
+    get_dict(revision,EditorBefore,ER),get_dict(identity,EditorBefore,EI),get_dict(generation,EditorBefore,EG),
+    kb_native_annotations:save_assertion_annotations(a123,x_MtFn(x_FullContext),_{monotonicity:":DEFAULT",direction:":FORWARD"},
+      _{revision:ER,identity:EI,generation:EG},EditorAfter),
     json_write_dict(current_output,_{batch:Batch,nars:Nars,vendor:Vendor,before:Before,global:Global,mt:Mt,cleared:Cleared,
-      priorGlobal:PriorGlobal,priorMt:PriorMt,positive:PositivePrior,negative:NegativePrior,defaultPrior:DefaultPrior,nativeAfter:NativeAfter})
+      priorGlobal:PriorGlobal,priorMt:PriorMt,positive:PositivePrior,negative:NegativePrior,defaultPrior:DefaultPrior,nativeAfter:NativeAfter,
+      pairBefore:PairBefore,pairAfter:PairAfter,editorBefore:EditorBefore,editorAfter:EditorAfter})
   `;
   try {
     const result = await new Promise((resolve, reject) => {
@@ -132,6 +141,31 @@ test('frontend consumes actual native backend DTOs from an isolated SWI process'
       recordRevision: summary.families.nars.effective.recordRevision });
     assert.equal(lazy.records[0].text, '[false].\n');
     client.dispose();
+    const editorCalls = [];
+    const editor = createAssertionAnnotationController({ entity: 'a123', initialContext: result.editorBefore.context,
+      readAssertion: async () => result.editorBefore,
+      saveAssertion: async body => { editorCalls.push(body); return result.editorAfter; },
+    });
+    await editor.load(); editor.edit('monotonicity', ':DEFAULT'); editor.edit('direction', ':FORWARD');
+    assert.equal(await editor.save(), true);
+    assert.equal(editorCalls[0].identity, result.editorBefore.identity);
+    assert.equal(editorCalls[0].generation, result.editorBefore.generation);
+    assert.deepEqual(editor.get().snapshot.recorded.monotonicity, [':MONOTONIC']);
+    assert.equal(editor.get().snapshot.effective.monotonicity.summary.value, ':DEFAULT');
+    assert.equal(editor.get().snapshot.effective.monotonicity.origin, 'atom');
+    assert.equal(editor.get().snapshot.interpretation.assertionPrior.confidence.summary.value, .66);
+    assert.equal(editor.get().snapshot.layers.mt.direction.status, 'uninitialized');
+    editor.dispose();
+    const pairCalls = [];
+    const pairEditor = createNativePairController({ family: 'nars',
+      readPairs: async () => result.pairBefore,
+      savePair: async body => { pairCalls.push(body); return result.pairAfter; },
+    });
+    await pairEditor.load(); pairEditor.edit('frequency', '0'); pairEditor.edit('confidence', '0');
+    assert.equal(await pairEditor.save(), true); assert.deepEqual(pairCalls[0].pair, { frequency: 0, confidence: 0 });
+    assert.equal(pairEditor.get().snapshot.families.nars.effective.origin, 'default');
+    assert.equal(pairEditor.get().snapshot.families.opencog.exact.status, 'uninitialized');
+    pairEditor.dispose();
   } finally {
     for (const name of await readdir(here)) if (name.startsWith(prefix)) await rm(join(here, name), { force: true });
   }

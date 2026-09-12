@@ -6,7 +6,8 @@ import { renderExpression, expressionText } from './render.js';
  * fetchSummaries({entities,context,options},{signal}) returns native_batch's DTO;
  * fetchDetail({entity,context,family,property,recordRevision},{signal}) returns
  * native_detail's DTO. Context must be a canonical key or explicit null.
- * No native record is synthesized, merged, seeded, edited, or executed here.
+ * Inspectors never synthesize/merge/seed records. Typed editors require explicit
+ * saves through authorized host callbacks; native data is never executed.
  */
 export const TVA_FAMILIES = Object.freeze([
   Object.freeze({ id: 'nars', label: 'NARS', checkboxLabel: 'Show TVA NARS' }),
@@ -843,21 +844,309 @@ export function createTVASettingsController({
   return api;
 }
 
+const ASSERTION_ANNOTATION_FIELDS = Object.freeze({
+  monotonicity: ['Strength', ':DEFAULT', ':MONOTONIC'],
+  direction: ['Direction', ':FORWARD', ':BACKWARD'],
+});
+export function validateAssertionAnnotationPatch(draft) {
+  const patch = {};
+  for (const [key, value] of Object.entries(draft)) {
+    if (!own(ASSERTION_ANNOTATION_FIELDS, key)
+      || value !== null && !ASSERTION_ANNOTATION_FIELDS[key].slice(1).includes(value)) {
+      throw new TypeError('Choose DEFAULT/MONOTONIC strength, FORWARD/BACKWARD direction, or Use source / inherit.');
+    }
+    patch[key] = value;
+  }
+  return patch;
+}
+export function validateNativePair(family, values) {
+  const field = family === 'nars' ? 'frequency' : family === 'opencog' ? 'strength' : null;
+  if (!field || Object.keys(values).sort().join(',') !== [field, 'confidence'].sort().join(',')) {
+    throw new TypeError('A native pair requires both family-specific fields.');
+  }
+  return Object.fromEntries([field, 'confidence'].map(key => {
+    const text = typeof values[key] === 'string' ? values[key].trim() : values[key];
+    const value = typeof text === 'number' ? text : typeof text === 'string'
+      && /^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/u.test(text) ? Number(text) : NaN;
+    if (!unit(value)) throw new TypeError(`${key} must be a finite number from 0 to 1.`);
+    return [key, value];
+  }));
+}
+
+function typedEditorController({ read, write, accept, request, initialContext = null, signal, onSaved }) {
+  let context = contextKey(initialContext), loading = false, saving = false, error = null, dead = false, serial = 0, pending;
+  const entries = new Map(), listeners = new Set();
+  const entry = () => {
+    if (!entries.has(context)) {
+      if (entries.size >= 32) {
+        const clean = [...entries].find(([, e]) => !Object.keys(e.draft).length);
+        if (!clean) throw new Error('Save or discard a draft before opening another MT.');
+        entries.delete(clean[0]);
+      }
+      entries.set(context, { snapshot: null, draft: {} });
+    }
+    return entries.get(context);
+  };
+  const get = () => ({ context, ...entry(), draft: { ...entry().draft }, loading, saving, error,
+    dirty: Object.keys(entry().draft).length > 0 });
+  const notify = () => { for (const listener of listeners) listener(get()); };
+  async function perform(save) {
+    if (dead || saving || save && loading) return false;
+    const current = entry();
+    if (save && (!current.snapshot || !Object.keys(current.draft).length)) return false;
+    let body;
+    try { body = save ? request(context, current.snapshot, current.draft) : { context }; }
+    catch (reason) { error = reason; notify(); return false; }
+    pending?.abort(); pending = new AbortController();
+    const local = pending, token = ++serial;
+    loading = !save; saving = save; error = null; notify();
+    try {
+      const result = await (save ? write : read)(body, { signal: local.signal });
+      if (dead || token !== serial || local.signal.aborted) return false;
+      if (!accept(result, context)) throw new Error('Invalid editor response. Existing selections were preserved.');
+      current.snapshot = result;
+      if (save) {
+        current.draft = {};
+        try { await onSaved?.(result); }
+        catch (reason) { error = Object.assign(new Error(`Saved, but visible annotation refresh failed: ${reason.message}`), { saved: true }); }
+      }
+      return true;
+    } catch (reason) {
+      if (!isAbort(reason) && token === serial) error = reason;
+      return false;
+    } finally { if (token === serial) { loading = false; saving = false; notify(); } }
+  }
+  const controller = {
+    get, load: () => perform(false), save: () => perform(true),
+    edit(key, value) { if (!dead && !saving) { entry().draft[key] = value; error = null; notify(); } },
+    discard() { if (!saving) { entry().draft = {}; error = null; notify(); } },
+    async setContext(next) {
+      contextKey(next);
+      if (saving) throw new Error('Wait for this explicit save before changing its MT context.');
+      const previous = context; context = next;
+      try { entry(); } catch (reason) { context = previous; throw reason; }
+      return perform(false);
+    },
+    subscribe(listener) { listeners.add(listener); listener(get()); return () => listeners.delete(listener); },
+    dispose() { dead = true; serial++; pending?.abort(); listeners.clear(); entries.clear(); },
+  };
+  if (signal?.aborted) controller.dispose();
+  else signal?.addEventListener('abort', controller.dispose, { once: true });
+  return controller;
+}
+
+/** Typed assertion-ID overrides. Every save sends revision + generation + identity. */
+export function createAssertionAnnotationController({ entity, readAssertion, saveAssertion, ...options }) {
+  return typedEditorController({ ...options,
+    read: (body, requestOptions) => readAssertion({ entity, ...body }, requestOptions),
+    write: saveAssertion,
+    accept: (reply, context) => reply?.entity === entity && reply.context === context
+      && typeof reply.revision === 'string' && typeof reply.identity === 'string'
+      && Number.isSafeInteger(reply.generation) && reply.recorded && reply.overrides && reply.effective,
+    request: (context, snapshot, draft) => ({ entity, context, patch: validateAssertionAnnotationPatch(draft),
+      revision: snapshot.revision, generation: snapshot.generation, identity: snapshot.identity }),
+  });
+}
+/** Typed whole-pair writes only; replacing an unknown exact record requires explicit consent. */
+export function createNativePairController({ family, readPairs, savePair, ...options }) {
+  if (!['nars', 'opencog'].includes(family)) throw new TypeError('Unknown native pair family.');
+  const field = family === 'nars' ? 'frequency' : 'strength';
+  return typedEditorController({ ...options, read: readPairs, write: savePair,
+    accept: (reply, context) => reply?.context === context && typeof reply.revision === 'string'
+      && reply.families?.[family]?.exact && reply.families[family].effective,
+    request: (context, snapshot, draft) => {
+      const item = snapshot.families[family], replace = draft.replace === true;
+      if (item.replacementRequired && !replace) throw new Error('This native record is preserved. Explicitly choose replacement before saving.');
+      const model = annotationSummary(family, item.effective).fields;
+      const pair = draft.clear === true ? null : validateNativePair(family, {
+        [field]: own(draft, field) ? draft[field] : model[field],
+        confidence: own(draft, 'confidence') ? draft.confidence : model.confidence,
+      });
+      return { context, family, pair, revision: snapshot.revision, replace };
+    },
+  });
+}
+
+function editorActions(doc, controller, label) {
+  const root = element(doc, 'div', 'native-tva-settings-actions');
+  const save = element(doc, 'button', 'button', label), read = element(doc, 'button', 'button secondary', 'Read latest (keep edits)');
+  const discard = element(doc, 'button', 'button secondary', 'Discard edits');
+  for (const button of [save, read, discard]) button.type = 'button';
+  save.addEventListener('click', () => controller.save()); read.addEventListener('click', () => controller.load());
+  discard.addEventListener('click', () => controller.discard()); root.append(save, read, discard);
+  const feedback = element(doc, 'p', 'native-tva-settings-feedback'); feedback.setAttribute('aria-live', 'polite');
+  controller.subscribe(state => {
+    save.disabled = state.loading || state.saving || !state.snapshot || !state.dirty;
+    read.disabled = state.loading || state.saving; discard.disabled = state.saving || !state.dirty;
+    feedback.setAttribute('role', state.error ? 'alert' : 'status');
+    feedback.textContent = state.error ? `${state.error.message}${state.error.saved ? '' : ' Unsaved selections are kept. Read latest, review, then save again.'}`
+      : state.loading ? 'Reading recorded and effective values…' : state.saving ? 'Saving explicit overrides…'
+        : state.dirty ? 'Unsaved changes.' : state.snapshot ? 'Recorded state loaded. Nothing changes until you save.' : 'Values unavailable.';
+  });
+  return [root, feedback];
+}
+function effectiveDescription(effective) {
+  const label = effective?.origin === 'atom' ? 'Atom override' : effective?.origin === 'source' ? 'Recorded source'
+    : effective?.origin === 'mt' ? 'Mt record' : effective?.origin === 'default' ? 'Global record' : 'No supplier';
+  return `${annotationSummary('cyc', effective).text} · ${label}`;
+}
+
+export function renderAssertionAnnotationEditor({ document: doc = globalThis.document, ...options }) {
+  const root = element(doc, 'section', 'native-tva-assertion-editor');
+  root.setAttribute('aria-label', 'Assertion strength and direction overrides');
+  root.append(element(doc, 'h2', null, 'Assertion strength and direction'),
+    element(doc, 'p', 'muted', 'Atom overrides win recorded source metadata. Use source / inherit removes only that override. Formula, execution and assertion ID never change; negative assertions stay negative.'));
+  const controller = createAssertionAnnotationController(options), controls = new Map();
+  for (const [key, [title, ...choices]] of Object.entries(ASSERTION_ANNOTATION_FIELDS)) {
+    const group = element(doc, 'div', 'native-tva-setting'), label = element(doc, 'label', null, title);
+    const select = element(doc, 'select'); select.name = `assertion-override-${key}`;
+    for (const [value, text] of [['', 'Use source / inherit'], ['unsupported', 'Invalid/conflicting override — choose replacement'], ...choices.map(value => [value, value.slice(1)])]) {
+      const option = element(doc, 'option', null, text); option.value = value; option.disabled = value === 'unsupported'; select.append(option);
+    }
+    select.addEventListener('change', () => controller.edit(key, select.value || null)); label.append(select);
+    const clear = element(doc, 'button', 'text-button', 'Clear override · use source / inherit'); clear.type = 'button';
+    clear.addEventListener('click', () => controller.edit(key, null));
+    const info = element(doc, 'div', 'native-tva-setting-effective');
+    group.append(label, clear, info); root.append(group); controls.set(key, { select, clear, info });
+  }
+  root.append(...editorActions(doc, controller, 'Save assertion overrides'));
+  controller.subscribe(state => {
+    root.setAttribute('aria-busy', String(state.loading || state.saving));
+    for (const [key, control] of controls) {
+      const saved = state.snapshot?.overrides[key];
+      const value = own(state.draft, key) ? state.draft[key] : saved?.status === 'uninitialized' ? null
+        : settingScalar(saved) ?? 'unsupported';
+      control.select.value = value ?? ''; control.select.disabled = state.saving || !state.snapshot;
+      control.clear.disabled = state.saving || !state.snapshot;
+      if (!state.snapshot) { control.info.textContent = 'Recorded state not loaded.'; continue; }
+      const recorded = state.snapshot.recorded[key], effective = state.snapshot.effective[key];
+      control.info.replaceChildren(
+        element(doc, 'p', null, `Recorded source: ${recorded.length ? recorded.map(value => typeof value === 'string' ? value : JSON.stringify(value)).join(' / ') : 'Not specified'}`),
+        element(doc, 'p', null, `Exact Atom override: ${annotationSummary('cyc', saved).text}`),
+        element(doc, 'p', null, `Saved effective: ${effectiveDescription(effective)}`));
+      if (effective?.supplier && options.reference) control.info.append(options.reference({
+        key: effective.supplier, expression: effective.supplierExpression, kind: 'supplier',
+      }));
+      const layers = state.snapshot.layers;
+      if (layers) {
+        control.info.append(element(doc, 'p', null, `Current MT exact: ${layers.mt ? annotationSummary('cyc', layers.mt[key]).text : 'Skipped — no current MT'}`),
+          element(doc, 'p', null, `Global exact: ${annotationSummary('cyc', layers.global[key]).text}`));
+        if (key === 'monotonicity') control.info.append(element(doc, 'p', null,
+          `Global missing-strength policy: ${annotationSummary('cyc', layers.global.missing_assertion_strength).text}`));
+      }
+    }
+  });
+  Object.assign(root, { controller, setContext: context => controller.setContext(context),
+    refresh: () => controller.load(), dispose: () => controller.dispose() });
+  if (!options.signal?.aborted) controller.load();
+  return root;
+}
+
+export function renderNativePairSettings({ document: doc = globalThis.document, readPairs, savePair, fetchDetail, ...options }) {
+  const root = element(doc, 'section', 'native-tva-pair-settings'), controllers = [];
+  root.append(element(doc, 'h3', null, 'Native NARS and OpenCog records'),
+    element(doc, 'p', 'muted', 'Each save replaces one complete native pair. These values are separate from Cyc assertion-prior confidence. Unsupported layouts, extras and exact numeric forms stay read-only unless explicitly replaced.'));
+  for (const family of ['nars', 'opencog']) {
+    const field = family === 'nars' ? 'frequency' : 'strength', label = family === 'nars' ? 'NARS' : 'OpenCog/PLN';
+    const controller = createNativePairController({ ...options, family, readPairs, savePair,
+      onSaved: async reply => { await options.onSaved?.(reply); for (const other of controllers) if (other !== controller) other.load(); } });
+    controllers.push(controller);
+    const group = element(doc, 'fieldset', 'presentation-fieldset native-tva-pair');
+    group.dataset.pairFamily = family; group.append(element(doc, 'legend', null, label));
+    const origin = element(doc, 'p', 'muted'), inputs = new Map(), fields = element(doc, 'div', 'native-tva-pair-fields');
+    for (const key of [field, 'confidence']) {
+      const title = element(doc, 'label', null, key[0].toUpperCase() + key.slice(1));
+      const input = element(doc, 'input'); input.name = `native-pair-${family}-${key}`;
+      Object.assign(input, { type: 'number', min: '0', max: '1', step: 'any', inputMode: 'decimal' });
+      input.addEventListener('input', () => controller.edit(key, input.value)); title.append(input); fields.append(title); inputs.set(key, input);
+    }
+    const replacement = element(doc, 'label', 'presentation-choice'), consent = element(doc, 'input'); consent.type = 'checkbox';
+    consent.name = `native-pair-${family}-replace`; consent.addEventListener('change', () => controller.edit('replace', consent.checked));
+    replacement.append(consent, element(doc, 'span', null, 'Explicitly replace/remove this unsupported or conflicting whole record'));
+    const create = element(doc, 'button', 'button secondary'); create.type = 'button';
+    create.addEventListener('click', () => controller.edit('override', true));
+    const clear = element(doc, 'button', 'text-button', 'Clear MT record · inherit global pair'); clear.type = 'button';
+    clear.addEventListener('click', () => controller.edit('clear', true));
+    const inspect = element(doc, 'details', 'native-tva-pair-inspector'), detail = element(doc, 'div');
+    inspect.append(element(doc, 'summary', null, 'Inspect complete native record'), detail);
+    let inspectedKey = null, pendingKey = null, detailRequest;
+    async function loadDetail() {
+      if (!inspect.open || !fetchDetail) return;
+      const item = controller.get().snapshot?.families[family];
+      if (!item) return;
+      const key = JSON.stringify(item.detail);
+      if (key === inspectedKey || key === pendingKey) return;
+      detailRequest?.abort(); detailRequest = new AbortController(); const local = detailRequest;
+      pendingKey = key;
+      detail.textContent = 'Reading native record…';
+      try {
+        const result = await fetchDetail(item.detail, { signal: local.signal });
+        if (local.signal.aborted) return;
+        detail.replaceChildren();
+        for (const record of result.records) detail.append(renderNativeTVAData(record.data, { document: doc }),
+          element(doc, 'pre', 'native-tva-raw', record.text));
+        inspectedKey = key;
+      } catch (error) { if (!isAbort(error) && !local.signal.aborted) detail.replaceChildren(errorPanel(doc, error)); }
+      finally { if (detailRequest === local) pendingKey = null; }
+    }
+    inspect.addEventListener('toggle', loadDetail);
+    group.append(origin, replacement, fields, create, clear, inspect, ...editorActions(doc, controller, `Save ${label} whole pair`));
+    controller.subscribe(state => {
+      const item = state.snapshot?.families[family], exists = item && item.exact.status !== 'uninitialized';
+      const editable = Boolean(item && !state.saving && !state.draft.clear
+        && (item.replacementRequired ? state.draft.replace === true : exists || state.draft.override));
+      const model = item ? annotationSummary(family, item.effective) : null;
+      origin.textContent = item ? `${model.text} · ${item.effective.origin === 'mt' ? 'Mt record' : item.effective.origin === 'default' ? 'Global record' : 'Uninitialized'}${state.draft.clear ? ' · Clear pending' : ''}`
+        : 'Native record not loaded.';
+      replacement.hidden = !item?.replacementRequired; consent.checked = state.draft.replace === true; consent.disabled = state.saving;
+      create.hidden = Boolean(exists); create.disabled = !item || state.saving;
+      create.textContent = state.context === null ? 'Create global whole pair' : 'Override whole pair for this MT';
+      clear.hidden = state.context === null; clear.disabled = !exists || state.saving;
+      inspect.hidden = !fetchDetail || !item || item.effective.status === 'uninitialized';
+      const key = item ? JSON.stringify(item.detail) : null;
+      if (key !== inspectedKey && key !== pendingKey) {
+        detailRequest?.abort(); pendingKey = null; inspectedKey = null; detail.replaceChildren();
+        if (!inspect.hidden) loadDetail();
+      }
+      for (const [key, input] of inputs) {
+        input.disabled = !editable;
+        const value = own(state.draft, key) ? state.draft[key] : model?.fields[key] ?? '';
+        if (input.value !== String(value)) input.value = value;
+      }
+    });
+    options.signal?.addEventListener('abort', () => detailRequest?.abort(), { once: true });
+    root.append(group);
+  }
+  Object.assign(root, { controllers,
+    setContext: context => Promise.all(controllers.map(controller => controller.setContext(context))),
+    refresh: () => Promise.all(controllers.map(controller => controller.load())),
+    discard: () => controllers.forEach(controller => controller.discard()),
+    dispose: () => controllers.forEach(controller => controller.dispose()),
+    busy: () => controllers.some(controller => controller.get().saving),
+  });
+  if (!options.signal?.aborted) root.refresh();
+  return root;
+}
+
 /**
  * listMicrotheories({offset,limit},{signal}) must return complete paginated
  * {items:[{key,expression?}],total}. No display label is used as an identity.
  * Parent may instead pass microtheories:[...] when it already has the full list.
- * This component edits only the seven approved Cyc configuration keys, never
- * NARS/OC records. Prior configuration is visibly separate from mapped strength.
+ * Cyc configuration and optional typed native whole-pair editors remain separate.
  */
 export function renderTVASettings({
   document: doc = globalThis.document, signal, readSettings, saveSettings,
-  listMicrotheories, microtheories, initialContext = null, onSaved, resetDefaults, ...host
+  listMicrotheories, microtheories, initialContext = null, onSaved, resetDefaults,
+  readPairs, savePair, fetchDetail, ...host
 } = {}) {
   const root = element(doc, 'section', 'native-tva-settings');
   root.append(element(doc, 'h2', null, 'Annotation defaults and source interpretation'),
-    element(doc, 'p', 'muted', 'Explicitly save global values or independent per-MT overrides. These settings do not edit native NARS/OpenCog records, compile knowledge, change observed rule utility, or recolor original source-category markers.'));
-  const settings = createTVASettingsController({ readSettings, saveSettings, initialContext, signal, onSaved });
+    element(doc, 'p', 'muted', 'Explicitly save global values or independent per-MT overrides. Native pairs and configured assertion priors are separate. No save changes formulas, execution or observed rule utility.'));
+  let pairs;
+  const settings = createTVASettingsController({ readSettings, saveSettings, initialContext, signal,
+    onSaved: reply => { onSaved?.(reply); pairs?.refresh(); } });
+  if (readPairs && savePair) pairs = renderNativePairSettings({ document: doc, signal, initialContext,
+    readPairs, savePair, fetchDetail, onSaved: reply => { onSaved?.(reply); settings.load(); } });
   const scope = element(doc, 'label', 'native-tva-context', 'Settings scope');
   const picker = element(doc, 'select'); picker.name = 'tva-settings-context';
   const globalOption = element(doc, 'option', null, 'Global defaults'); globalOption.value = ''; picker.append(globalOption);
@@ -911,6 +1200,7 @@ export function renderTVASettings({
     (own(ASSERTION_PRIOR_FIELDS, key) ? priorFields : fields).append(group);
     controls.set(key, { input, check, clear, effective, useText, group });
   }
+  if (pairs) root.append(pairs);
   root.append(fields, priorGroup);
   const actions = element(doc, 'div', 'native-tva-settings-actions');
   const save = element(doc, 'button', 'button', 'Save annotation settings'); save.type = 'button';
@@ -926,7 +1216,7 @@ export function renderTVASettings({
     reset.title = 'Restore the approved native global records, Backward direction, DEFAULT missing strength and configured priors. Atom and MT overrides are preserved.';
     reset.addEventListener('click', async () => {
       const current = settings.get();
-      if (current.saving || !current.snapshot) return;
+      if (current.saving || pairs?.busy() || !current.snapshot) return;
       let written = false;
       root.inert = true;
       reset.disabled = true;
@@ -934,7 +1224,9 @@ export function renderTVASettings({
         const reply = await resetDefaults({ revision: current.snapshot.revision }, { signal });
         written = true;
         settings.discard();
+        pairs?.discard();
         await settings.load();
+        await pairs?.refresh();
         onSaved?.(reply);
         feedback.textContent = 'Global defaults restored. Atom/MT overrides, source assertions and the loaded KB are unchanged.';
       } catch (error) {
@@ -961,7 +1253,11 @@ export function renderTVASettings({
   }
   if (initialContext !== null) addMt({ key: initialContext });
   picker.addEventListener('change', async () => {
-    try { await settings.setContext(picker.value === '' ? null : picker.value); }
+    try {
+      if (pairs?.busy()) throw new Error('Wait for the native pair save before changing scope.');
+      const context = picker.value === '' ? null : picker.value;
+      await settings.setContext(context); await pairs?.setContext(context);
+    }
     catch (error) { feedback.textContent = error.message; feedback.setAttribute('role', 'alert'); }
   });
   save.addEventListener('click', () => settings.save());
@@ -1053,7 +1349,7 @@ export function renderTVASettings({
     refresh: () => settings.load(),
     dispose() {
       if (dead) return;
-      dead = true; catalogController.abort(); unsubscribe(); settings.dispose();
+      dead = true; catalogController.abort(); unsubscribe(); settings.dispose(); pairs?.dispose();
       signal?.removeEventListener('abort', root.dispose);
     },
   });

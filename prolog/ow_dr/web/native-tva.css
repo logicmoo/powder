@@ -34,10 +34,26 @@
 .native-tva-prior > p { margin-block: .35rem; }
 .native-tva-prior-values { margin-block: .5rem; }
 .native-tva-prior-values dd { overflow-wrap: anywhere; }
+.native-tva-assertion-editor { margin-block: 1.5rem; padding-block: 1rem; border-block: 1px solid var(--line); min-width: 0; }
+.native-tva-assertion-editor > p, .native-tva-pair-settings > p { max-width: 75ch; }
+.native-tva-assertion-editor .native-tva-setting { margin-block: 1rem; }
+.native-tva-assertion-editor .native-tva-setting-effective { grid-row: 1 / span 2; }
+.native-tva-assertion-editor .text-button { justify-self: start; }
+.native-tva-setting-effective p { margin-block: .25rem; }
+.native-tva-pair-settings { margin-block: 1.5rem; min-width: 0; }
+.native-tva-pair { min-width: 0; margin-block: 1rem; }
+.native-tva-pair [hidden] { display: none; }
+.native-tva-pair-fields { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; margin-block: .75rem; }
+.native-tva-pair-fields > label { display: grid; gap: .35rem; }
+.native-tva-pair-fields input { width: 9rem; max-width: 100%; }
+.native-tva-pair-inspector { margin-block: .75rem; }
+.native-tva-pair-inspector > div { display: grid; gap: .5rem; min-width: 0; }
+.native-tva-pair-inspector .native-tva-raw { box-sizing: border-box; }
 @media (max-width: 620px) {
   .native-tva-setting { grid-template-columns: minmax(0, 1fr); }
   .native-tva-setting-effective { grid-column: 1; }
   .native-tva-detail { margin-left: .5rem; }
+  .native-tva-assertion-editor .native-tva-setting-effective { grid-row: auto; }
 }
 @media (pointer: coarse) {
   .native-tva-entry > summary { min-height: 40px; }

@@ -30,7 +30,7 @@ export function createAnnotationHost({ api, presentation, reference, sourceLink,
     const row = element('p', 'assertion-interpretation-value');
     row.append(`${label}: `);
     if (value?.status === 'initialized' && value.summary && Object.hasOwn(value.summary, 'value')) {
-      row.append(String(value.summary.value), ` · ${value.origin === 'source' ? 'Source assertion' : value.origin === 'mt' ? 'Mt' : 'Default'}: `,
+      row.append(String(value.summary.value), ` · ${value.origin === 'atom' ? 'Atom override' : value.origin === 'source' ? 'Source assertion' : value.origin === 'mt' ? 'Mt' : 'Global'}: `,
         reference({ key: value.supplier, expression: value.supplierExpression, kind: 'supplier' }));
     } else row.append(value?.status ?? 'Unavailable', value?.reason ? ` (${value.reason})` : '');
     return row;
