@@ -19,6 +19,7 @@
 :- use_module(kb_config,[]).
 :- use_module(kb_cache,[]).
 :- use_module(kb_messages).
+:- use_module(kb_terms,[json_value/2]).
 :- use_module(library(error)).
 :- use_module(library(option)).
 :- use_module(library(uuid)).
@@ -636,7 +637,8 @@ detail_status(M,Outcome,Status) :-
 error_details(error(compile_incomplete(Summary),_),Details) :- !,
     compile_report(Summary,Base),
     (Summary.failures=:=0->Kind=busy;Kind=compilation),
-    Details=Base.put(_{kind:Kind,summary:Summary}).
+    json_value(Summary,PublicSummary),
+    Details=Base.put(_{kind:Kind,summary:PublicSummary}).
 error_details(error(generation_conflict(Expected,Current),_),
               _{kind:generation_conflict,expected:Expected,current:Current,message:Text}) :- !,
     format(string(Text),'KB generation changed (expected ~w, current ~w).',[Expected,Current]).

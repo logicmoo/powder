@@ -4,6 +4,7 @@
 :- use_module('../kb_store').
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
+:- use_module(library(http/json)).
 
 fixture(Directory,Previous) :-
     (getenv('POWDER_SERVER_SETTINGS',Old)->Previous=value(Old);Previous=none),
@@ -56,5 +57,17 @@ test(legacy_submit_aliases_use_the_shared_file_pool,
     assertion(Loaded.counts.assertions==1),assertion(Load.pool==file),
     submit_unload(File,Loaded.generation,Unload),await_result(Unload.jobId,Empty),
     assertion(Empty.files==[]).
+
+test(failed_compile_summary_is_complete_json_with_native_diagnostics) :-
+    Warning=warnings("Mapping shape mismatch"),
+    Summary=summary{generated:0,cacheHits:0,busy:0,failures:1,warnings:1,exitCode:1,
+      results:[result{source:'KBs/example.krf',status:failed,error:"Resource limit",
+        warnings:[Warning],mapping_rows:[Warning],elapsed:0,count:0}]},
+    kb_jobs:error_details(error(compile_incomplete(Summary),_),Details),
+    with_output_to(string(Text),json_write_dict(current_output,Details)),
+    atom_json_dict(Text,Read,[]),
+    assertion(Read.summary.failures==1),
+    Read.summary.results=[Result],Result.mapping_rows=[Mapped],
+    assertion(Mapped.type=="warnings"),assertion(Mapped.message=="Mapping shape mismatch").
 
 :- end_tests(worker_jobs).
