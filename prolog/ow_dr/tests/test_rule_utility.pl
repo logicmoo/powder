@@ -269,6 +269,22 @@ test(cancellation_thread_cleanup,
        assertion(R.applicationEvidence.unknownApplications=:=R.calls)),
       (thread_join(Worker,true),message_queue_destroy(Queue))).
 
+test(pool_cancellation_keeps_original_exception_and_unknown_evidence,
+     [setup(fixture(D,F)),cleanup(dispose(D,F))]) :-
+    message_queue_create(Queue),
+    setup_call_cleanup(
+      thread_create(
+        (thread_send_message(Queue,started),
+         catch(query_modules_report([ow_rule_utility_test],x_loop(_),x_TestMt,50,30,
+           [generation(7)],_,_),Error,true),
+         last_query_report(Report),thread_send_message(Queue,finished(Error,Report))),Worker,[]),
+      (thread_get_message(Queue,started),sleep(0.02),
+       thread_signal(Worker,throw(job_cancelled(utility_fixture))),
+       thread_get_message(Queue,finished(Error,Report),[timeout(10)]),
+       assertion(Error==job_cancelled(utility_fixture)),assertion(Report.outcome==cancelled),
+       row(Report,a15,R),assertion(R.applicationEvidence.unknownApplications=:=R.calls)),
+      (thread_join(Worker,true),message_queue_destroy(Queue))).
+
 test(concurrent_aggregation_once,
      [setup(fixture(D,F)),cleanup(dispose(D,F))]) :-
     findall(Thread,(between(1,4,_),

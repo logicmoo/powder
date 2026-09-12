@@ -170,6 +170,7 @@ completion(!,_,cut,false) :- !.
 completion(fail,_,failed,false) :- !.
 completion(exception(time_limit_exceeded),_,timeout,false) :- !.
 completion(exception(cancelled),_,cancelled,false) :- !.
+completion(exception(job_cancelled(_)),_,cancelled,false) :- !.
 completion(exception(error(cancelled,_)),_,cancelled,false) :- !.
 completion(external_exception(_),_,cancelled,false) :- !.
 completion(_,_,exception,false).
@@ -437,7 +438,9 @@ current_rules(Modules,Id,Current) :-
     sort(Identities,Current).
 classify_row(Generation,Current,Row,Classified) :-
     (member(I,Current),I.id==Row.id,I.contentHash==Row.contentHash->
-      (Row.generation==Generation->IdentityState=current;IdentityState=prior_generation)
+      (Row.generation==Generation->IdentityState=current
+      ;Row.generation==null->IdentityState=unknown_generation
+      ;IdentityState=prior_generation)
     ;IdentityState=stale),
     (Row.partialQueries>0->Coverage=partial;Coverage=observed_queries),
     Classified=Row.put(telemetry{identityState:IdentityState,coverage:Coverage}).
