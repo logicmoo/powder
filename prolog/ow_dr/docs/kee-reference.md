@@ -1,6 +1,6 @@
 # KEE callable reference
 
-Generated from `kb_kee_registry.pl`; revision `66160f8c661314d81f1a1787bae274bdfab1df2215be15a054d3132c607673ca`.
+Generated from `kb_kee_registry.pl`; revision `f9635277aed82902139b85dd9ab4f54047cd7f81f9642a7cd8dc67d3a871a524`.
 
 | Tool | Schema | Permission | Scope | Effects |
 |---|---|---|---|---|
@@ -12,6 +12,7 @@ Generated from `kb_kee_registry.pl`; revision `66160f8c661314d81f1a1787bae274bdf
 | `kee_assertion` | 1 | `[knowledge.read]` | `read_mt` | `[knowledge_read]` |
 | `kee_query` | 1 | `[knowledge.query]` | `read_mt` | `[knowledge_read,query,telemetry]` |
 | `kee_ledger_status` | 1 | `[changeset.read]` | `all_metadata` | `[application_read]` |
+| `kee_call_status` | 1 | `[changeset.read]` | `resource_read` | `[application_read]` |
 | `kee_todo_list` | 1 | `[todo.read]` | `read_mt` | `[application_read]` |
 | `kee_todo_get` | 1 | `[todo.read]` | `resource_read` | `[application_read]` |
 | `kee_todo_create` | 1 | `[todo.write]` | `write_mt` | `[application_write]` |
@@ -160,6 +161,19 @@ Inspect managed application ledger revision and counts.
 
 ```json
 {"additionalProperties":false,"properties": {},"required": [],"type":"object"}
+```
+
+## `kee_call_status`
+
+Inspect a durable call receipt without retrying or reserving a mutation.
+
+```json
+{
+  "additionalProperties":false,
+  "properties": {"callId": {"maxLength":128,"minLength":1,"type":"string"}},
+  "required": ["callId" ],
+  "type":"object"
+}
 ```
 
 ## `kee_todo_list`

@@ -1,4 +1,4 @@
-:- module(kb_kee_ledger,[snapshot/1,resource/3,event/3,commit/7,inverse/4]).
+:- module(kb_kee_ledger,[snapshot/1,resource/3,event/3,commit/7,inverse/4,call_receipt/4]).
 :- use_module(kb_cache,[]).
 :- use_module(kb_paths,[]).
 :- use_module(kb_activity,[]).
@@ -82,6 +82,10 @@ safe_data(Value) :-
 safe_pair(Key-Value) :- atom(Key),safe_data(Value).
 resource(Id,State,Resource) :- member(Resource,State.resources),Resource.id==Id,!.
 event(Id,State,Event) :- member(Event,State.events),Event.id==Id,!.
+call_receipt(Principal,CallId,State,Event) :-
+    call_key(Principal,CallId,Key),member(Event,State.events),Event.callKey==Key,!.
+call_key(P,CallId,Key) :-
+    kb_cache:terms_digest([P.actor,P.agent,P.conversation,CallId],Key).
 resource_revision(Record,Revision) :-
     (del_dict(revision,Record,_,Body)->true;Body=Record),
     kb_cache:terms_digest([kee_resource_v1,Body],Revision).
@@ -142,7 +146,7 @@ locked_commit(Token,P,Request,Expected,Planner,Validator,Reply) :-
       kb_cache:release_lock(Lock)).
 commit_owned(Token,P,Request,Expected,Planner,Validator,Path,Reply) :-
     cleanup_stages(Path),read_snapshot(Path,Before),actor(P,Actor),
-    kb_cache:terms_digest([P.actor,P.agent,P.conversation,Request.callId],CallKey),
+    call_key(P,Request.callId,CallKey),
     kb_cache:terms_digest([Request,Actor],RequestHash),
     (member(Old,Before.events),Old.callKey==CallKey->
       (Old.requestHash==RequestHash->true;reject(idempotency_conflict,json{})),

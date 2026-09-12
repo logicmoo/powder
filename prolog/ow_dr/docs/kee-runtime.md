@@ -77,8 +77,8 @@ projection cannot safely compute MT-filtered term rankings. Catalog status
 is aggregate operational metadata, not assertion access.
 
 Permissions and transitive effect closure are checked independently. Symbolic
-contexts cannot invoke direct or dependent `llm`, `network`, `proxy`, or
-`generate_comment` effects. Capability dependencies are compiled registry data,
+contexts cannot invoke direct or dependent `llm`, `network`, `proxy`,
+`generate_comment`, or `agent_delegation` effects. Capability dependencies are compiled registry data,
 not declarations that a KB/model can modify or use to self-grant permissions.
 
 ## Invocation contract

@@ -13,6 +13,7 @@ tool(kee_catalog_assertion,catalog_assertion,'Read one source-verified catalog a
 tool(kee_assertion,assertion,'Read one loaded assertion at an expected generation',[knowledge_read],read_mt).
 tool(kee_query,query,'Execute bounded KB inference in one explicit MT',[knowledge_read,query,telemetry],read_mt).
 tool(kee_ledger_status,ledger_status,'Inspect managed application ledger revision and counts',[application_read],all_metadata).
+tool(kee_call_status,ledger_call_status,'Inspect a durable call receipt without retrying or reserving a mutation',[application_read],resource_read).
 tool(kee_todo_list,todo_list,'List persistent application TODOs in one scope',[application_read],read_mt).
 tool(kee_todo_get,todo_get,'Inspect one persistent application TODO',[application_read],resource_read).
 tool(kee_todo_create,todo_create,'Create an audited application TODO automatically',[application_write],write_mt).
@@ -52,7 +53,7 @@ requirements(Operation,Permission,Extra,Mutation,application_todo) :-
       Permission='todo.write',Extra=[],Mutation=true
     ;memberchk(Operation,[ledger_undo,ledger_redo])->
       Permission='changeset.undo',Extra=['todo.write'],Mutation=true
-    ;memberchk(Operation,[ledger_status,ledger_audit])->
+    ;memberchk(Operation,[ledger_status,ledger_call_status,ledger_audit])->
       Permission='changeset.read',Extra=[],Mutation=false
     ;Permission='todo.read',Extra=[],Mutation=false).
 requirements(query,'knowledge.query',[],false,knowledge) :- !.

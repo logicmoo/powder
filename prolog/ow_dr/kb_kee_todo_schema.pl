@@ -1,6 +1,7 @@
 :- module(kb_kee_todo_schema,[input_spec/2,data_spec/1]).
 
 input_spec(ledger_status,obj([])).
+input_spec(ledger_call_status,obj([req(callId,str(1,128))])).
 input_spec(todo_list,obj([req(mt,nullable(str(1,4096))),opt(status,enum([open,in_progress,blocked,done,cancelled])),
     opt(offset,int(0,1000000)),opt(limit,int(1,100))])).
 input_spec(todo_get,obj([req(id,str(1,128))])).

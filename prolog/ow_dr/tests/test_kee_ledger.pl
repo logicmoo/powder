@@ -225,5 +225,41 @@ test(public_list_and_audit_do_not_leak_other_mts,[setup(fixture(F)),cleanup(clea
        catch(plunit_kee:invoke_tool(Reader,"kee_todo_get",json{id:Created.result.id},_),
          error(kee(mt_scope_denied,_),_),Denied=true),assertion(Denied==true)),
       kb_kee:close_context(Reader)).
+test(call_status_is_read_only_and_does_not_reserve_or_retry,[setup(fixture(F)),cleanup(cleanup(F))]) :-
+    F=fixture(Root,_,T),plunit_kee:host(H),
+    ReadHost=H.put(json{permissions:["changeset.read"],effects:["application_read"]}),
+    setup_call_cleanup(kb_kee:open_context(ReadHost,Reader),
+      (plunit_kee:invoke_tool(Reader,"kee_call_status",json{callId:"unseen"},Missing),
+       assertion(Missing.result.status==unknown),assertion(Missing.result.commit==null),
+       directory_files(Root,Names),assertion(Names==['.','..']),
+       create(T,"recorded",_,Written),kb_kee_ledger:snapshot(Before),
+       plunit_kee:invoke_tool(Reader,"kee_call_status",json{callId:"recorded"},Found),
+       assertion(Found.result.status==committed),
+       assertion(Found.result.commit.changeset==Written.changeset),
+       assertion(Found.result.commit.tool=="kee_todo_create"),
+       assertion(\+get_dict(entries,Found.result.commit,_)),
+       kb_kee_ledger:snapshot(After),assertion(After==Before)),
+      kb_kee:close_context(Reader)).
+test(call_status_namespace_and_mt_do_not_leak,[setup(fixture(F)),cleanup(cleanup(F))]) :-
+    F=fixture(_,_,T),create(T,"recorded",_,_),plunit_kee:host(H),
+    ReadHost=H.put(json{permissions:["changeset.read"],effects:["application_read"]}),
+    setup_call_cleanup(kb_kee:open_context(ReadHost.put(conversation,"other"),Other),
+      (plunit_kee:invoke_tool(Other,"kee_call_status",json{callId:"recorded"},R),
+       assertion(R.result.status==unknown)),kb_kee:close_context(Other)),
+    setup_call_cleanup(kb_kee:open_context(ReadHost.put(readMts,[]),Denied),
+      (catch(plunit_kee:invoke_tool(Denied,"kee_call_status",json{callId:"recorded"},_),
+         error(kee(mt_scope_denied,_),_),Blocked=true),assertion(Blocked==true)),
+      kb_kee:close_context(Denied)).
+test(symbolic_delegation_is_denied_even_if_granted_as_an_inherited_effect) :-
+    plunit_kee:host(H),Host=H.put(json{kind:"symbolic",effects:["agent_delegation"]}),
+    setup_call_cleanup(kb_kee:open_context(Host,T),
+      setup_call_cleanup(
+        wrap_predicate(kb_kee_registry:effect_closure(_,Effects),kee_delegate,_Wrapped,
+          Effects=[agent_delegation]),
+        (kb_kee_auth:principal(T,P),kb_kee_registry:capability(kee_query,C),
+         catch(kb_kee_auth:authorize(P,C),error(kee(symbolic_effect_denied,_),_),Denied=true),
+         assertion(Denied==true)),
+        unwrap_predicate(kb_kee_registry:effect_closure(_,_),kee_delegate)),
+      kb_kee:close_context(T)).
 
 :- end_tests(kee_ledger).

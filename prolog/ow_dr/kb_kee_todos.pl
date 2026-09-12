@@ -11,6 +11,15 @@
 run(ledger_status,_,_,_,_,Reply) :- !,
     kb_kee_ledger:snapshot(State),length(State.resources,Count),
     Reply=json{revision:State.revision,sequence:State.sequence,resources:Count,changesets:State.sequence}.
+run(ledger_call_status,_,P,_,Args,Reply) :- !,
+    kb_kee_ledger:snapshot(State),
+    (kb_kee_ledger:call_receipt(P,Args.callId,State,Event)->
+      kb_kee_ledger:authorize_entries(P,read,Event.entries),
+      Commit=json{revision:Event.revision,changeset:Event.id,sequence:Event.sequence,
+        tool:Event.tool,requestHash:Event.requestHash,actor:Event.actor,result:Event.result},
+      Status=committed
+    ;Commit=null,Status=unknown),
+    Reply=json{status:Status,callId:Args.callId,revision:State.revision,commit:Commit}.
 run(todo_get,_,P,_,Args,Reply) :- !,
     kb_kee_ledger:snapshot(State),active_resource(State,Args.id,Resource),
     kb_kee_auth:authorize_mt(P,read,Resource.mt),

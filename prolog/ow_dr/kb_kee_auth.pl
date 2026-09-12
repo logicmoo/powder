@@ -52,7 +52,7 @@ authorize(Principal,C) :-
     forall(member(Effect,Effects),
       (memberchk(Effect,Principal.effects)->true;reject(effect_denied,json{effect:Effect}))),
     (Principal.kind==symbolic,
-     (C.symbolic\==true;member(E,Effects),memberchk(E,[llm,network,proxy,generate_comment]))->
+     (C.symbolic\==true;member(E,Effects),memberchk(E,[llm,network,proxy,generate_comment,agent_delegation]))->
        reject(symbolic_effect_denied,json{tool:C.name});true),
     (C.scope==all_read_mts,Principal.readMts\==all->reject(mt_scope_denied,json{reason:all_read_mts_required});true).
 canonical_mt(Input,Key) :-

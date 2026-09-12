@@ -11,6 +11,8 @@ the context token. Tool arguments cannot grant any of those.
 
 - `kee_ledger_status`: revision, sequence, allocated resource count (including
   tombstones), and changeset count.
+- `kee_call_status`: inspect a call ID in this host actor/agent/conversation
+  namespace without invoking, retrying or reserving the original mutation.
 - `kee_todo_list`: one explicit `mt`, optional status, offset and limit.
   `mt:null` means application-wide tasks, **not** all MTs or inferred context.
   Sort is descending numeric priority, then stable ID.
@@ -110,6 +112,25 @@ stale-revision checking, with `replayed:true`, the original commit revision and
 the current revision separately. They do not consume mutation budget.
 Reusing the ID with changed arguments/tool/provenance raises
 `idempotency_conflict`; no second effect occurs.
+
+Read-only completion probing uses `kee_call_status` with
+`{"callId":"<original-call-id>"}` and `changeset.read`/`application_read` grants.
+It returns:
+
+```text
+{status:"committed"|"unknown",callId,revision,commit:null|{
+  revision,changeset,sequence,tool,requestHash,actor,result
+}}
+```
+
+The outer revision is the observed current ledger; the commit revision is the
+original event. No full task or before/after payload is returned. All event MTs
+must still be readable. `unknown` means no durable receipt in that namespace
+at that snapshot, **not** proof that an in-flight call cannot still commit.
+It does not mean failed, cancelled or safe to assign a new call ID.
+There is no separate durable `reserved`/`pending` state: the native lock checks
+identity before changing anything, and this local ledger publishes the effect
+and its receipt in one atomic replacement.
 
 Revocation/expiry is rechecked at the publication boundary under the context
 mutex. Commits participate in `kb_activity` admission, so promotion can drain
