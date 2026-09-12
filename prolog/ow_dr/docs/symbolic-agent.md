@@ -223,25 +223,87 @@ in-flight operation cannot commit. No automatic retry loop is implemented here.
 
 ## Canonical knowledge snapshot adapter
 
-`kb_symbolic_agent_knowledge:snapshot(Principal,Args,Reply)` is a **compiled KEE
+`kb_symbolic_agent_knowledge:read_snapshot(Principal,Args,Reply)` is a **compiled KEE
 adapter contract**, not a public endpoint accepting a client-supplied Principal.
+`snapshot/3` is an alias with the same strict input contract. The registration name
+agreed with the KEE owner is `kee_agent_knowledge_snapshot`; it is not available
+until that owner's fixed registration is published.
 It requires an authenticated symbolic principal with null model/prompt metadata.
 Its immutable audit-agent identifier is distinct from the executable knowledge
 root: `Args.agent` identifies the latter, not the principal. The trusted execution
 host must bind that knowledge root/version immutably for a run rather than accept
 source-switching instructions from KB text.
-Arguments are canonical knowledge `agent`, definition `mt`, expected `generation` and an
-optional `maxRecords` (default 4,096, maximum 8,192). Every linked agent MT is
-separately authorized before returning its records.
-Independent ceilings bound the collected semantic terms to 65,536 heap cells
-and encoded rows to 131,072 cells; the registry's result-byte budget also applies.
+The pure `kb_symbolic_agent_knowledge_schema:input_spec/1` exports the existing
+KEE schema DSL and imports no auth, registry, runtime or store module:
+
+| Field | Required | Constraint |
+|---|---|---|
+| `agent` | yes | canonical ground entity key, 1–4,096 characters |
+| `mt` | yes | canonical explicit definition MT key, 1–4,096 characters |
+| `linkedMts` | yes | concrete array of 0–200 canonical MT keys |
+| `generation` | yes | integer 0–1,000,000,000,000 |
+| `maxRecords` | yes | integer 1–8,192 |
+| `maxBytes` | yes | integer 1,024–1,048,576 |
+| `seconds` | no | 0.01–5; default 2, further limited by the actual host context |
+
+Extra fields, principals, goals, paths and module names are rejected. Entity/MT
+keys use the existing canonical `x_*` or full `mt:...` representation, not rendered
+S-expressions. Selections are deduplicated. **Every selected MT is authorized,
+and an agent's declared linked MT must already be explicitly selected**; neither
+KB declarations nor all-MT read grants implicitly expand selection.
 
 The adapter pins the native modules and reads a coherent database snapshot,
-retaining actual assertion IDs and complete semantic clauses with shared
-variables. It returns `powder.symbolic-knowledge.v1` with `complete:true` only
-when the whole authorized bounded snapshot fits. Limit/generation/scope errors
-never become successful partial programs. `decode_snapshot/2` reconstructs
-`kb/3` records. No unloaded source/catalog data is implicitly installed.
+enumerating only `Pin.modules`, never fresh global source/index rows. Expected
+generation is checked against that pin. A concurrent publication may advance the
+global generation; it cannot substitute new records into an old pinned result.
+The application lease and native pin are released on success, failure and timeout.
+Semantic and metadata clauses are inspected as data; neither body is executed.
+
+The v2 JSON reply contains `schema:"powder.symbolic-knowledge.v2"`, agent,
+definition MT, pinned generation, selected MTs, per-MT coverage, record count,
+`snapshotHash` and `records`. Each record contains:
+
+```json
+{
+  "id": "a902",
+  "mt": "x_DefMt",
+  "kbNames": [],
+  "semantic": {"schema":"powder.symbolic-term.v1","term":{"type":"symbol","value":"x_Example"}},
+  "provenance": {
+    "occurrenceId":"a902",
+    "sourceFile":"<original source reference>",
+    "sourceLine":2,
+    "verification":"pinned_native_metadata"
+  }
+}
+```
+
+Names match the semantic record's variable count; a rule can preserve spellings
+such as `["??Foo-Bar","$Target","?z"]`. IDs, original variable spellings, native
+source metadata, operator distinctions and complete uninstrumented clauses are
+preserved. Variable sharing is exact within a record and fresh between records
+and decodes. Opaque/native handles, attributed variables, cyclic or unsupported
+values and unbounded shared-subterm expansion are rejected.
+
+`complete:true` means `completeness:"selected_loaded_assertions"`—all records of
+the selected MTs in the **already loaded** pinned generation, not all source/provider
+material or an executable-program validation (`programValidated:false`). Missing
+agent identity, unavailable source metadata, unselected links, limit and scope
+errors never become partial successes. A selected MT with no native assertions
+is explicitly `no_loaded_assertions`, not guessed to be an empty ontology. The
+host must compile/validate the full program and stop on missing required knowledge.
+No catalog fallback, archive reopening, provider load or A/B escalation occurs.
+
+`snapshotHash` hashes the exact returned selection/generation/records/provenance
+before adding the hash field. Source-reference verification means those references
+were read from the pinned native occurrence; it does **not** claim current disk
+bytes were reread or verified. The generic run-manifest hash does neither job.
+`decode_snapshot/2` reconstructs canonical `kb/3` records, not rendered bindings.
+
+Limits cover total semantic cells (65,536), per-record expanded traversal (16,384),
+depth (128), row count, actual UTF-8 JSON bytes and elapsed time. JSON sizing/hashing
+uses standard-library UTF-8 memory streams, including supplementary Unicode; no
+scratch files are created. The independent registry result-byte ceiling also applies.
 
 **Pending:** the shared registry owner must register this operation and supply its
 actual capability contract before the agent host can call it. Direct fixture
@@ -328,7 +390,7 @@ the dedicated control regression exposes the difference explicitly.
 ## Focused validation
 
 ```powershell
-swipl -q -s prolog\ow_dr\tests\test_symbolic_agent_language.pl -s prolog\ow_dr\tests\test_symbolic_agent_engine.pl -s prolog\ow_dr\tests\test_symbolic_agent_kee.pl -s prolog\ow_dr\tests\test_symbolic_agent_todos.pl -s prolog\ow_dr\tests\test_symbolic_agent_control.pl -g "run_tests([symbolic_agent_language,symbolic_agent_engine,symbolic_agent_kee,symbolic_agent_todos,symbolic_agent_control])" -t halt
+swipl -q -s prolog\ow_dr\tests\test_symbolic_agent_language.pl -s prolog\ow_dr\tests\test_symbolic_agent_engine.pl -s prolog\ow_dr\tests\test_symbolic_agent_kee.pl -s prolog\ow_dr\tests\test_symbolic_agent_todos.pl -s prolog\ow_dr\tests\test_symbolic_agent_control.pl -s prolog\ow_dr\tests\test_symbolic_agent_snapshot.pl -g "run_tests([symbolic_agent_language,symbolic_agent_engine,symbolic_agent_kee,symbolic_agent_todos,symbolic_agent_control,symbolic_agent_snapshot])" -t halt
 ```
 
 The existing grammar tests demonstrate one learned production and held-out
@@ -336,7 +398,10 @@ combinations/synonyms, bidirectional generation, ambiguity, MT isolation, exact
 compound identity, quantified sharing, fresh variables and resource limits.
 Further tests cover workflow/form/approval continuations, wire persistence,
 compensation, capability/effect denial, actual native assertion/query calls and
-pinned multi-MT knowledge retrieval. Actual TODO writes, receipt replay, a
+pinned multi-MT knowledge retrieval. Snapshot fixtures also cover an actual
+concurrent source-generation switch, supplementary Unicode, byte/time limits,
+explicit selection, provenance/name alignment and non-execution of metadata/rules.
+Actual TODO writes, receipt replay, a
 committed-write/lost-reply scenario, user-completion protection and undo/redo are
 tested through the public registry. HTTP GET/POST and process creation are trapped
 during real query and declarative TODO workflows with zero attempted calls.

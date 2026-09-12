@@ -72,6 +72,14 @@ snapshot_context(Token) :-
     kb_kee:open_context(P,Token).
 full_fixture(Fixture) :-
     fixture_records(Records),native_fixture_records(Records,Fixture).
+snapshot_arguments(Overrides,Args) :-
+    kb_store:generation(G),
+    Base=json{agent:"x_SymbolicTestAgent",mt:"x_SymbolicTestAgentMt",generation:G,
+      linkedMts:["x_SymbolicTestLexiconMt","x_SymbolicTestGrammarMt","x_SymbolicTestDialogueMt",
+        "x_SymbolicTestTemplatesMt","x_SymbolicTestPlansMt","x_SymbolicTestGoalsMt",
+        "x_SymbolicTestPolicyMt","x_SymbolicTestStateMt","x_SymbolicTestWorldMt"],
+      maxRecords:8192,maxBytes:1048576},
+    Args=Base.put(Overrides).
 
 test(real_registry_discovery_respects_host_scope,
      [setup(context(Token)),cleanup(kb_kee:close_context(Token))]) :-
@@ -160,10 +168,9 @@ test(revoked_context_fails_before_dispatch,
 test(real_pinned_knowledge_snapshot_preserves_grammar_sharing,
      [setup((full_fixture(F),snapshot_context(Token))),
       cleanup((kb_kee:close_context(Token),cleanup_native(F)))]) :-
-    kb_kee_auth:principal(Token,P),kb_store:generation(G),
+    kb_kee_auth:principal(Token,P),snapshot_arguments(json{},Args),
     assertion(P.agent\=="x_SymbolicTestAgent"),
-    kb_symbolic_agent_knowledge:snapshot(P,
-      json{agent:"x_SymbolicTestAgent",mt:"x_SymbolicTestAgentMt",generation:G},Snapshot),
+    kb_symbolic_agent_knowledge:read_snapshot(P,Args,Snapshot),
     assertion(Snapshot.complete==true),
     kb_symbolic_agent_knowledge:decode_snapshot(Snapshot,Records),
     kb_symbolic_agent_program:compile_program(Records,x_SymbolicTestAgent,x_SymbolicTestAgentMt,Program),
@@ -178,16 +185,14 @@ test(snapshot_checks_all_linked_mts_before_returning_knowledge,
       throws(error(kee(mt_scope_denied,_),_))]) :-
     kb_kee_auth:principal(Token,P0),
     P=P0.put(_{agent:"x_SymbolicTestAgent",readMts:[x_SymbolicTestAgentMt]}),
-    kb_store:generation(G),
-    kb_symbolic_agent_knowledge:snapshot(P,
-      json{agent:"x_SymbolicTestAgent",mt:"x_SymbolicTestAgentMt",generation:G},_).
+    snapshot_arguments(json{},Args),
+    kb_symbolic_agent_knowledge:read_snapshot(P,Args,_).
 
 test(snapshot_limit_is_not_reported_as_complete,
      [setup((full_fixture(F),snapshot_context(Token))),
       cleanup((kb_kee:close_context(Token),cleanup_native(F))),
       throws(error(symbolic_snapshot_limit(1),_))]) :-
-    kb_kee_auth:principal(Token,P),kb_store:generation(G),
-    kb_symbolic_agent_knowledge:snapshot(P,
-      json{agent:"x_SymbolicTestAgent",mt:"x_SymbolicTestAgentMt",generation:G,maxRecords:1},_).
+    kb_kee_auth:principal(Token,P),snapshot_arguments(json{maxRecords:1},Args),
+    kb_symbolic_agent_knowledge:read_snapshot(P,Args,_).
 
 :- end_tests(symbolic_agent_kee).
