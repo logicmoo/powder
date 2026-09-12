@@ -387,3 +387,33 @@ process wall time. This bounded, volatile diagnostic state contains only ground
 labels/timings, is cleared on request cleanup, and is not part of a saved KB.
 It allows a coordinator to inspect a pending request without submitting a duplicate.
 Completion covers lookup/rendering, not subsequent HTTP JSON transmission.
+
+### Static HTTP worker queueing
+
+Static startup latency is separate from catalog lookup. The local server starts
+four SWI HTTP workers. In SWI 10.1.7, `thread_httpd:open_client/7` handles a
+requeued keep-alive connection by calling `check_keep_alive_connection/5`, which
+blocks that worker in `peek_code/2` for the default **two seconds**. Four completed
+responses with idle open sockets can therefore delay the next connection before
+its handler runs. Static dispatch performs no application-admission or KB-store
+locking and does not read catalog projections.
+
+An isolated real-socket control reproduced **1,991.7 ms TTFB** for a fifth asset
+request; the five static handlers themselves took **0.43–3.78 ms**. With the fix,
+the same fifth request took **5.1 ms**. Quiet primary curl samples independently
+returned `app.js`, `paths.json` and `settings.js` in **2.4–5.9 ms total**: the
+seconds-long delays are conditional queue waits, not inherently slow file reads.
+
+Successful static responses now send `Connection: close`, immediately releasing
+their workers after the complete response. This is a deliberate loopback
+transport trade-off, not a pool-size increase, browser workaround or cache change.
+The regression holds the application admission lease throughout and verifies
+MIME types, HEAD, `no-store`, complete bytes and an unchanged empty native KB.
+API transport, query code, desired pool profiles and native user settings are
+untouched. Active API work or idle API sockets can still occupy shared workers;
+this fix removes the static-asset burst's own keep-alive starvation, not all
+possible HTTP contention. Primary activation remains an explicit owner operation.
+
+```powershell
+node --test prolog\ow_dr\tests\static-http.test.mjs
+```

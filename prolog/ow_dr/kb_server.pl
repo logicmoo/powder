@@ -609,7 +609,9 @@ static(Request) :-
       app_dir(App),directory_file_path(App,web,Web),directory_file_path(Web,Name,File),
       (exists_file(File)->true;throw(http_reply(not_found(Path)))),
       asset_options(Name,MimeOptions),
-      append(MimeOptions,[cache(false),unsafe(true),headers([cache_control('no-store')])],Options),
+      % SWI keep-alive waits occupy workers needed by the next local asset burst.
+      append(MimeOptions,[cache(false),unsafe(true),
+        headers([connection(close),cache_control('no-store')])],Options),
       http_reply_file(File,Options,Request)
     ; throw(http_reply(not_found(Path))) ).
 web_name(Name) :-
