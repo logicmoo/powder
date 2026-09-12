@@ -162,13 +162,18 @@ manifest(Data) :-
       throw(error(catalog_directory_pending,_))),
     (Data.schema==catalog_directory_v1->true;throw(error(invalid_catalog_directory(Path),_))),
     kb_catalog_index:file_stamp(Query,Stamp),
-    (Stamp==Data.inputStamp->true;throw(error(catalog_directory_stale,_))).
+    (Stamp==Data.inputStamp,current_catalog_revision(Data.revision)->true;
+       throw(error(catalog_directory_stale,_))).
+current_catalog_revision(Revision) :-
+    kb_catalog_index:catalog_revision(Current),
+    (Current==legacy;Current==Revision).
 directory_status(Reply) :-
     paths(Query,Path),atom_concat(Path,'.progress',Progress),
     kb_catalog_index:external_job_status(Path,Progress,Job),
     (exists_file(Path)->
        read_record(Path,catalog_directory(Data)),
-       (exists_file(Query),kb_catalog_index:file_stamp(Query,Stamp),Stamp==Data.inputStamp->
+       (exists_file(Query),kb_catalog_index:file_stamp(Query,Stamp),Stamp==Data.inputStamp,
+          current_catalog_revision(Data.revision)->
           Available=true,State=ready;Available=false,State=stale),
        Reply=json{available:Available,state:State,terms:Data.termCount,files:Data.fileCount,job:Job,
          buckets:Data.buckets,revision:Data.revision,taxonomy:Data.taxonomy,

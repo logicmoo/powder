@@ -33,6 +33,14 @@ handles files changing during maintenance. An unchanged refresh preserves the
 aggregate revision. `refresh_catalog([], Report)` reconciles inventory without
 indexing any newly discovered file.
 
+New summaries also carry the aggregate's validated revision. After maintenance,
+an older query/directory is explicitly stale until controlled query publication;
+cached classifications cannot continue reporting removed type evidence as fresh.
+The original directory remains on disk, and old-format summaries remain readable.
+Rebuilding the shared taxonomy retracts claims from failed, stale or removed files,
+including categories of terms mentioned in other files. Native load/unload changes
+only the optional loaded filter, not this disk membership or type evidence.
+
 ## Persistent data
 
 `tmp\KBs\<relative-source>.catalog.data` contains one validated source snapshot.
