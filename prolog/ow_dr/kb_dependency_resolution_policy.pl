@@ -1,5 +1,5 @@
 :- module(kb_dependency_resolution_policy,
-          [policy_spec/1,validate_policy/2,default_policy_dto/1,
+          [policy_spec/1,validate_policy/2,normalize_policy_dto/2,default_policy_dto/1,
            default_policy/1,normalize_policy/2,apply_policy/3,policy_preview/3]).
 :- use_module(kb_cache,[terms_digest/2]).
 :- use_module(kb_kee_schema,[]).
@@ -37,9 +37,11 @@ validate_policy(Input,json{rules:Rules}) :-
 
 default_policy_dto(Policy) :- validate_policy(json{},Policy).
 default_policy(Policy) :- normalize_policy(json{},Policy).
-normalize_policy(Input,Policy) :-
+normalize_policy_dto(Input,Canonical) :-
     must_be(dict,Input),policy_spec(Spec),
-    policy_json_input(Spec,Input,JSON),validate_policy(JSON,Canonical),
+    policy_json_input(Spec,Input,JSON),validate_policy(JSON,Canonical).
+normalize_policy(Input,Policy) :-
+    normalize_policy_dto(Input,Canonical),
     maplist(report_rule,Canonical.rules,Rules),
     terms_digest([dependency_policy_v1,Rules],Revision),
     Policy=policy{schema:dependency_policy_v1,revision:Revision,rules:Rules}.

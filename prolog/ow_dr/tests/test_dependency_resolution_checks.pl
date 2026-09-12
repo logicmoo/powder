@@ -242,6 +242,13 @@ test(programmatic_atoms_preserve_existing_report_format) :-
     Programmatic.rules=[Rule|_],
     assertion(Rule.ignoreTerms==[x_p]),
     assertion(Rule.patterns==[pattern{mode:prefix,value:x_}]).
+test(compiled_kee_handler_accepts_already_typed_enum_values) :-
+    Input=json{rules:[json{kind:"comment",severity:"warning",
+      patterns:[json{mode:"exact",value:"x_Term"}]}]},
+    policy_spec(Spec),kb_kee_schema:validate(Spec,Input,Typed),
+    Typed.rules=[TypedRule],assertion(TypedRule.kind==comment),
+    normalize_policy_dto(Typed,Canonical),validate_policy(Input,Expected),
+    assertion(Canonical==Expected),kb_kee_schema:validate_stored(Spec,Canonical).
 test(strict_dto_requires_json_text,[throws(error(kee(invalid_arguments,_),_))]) :-
     validate_policy(json{rules:[json{kind:definition}]},_).
 test(strict_dto_rejects_duplicate_kinds,

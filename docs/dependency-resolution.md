@@ -158,6 +158,10 @@ The owner module exports one canonical closed schema, using the existing
 * `validate_policy(+JSON,-CanonicalDTO)` strictly validates JSON text values,
   rejects unknown fields and duplicate rule kinds, and returns a deterministic,
   ground `json{rules:SixCompleteRules}`. It has no side effects.
+* `normalize_policy_dto(+Input,-CanonicalDTO)` accepts already schema-typed KEE
+  arguments (whose enums are Prolog atoms) as well as programmatic text atoms.
+  A compiled KEE handler should use this after the registry's strict input
+  validation; it reuses the same schema and semantic checks, not another parser.
 * `default_policy_dto(-CanonicalDTO)` returns the same complete DTO for built-in
   defaults. This is **not** evidence of a saved record.
 * Existing `normalize_policy/2` accepts both JSON strings and programmatic Prolog
@@ -247,7 +251,7 @@ node --test prolog\ow_dr\tests\dependency-resolution.test.mjs
 random loopback port, without contacting the knowledge server. Desktop/mobile
 browser checks covered pagination, filters, policy draft submission, cancellation,
 error states, canonical links, labels and overflow. The focused suites pass
-**84 PL-Unit tests and 8 Node tests**.
+**85 PL-Unit tests and 8 Node tests**.
 
 Existing-catalog checks used `KBs/tinykb.krf` and `x_BaseKB`, without compilation
 or real KB loading:
