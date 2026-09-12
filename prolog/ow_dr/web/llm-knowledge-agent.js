@@ -81,6 +81,10 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   const tabs = el('div', { className: 'llm-tabs', role: 'tablist', 'aria-label': 'Agent inspector tabs' });
   const pages = new Map(), tabButtons = new Map();
   const localTodoContent = el('div', { className: 'llm-local-todos' });
+  const localReceiptContent = el('div', { className: 'llm-local-receipt' });
+  const receiptCall = el('select', { 'aria-label': 'Recorded mutation call' });
+  receiptCall.addEventListener('change', () => localReceiptContent.replaceChildren());
+  const inspectReceiptButton = button('Inspect durable receipt', inspectReceipt, 'button secondary');
   for (const name of ['Settings', 'Events', 'Raw JSON', 'Audit', 'Todos']) {
     const key = name.toLowerCase().replace(' ', '-');
     const page = el('section', { role: 'tabpanel', id: `${viewId}-${key}`, hidden: name !== 'Settings',
@@ -140,6 +144,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     previewButton, groundingPreview, approveButton, start, promptEditor);
   let settings, promptRevision, conversation = null, pending = false, timer, polling = false, disposed = false;
   let preview = null, groundingGrant = null;
+  let receiptPending = false;
   for (const input of [termKeys, readMts, writeMts]) input.addEventListener('input', () => {
     preview = null; groundingGrant = null; approveButton.disabled = true;
     groundingPreview.replaceChildren(el('p', { className: 'muted' }, 'Scope changed. Preview and approve again before exporting KB content.'));
@@ -177,7 +182,10 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   }
   function drawConversation(data) {
     if (conversation?.id === data.id && data.revision < conversation.revision) return;
-    if (conversation?.id !== data.id) localTodoContent.replaceChildren();
+    if (conversation?.id !== data.id) {
+      localTodoContent.replaceChildren(); localReceiptContent.replaceChildren();
+      receiptCall.value = '';
+    }
     conversation = data;
     identity.textContent = `LLM · ${data.model} · ${data.status} · prompt ${data.promptHash.slice(0, 12)}`;
     transcript.replaceChildren();
@@ -194,8 +202,17 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     }
     pages.get('Events').replaceChildren(el('h2', {}, 'Turn events'), json(data.events));
     pages.get('Raw JSON').replaceChildren(el('h2', {}, 'Conversation response'), json(data));
+    const selectedReceipt = receiptCall.value;
+    const receiptCalls = data.calls.filter(call => call.receiptInspectable);
+    receiptCall.replaceChildren(...receiptCalls.map(call => el('option', { value: call.id, title: call.id },
+      `${call.name} · ${call.id.slice(0, 12)}`)));
+    if (receiptCalls.some(call => call.id === selectedReceipt)) receiptCall.value = selectedReceipt;
+    inspectReceiptButton.disabled = receiptPending || !receiptCalls.length;
     pages.get('Audit').replaceChildren(el('h2', {}, 'Actual execution records'),
-      el('p', { className: 'muted' }, data.registry.limitation), json(data.audit), json(data.calls));
+      el('p', { className: 'muted' }, data.registry.limitation),
+      el('label', { className: 'field' }, 'Recorded mutation call', receiptCall), inspectReceiptButton,
+      el('p', { className: 'muted' }, 'Local read only. Unknown may still commit; inspection never retries a call or unblocks a conversation.'),
+      localReceiptContent, json(data.audit), json(data.calls));
     pages.get('Todos').replaceChildren(el('h2', {}, 'Managed todos'),
       el('p', {}, data.todos.reason || 'Local application tasks — not exported by this inspector.'),
       button('Refresh local TODOs', refreshTodos, 'button secondary'),
@@ -283,6 +300,22 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       const result = await api('llm/todos', { id }, { signal });
       if (!disposed && conversation?.id === id) localTodoContent.replaceChildren(json(result));
     } catch (error) { feedback.textContent = `Local TODOs unavailable: ${error.message}`; }
+  }
+  async function inspectReceipt() {
+    if (!conversation || !receiptCall.value || receiptPending || disposed) return;
+    const id = conversation.id, callId = receiptCall.value;
+    receiptPending = true; inspectReceiptButton.disabled = true;
+    try {
+      const result = await api('llm/receipt', { id, callId }, { signal });
+      if (!disposed && conversation?.id === id && receiptCall.value === callId) {
+        localReceiptContent.replaceChildren(el('h3', {}, `Observed: ${result.status}`), json(result));
+      }
+    } catch (error) {
+      if (!disposed && conversation?.id === id) feedback.textContent = `Receipt inspection unavailable: ${error.message}`;
+    } finally {
+      receiptPending = false;
+      if (!disposed) inspectReceiptButton.disabled = !receiptCall.value;
+    }
   }
   async function sendChat() {
     if (!canChat({ conversation, text: text.value, approved: consent.checked, pending })) return;

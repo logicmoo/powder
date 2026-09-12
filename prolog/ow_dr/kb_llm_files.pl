@@ -1,5 +1,5 @@
 :- module(kb_llm_files,
-          [agent_state_dir/1, safe_owned_path/1, read_bytes/3, bytes_text/2,
+          [agent_state_dir/1, existing_agent_state_dir/1, safe_owned_path/1, read_bytes/3, bytes_text/2,
            bytes_hash/2, atomic_bytes/2, read_json/2, atomic_json/2, locked_file/2]).
 :- use_module(kb_paths,[app_dir/1,repo_root/1]).
 :- use_module(kb_cache,[try_lock/2,release_lock/1,stage_path/2,install_stage/2,remove_if_exists/1]).
@@ -15,12 +15,18 @@
 :- volatile json_cache/3.
 
 agent_state_dir(Directory) :-
+    agent_state_path(Directory),
+    (exists_directory(Directory)->true;
+     safe_owned_path(Directory),make_directory_path(Directory),safe_owned_path(Directory)).
+existing_agent_state_dir(Directory) :-
+    agent_state_path(Directory),
+    (exists_directory(Directory)->safe_owned_path(Directory);
+     existence_error(directory,Directory)).
+agent_state_path(Directory) :-
     (getenv('POWDER_AGENT_STATE',Given),Given\==''->
        absolute_file_name(Given,Directory,[access(none)])
     ;app_dir(App),directory_file_path(App,'.logos-state/agents',Directory)),
-    owned_name(Directory,_),
-    (exists_directory(Directory)->true;
-     safe_owned_path(Directory),make_directory_path(Directory),safe_owned_path(Directory)).
+    owned_name(Directory,_).
 
 % Only trusted host code chooses paths. No browser/model input reaches this API.
 safe_owned_path(Path) :-

@@ -56,7 +56,8 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     if (!url.pathname.startsWith('/api/llm/')) { res.statusCode = 404; res.end(); return; }
     let text = ''; for await (const chunk of req) text += chunk;
     const body = text ? JSON.parse(text) : null;
-    const action = url.pathname.slice('/api/llm/'.length); requests.push({ action, body });
+    const action = url.pathname.slice('/api/llm/'.length);
+    requests.push({ action, body, params: Object.fromEntries(url.searchParams) });
     let result;
     if (action === 'settings') result = settings;
     else if (action === 'prompt') result = { content: 'Synthetic fixture prompt', revision: 'p1', rawHash: 'p1' };
@@ -66,6 +67,8 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
       entries: [{ material: { term: 'x_Synthetic', text: 'Synthetic approved evidence' }, evidence: [{ id: 'a-fixture', revision: 'r-fixture' }] }] };
     else if (action === 'grounding/approve') result = { id: 'fixture-grant', approved: true };
     else if (action === 'todos') result = { available: true, items: [{ title: 'Synthetic local task' }] };
+    else if (action === 'receipt') result = { status: 'unknown', callId: url.searchParams.get('callId'),
+      localState: 'unknown', commit: null, notice: 'Unknown may still commit. No retry or unblocking.' };
     else if (action === 'start') {
       conversation = { id: 'c-fixture', identity: 'llm', status: 'ready', revision: 0, model: settings.model,
         promptHash: 'p1', messages: [], scope: body.scope, events: [], audit: [], calls: [],
@@ -73,6 +76,7 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
       result = conversation;
     } else if (action === 'chat') {
       conversation = { ...conversation, status: 'running', revision: 1,
+        calls: [{ id: 'synthetic-recorded-call', name: 'kee_todo_create', state: 'unknown', receiptInspectable: true }],
         messages: [{ role: 'user', content: body.text }, { role: 'assistant', content: '<img src=x onerror=alert(1)> fixture' }] };
       result = conversation;
     } else if (action === 'interrupt') { conversation = { ...conversation, status: 'interrupted' }; result = conversation; }
@@ -122,6 +126,10 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     await click('Chat');
     await browser.wait(`document.body.textContent.includes('<img src=x onerror=alert(1)> fixture')`);
     assert.equal(await browser.evaluate(`document.querySelectorAll('.llm-message img').length`), 0);
+    await click('Audit'); await click('Inspect durable receipt');
+    await browser.wait(`document.querySelector('.llm-local-receipt').textContent.includes('Observed: unknown')`);
+    assert.equal(requests.find(r => r.action === 'receipt').params.callId, 'synthetic-recorded-call');
+    assert.equal(requests.filter(r => r.action === 'chat').length, 1);
     await click('Events');
     await browser.evaluate(`document.querySelector('[name="llm-message"]').value='Unsent teacher draft';
       document.querySelector('[name="llm-prompt"]').value='Uncommitted prompt draft';
@@ -141,6 +149,7 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     assert.equal(await browser.evaluate(`document.querySelector('[name="llm-term-keys"]').value`), 'x_UnsentScope');
     assert.equal(await browser.evaluate(`[...teacher.element.querySelectorAll('[role="tab"]')].find(b=>b.textContent==='Events').getAttribute('aria-selected')`), 'true');
     assert.equal(await browser.evaluate(`teacher.element.querySelector('.llm-local-todos').textContent.includes('Synthetic local task')`), true);
+    assert.equal(await browser.evaluate(`teacher.element.querySelector('.llm-local-receipt').textContent.includes('Observed: unknown')`), true);
     await browser.evaluate(`(async()=>{window.otherTeacher=await createTeacher({active:false});
       document.querySelector('main').append(otherTeacher.element)})()`);
     assert.equal(await browser.evaluate(`otherTeacher.getState().conversationId`), null);

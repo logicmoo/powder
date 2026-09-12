@@ -1,6 +1,6 @@
 :- module(kb_llm_agent,
           [start_conversation/2,conversation/2,start_chat/2,interrupt_chat/2,stop_conversation/2,
-           local_todos/2]).
+           local_todos/2,local_receipt/3]).
 :- use_module(kb_agent_settings).
 :- use_module(kb_llm_files).
 :- use_module(kb_llm_prompt).
@@ -40,16 +40,19 @@ start_conversation(Scope,Reply) :-
     conversation_file(Id,File),locked_file(File,atomic_json(File,Doc)),conversation(Id,Reply).
 conversation(Input,Reply) :-
     load_document(Input,D),registry_status(Registry),
-    exclude(system_message,D.history,Messages),
+    exclude(system_message,D.history,Messages),maplist(public_call,D.calls,Calls),
     Reply=_{id:D.id,agent:D.agent,identity:D.identity,status:D.status,revision:D.revision,
       activeTurn:D.activeTurn,model:D.config.model,baseURL:D.config.baseURL,
       promptHash:D.prompt.rawHash,settingsRevision:D.config.revision,
       budgets:D.config.budgets,scope:D.scope,messages:Messages,events:D.events,
-      audit:D.audit,calls:D.calls,turns:D.turns,error:D.lastError,
+      audit:D.audit,calls:Calls,turns:D.turns,error:D.lastError,
       rawResponse:D.lastResponse,
       registry:Registry,todos:_{available:Registry.available,reason:"Use Refresh local TODOs. This inspector never exports task text."},
       notice:D.config.notice}.
 system_message(Message) :- Message.role=="system".
+public_call(Call,Public) :-
+    (kb_llm_kee:mutation_name(Call.name)->Inspectable=true;Inspectable=false),
+    Public=Call.put(receiptInspectable,Inspectable).
 conversation_file(Input,File) :-
     id_atom(Input,Id),agent_state_dir(Directory),atom_concat('conversation-',Id,Stem),
     atom_concat(Stem,'.json',Name),directory_file_path(Directory,Name,File).
@@ -254,3 +257,10 @@ bounded_json(Value,Limit) :-
 local_todos(Id,Reply) :-
     load_document(Id,D),Config=D.config.put(conversation,D.id),
     conversation_todos(Config,D.prompt,D.scope,Reply).
+local_receipt(Input,CallId,Reply) :-
+    id_atom(Input,Id),must_be(string,CallId),string_length(CallId,N),between(1,128,N),
+    existing_agent_state_dir(Directory),
+    atomic_list_concat(['conversation-',Id,'.json'],Name),directory_file_path(Directory,Name,File),
+    read_json(File,D),
+    (member(Record,D.calls),Record.id==CallId->true;throw(error(llm_recorded_call_not_found,_))),
+    Config=D.config.put(conversation,D.id),inspect_receipt(Config,D.prompt,D.scope,Record,Reply).

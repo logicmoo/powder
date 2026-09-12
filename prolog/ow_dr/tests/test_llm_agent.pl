@@ -375,3 +375,72 @@ test(legacy_policy_never_exports,[throws(error(llm_conversation_policy_upgrade_r
     kb_llm_kee:open_turn(S.put(conversation,"old"),_{revision:"p",rawHash:"h"},
       _{terms:[],readMts:[],writeMts:[]},_,_).
 :- end_tests(llm_kee).
+
+receipt_setup_conversation(Scope,C,Run,D,Config) :-
+    start_conversation(Scope,C),uuid(Run),
+    R=_{id:C.id,revision:0,text:"Synthetic receipt inspection fixture",approvedNonsensitive:true},
+    kb_llm_agent:update_document(C.id,kb_llm_agent:accept_chat(R,Run)),
+    kb_llm_agent:load_document(C.id,D),Config=D.config.put(conversation,D.id).
+receipt_reservation(C,Run,Args,Call) :-
+    atom_json_dict(Text,Args,[as(string)]),
+    Call=_{id:"synthetic-inspected-call",type:"function",
+           function:_{name:"kee_todo_create",arguments:Text}},
+    kb_llm_agent:reserve_call(C.id,Run,Call,"synthetic-receipt-hash",new).
+fixture_file_hash(File,Hash) :- read_bytes(File,33554432,Bytes),bytes_hash(Bytes,Hash).
+
+:- begin_tests(llm_receipts,[setup(fixture_setup(State)),cleanup(fixture_cleanup(State))]).
+test(unknown_probe_never_creates_native_state_or_changes_host_reservation) :-
+    receipt_setup_conversation(_{terms:[],readMts:[],writeMts:[]},C,Run,_,_),
+    receipt_reservation(C,Run,_{},Call),
+    getenv('POWDER_KEE_STATE_DIR',KeeDir),assertion(\+exists_directory(KeeDir)),
+    kb_llm_agent:conversation_file(C.id,File),fixture_file_hash(File,Before),
+    local_receipt(C.id,Call.id,Reply),
+    assertion(Reply.status=="unknown"),assertion(Reply.commit==null),
+    assertion(Reply.localState=="reserved"),assertion(\+exists_directory(KeeDir)),
+    fixture_file_hash(File,After),assertion(Before==After),assertion(\+fixture_request(_,_)).
+test(committed_probe_preserves_ledger_snapshot_namespace_and_host_state) :-
+    receipt_setup_conversation(_{terms:[],readMts:[],writeMts:[]},C,Run,D,Config),
+    setup_call_cleanup(kb_llm_kee:open_turn(Config,D.prompt,D.scope,H,Tools),
+      (assertion(\+ (member(T,Tools),get_dict(function,T,F),get_dict(name,F,"kee_call_status"))),
+       kee_fixture_call(H,"kee_ledger_status",_{},"before-probe",S),synthetic_task(Data),
+       receipt_reservation(C,Run,_{revision:S.revision,mt:null,data:Data},Call),
+       kb_llm_kee:run_call(H,Call,Committed,_),
+       getenv('POWDER_KEE_STATE_DIR',KeeDir),directory_file_path(KeeDir,'ledger.pl',Ledger),
+       kb_llm_agent:conversation_file(C.id,File),fixture_file_hash(File,Before),
+       fixture_file_hash(Ledger,LedgerBefore),directory_files(KeeDir,NamesBefore),
+       local_receipt(C.id,Call.id,Reply),
+       assertion(Reply.status=="committed"),assertion(Reply.localState=="reserved"),
+       assertion(Reply.commit.recordedMetadataMatches==true),
+       assertion(Reply.commit.result.id==Committed.result.id),
+       assertion(\+get_dict(data,Reply.commit,_)),assertion(\+get_dict(actor,Reply.commit,_)),
+       fixture_file_hash(File,After),fixture_file_hash(Ledger,LedgerAfter),
+       directory_files(KeeDir,NamesAfter),assertion(NamesBefore==NamesAfter),
+       assertion(Before==After),assertion(LedgerBefore==LedgerAfter),
+       Record=_{id:Call.id,name:"kee_todo_create",state:"reserved"},
+       kb_llm_kee:inspect_receipt(Config.put(model,"synthetic-other"),D.prompt,D.scope,Record,Changed),
+       assertion(Changed.status=="committed"),assertion(Changed.commit.recordedMetadataMatches==false),
+       kb_llm_kee:inspect_receipt(Config.put(conversation,"other-synthetic-conversation"),
+         D.prompt,D.scope,Record,Other),assertion(Other.status=="unknown"),
+       assertion(\+fixture_request(_,_))),
+      kb_llm_kee:close_turn(H)).
+test(receipt_requires_current_read_mt_ceiling) :-
+    Scope=_{terms:[],readMts:["x_ReceiptFixtureMt"],writeMts:["x_ReceiptFixtureMt"]},
+    receipt_setup_conversation(Scope,C,Run,D,Config),
+    setup_call_cleanup(kb_llm_kee:open_turn(Config,D.prompt,D.scope,H,_),
+      (kee_fixture_call(H,"kee_ledger_status",_{},"before-scoped-probe",S),synthetic_task(Data),
+       receipt_reservation(C,Run,_{revision:S.revision,mt:"x_ReceiptFixtureMt",data:Data},Call),
+       kb_llm_kee:run_call(H,Call,_,_),
+       Record=_{id:Call.id,name:"kee_todo_create",state:"reserved"},
+       catch(kb_llm_kee:inspect_receipt(Config,D.prompt,_{terms:[],readMts:[],writeMts:[]},Record,_),
+         error(kee(mt_scope_denied,_),_),Denied=true),assertion(Denied==true)),
+      kb_llm_kee:close_turn(H)).
+test(arbitrary_unrecorded_call_id_is_rejected,[throws(error(llm_recorded_call_not_found,_))]) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),local_receipt(C.id,"not-recorded",_).
+test(missing_host_state_remains_missing) :-
+    getenv('POWDER_AGENT_STATE',Existing),directory_file_path(Existing,'absent-read-only-state',Missing),
+    setup_call_cleanup(setenv('POWDER_AGENT_STATE',Missing),
+      (catch(local_receipt("00000000-0000-4000-8000-000000000000","none",_),
+        error(existence_error(directory,_),_),Absent=true),
+       assertion(Absent==true),assertion(\+exists_directory(Missing))),
+      setenv('POWDER_AGENT_STATE',Existing)).
+:- end_tests(llm_receipts).

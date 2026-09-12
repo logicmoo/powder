@@ -110,6 +110,7 @@ view controller does not arbitrate operator starts.
 | `llm/start` | POST | `{scope:{terms:[],readMts:[],writeMts:[],grant:null}}`; optional approved grant ID, no inference |
 | `llm/conversation?id=...` | GET | Status, text, events, raw reply and execution records |
 | `llm/todos?id=...` | GET | Local conversation-owned TODO inspector, first 25 resources |
+| `llm/receipt?id=...&callId=...` | GET | Read-only native receipt for an already-recorded mutation call |
 | `llm/chat` | POST | `{id,revision,text,approvedNonsensitive:true}` |
 | `llm/interrupt` | POST | `{id}`; interrupt current turn, retain conversation |
 | `llm/stop` | POST | `{id}`; close conversation |
@@ -147,6 +148,26 @@ resumed after restart. Unconfirmed mutation outcomes stop the turn and block new
 turns in that conversation. There is no automatic reconciliation/resubmission:
 review the durable KEE receipt through the host's KEE facilities before repeating
 the intent. Stop does not undo a committed mutation.
+`reserved` and `unknown` here are **Teacher journal states**, not native KEE
+reservation states. KEE publishes an effect and its durable receipt together in
+one atomic ledger replacement; it has no separate durable pending reservation.
+
+The Audit inspector's **Inspect durable receipt** action uses the real
+`kee_call_status` capability (KEE contract `2c8f9b29`). It opens a short-lived,
+read-only context with the original actor/agent/conversation and immutable
+model/prompt/policy snapshot, constrained to the conversation's read MTs.
+The host API `kb_llm_agent:local_receipt(ConversationId,OriginalCallId,Reply)`
+accepts only a mutation ID already present in that conversation's journal.
+No arbitrary namespace or provider-supplied approval is accepted.
+
+The result reports `committed` or `unknown` at an observed ledger revision.
+`unknown` is not proof of failure/cancellation: an in-flight call can still
+commit. A committed receipt includes minimal revision/changeset/result-ID
+metadata; its metadata-match flag is not an original-arguments digest check.
+Inspection never retries a mutation, changes the journal or ledger, creates a
+missing state directory, resumes the conversation, or sends anything to the
+provider. The capability is not exposed as a Teacher model tool. There is still
+no automatic reconciliation/unblocking workflow.
 
 The real `kb_kee` API is used for actual discovery, context grants and invocation.
 Availability comes from actual registry discovery, not module-name presence.
@@ -222,5 +243,7 @@ endpoint, and use only synthetic text. `POWDER_AGENT_STATE` and
 `POWDER_KEE_STATE_DIR` point at owned repository-local fixture directories and are
 restored afterward. Tests include actual TODO commit/replay/update/undo/redo,
 exact approval/freshness/corruption, full assistant/tool protocol rounds, lost
-receipt blocking and real Chrome chip/preview interactions. No checkpoint
+receipt blocking, native committed/unknown read-only inspection (including
+unchanged file hashes, missing-state behavior and MT denial), and real Chrome
+chip/preview/receipt interactions. No checkpoint
 process, native KB or production listener is changed.

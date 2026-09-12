@@ -1,6 +1,6 @@
 :- module(kb_llm_kee,[validate_scope/1,registry_status/1,open_turn/5,close_turn/1,run_call/4,
                      preview_grounding/2,approve_grounding/2,verify_outgoing/1,
-                     grounding_material/2,conversation_todos/4]).
+                     grounding_material/2,conversation_todos/4,inspect_receipt/5]).
 :- use_module(kb_agent_settings,[strict_keys/2]).
 :- use_module(kb_llm_schema).
 :- use_module(library(error)).
@@ -43,17 +43,14 @@ registry_context(Token) :-
       budgets:json{calls:1,mutations:1,resultBytes:65536,seconds:1}},Token).
 
 open_turn(Config,Prompt,Scope,Handle,Tools) :-
-    validate_scope(Scope),policy(Config,Policy),registry_status(Status),
+    validate_scope(Scope),host_identity(Config,Prompt,Identity),registry_status(Status),
     (Status.available==false->throw(error(llm_registry_unavailable,_));
      get_time(Now),Expires is Now+Config.budgets.seconds+5,
      Calls is max(1,Config.budgets.calls),Seconds is min(30,Config.budgets.seconds),
-     Principal=_{authenticated:true,actor:"local-user",kind:"llm",agent:"llm-knowledge",
-       conversation:Config.conversation,policyVersion:Policy,
-       model:Config.model,promptVersion:Prompt.revision,promptHash:Prompt.rawHash,
-       permissions:["knowledge.read","todo.read","todo.write","changeset.read","changeset.undo"],
+     Principal=Identity.put(_{permissions:["knowledge.read","todo.read","todo.write","changeset.read","changeset.undo"],
        readMts:Scope.readMts,writeMts:Scope.writeMts,
        effects:["knowledge_read","application_read","application_write"],expiresAt:Expires,
-       budgets:_{calls:Calls,mutations:Config.budgets.calls,resultBytes:65536,seconds:Seconds}},
+       budgets:_{calls:Calls,mutations:Config.budgets.calls,resultBytes:65536,seconds:Seconds}}),
      json_normalize(Principal,CheckedPrincipal),
      setup_call_catcher_cleanup(kb_kee:open_context(CheckedPrincipal,Token),
        (kb_kee:registry(Token,Raw),json_normalize(Raw,Registry),
@@ -66,6 +63,44 @@ open_turn(Config,Prompt,Scope,Handle,Tools) :-
 policy(Config,Policy) :-
     (get_dict(policyVersion,Config,Policy),Policy=="llm-exact-grounding-v2"->true;
      throw(error(llm_conversation_policy_upgrade_required,_))).
+host_identity(Config,Prompt,Identity) :-
+    policy(Config,Policy),
+    Identity=_{authenticated:true,actor:"local-user",kind:"llm",agent:"llm-knowledge",
+      conversation:Config.conversation,policyVersion:Policy,model:Config.model,
+      promptVersion:Prompt.revision,promptHash:Prompt.rawHash}.
+
+inspect_receipt(Config,Prompt,Scope,Record,Reply) :-
+    validate_scope(Scope),host_identity(Config,Prompt,Identity0),json_normalize(Identity0,Identity),
+    (mutation_name(Record.name)->true;permission_error(inspect,receipt,not_a_recorded_mutation)),
+    get_time(Now),Expires is Now+10,
+    Principal=Identity.put(_{permissions:["changeset.read"],readMts:Scope.readMts,writeMts:[],
+      effects:["application_read"],expiresAt:Expires,
+      budgets:_{calls:1,mutations:0,resultBytes:16384,seconds:5}}),
+    setup_call_cleanup(kb_kee:open_context(Principal,Token),
+      inspect_receipt_with_context(Token,Identity,Record,Reply),kb_kee:close_context(Token)).
+inspect_receipt_with_context(Token,Identity,Record,Reply) :-
+    kb_kee:registry(Token,R),json_normalize(R,Registry),
+    (member(C,Registry.tools),C.name=="kee_call_status",C.available==true->true;
+     throw(error(llm_receipt_unavailable,_))),
+    kb_kee:invoke(Token,_{tool:"kee_call_status",schemaVersion:1,callId:"local-receipt-inspection",
+                         arguments:_{callId:Record.id}},Raw),
+    json_normalize(Raw,Response),Result=Response.result,
+    (Result.callId==Record.id->true;throw(error(llm_invalid_receipt,_))),
+    (Result.status=="committed"->
+      Commit=Result.commit,
+      (Commit.tool==Record.name,snapshot_matches(Identity,Commit.actor)->Matches=true;Matches=false),
+      findall(K-V,(member(K,[action,id,undoOf,redoOf]),
+        get_dict(K,Commit.result,V),string(V)),Pairs),dict_create(Summary,json,Pairs),
+      Receipt=_{revision:Commit.revision,changeset:Commit.changeset,sequence:Commit.sequence,
+        tool:Commit.tool,requestHash:Commit.requestHash,recordedMetadataMatches:Matches,result:Summary};
+     Result.status=="unknown"->Receipt=null;
+     throw(error(llm_invalid_receipt,_))),
+    Reply=_{callId:Record.id,localState:Record.state,status:Result.status,
+      observedRevision:Result.revision,commit:Receipt,
+      notice:"Local read-only observation, not a retry or cancellation result. Unknown may still commit. Metadata agreement does not verify the original argument digest. No conversation is unblocked."}.
+snapshot_matches(Identity,Actor) :-
+    forall(member(K,[actor,kind,agent,conversation,policyVersion,model,promptVersion,promptHash]),
+      (get_dict(K,Identity,V),get_dict(K,Actor,V))).
 connected(Name,_) :-
     memberchk(Name,["kee_ledger_status","kee_todo_create","kee_todo_update",
                   "kee_todo_delete","kee_undo","kee_redo"]),!.
