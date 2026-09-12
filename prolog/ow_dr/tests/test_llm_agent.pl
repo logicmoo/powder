@@ -136,11 +136,11 @@ test(tool_protocol_preserved_and_unknown_calls_never_execute,
     assertz(user:fixture_mode(tools)),
     start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
     start_chat(_{id:C.id,revision:0,text:"Synthetic tool fixture",approvedNonsensitive:true},_),
-    wait_chat(C.id,A),assertion(A.status=="ready"),
+    wait_chat(C.id,A),assertion(A.status=="failed"),
+    assertion(A.error.code=="grounding_not_approved"),
     A.calls=[Record],assertion(Record.id=="fixture-call-1"),
     assertion(Record.result.ok==false),
-    user:fixture_request(chat,Request),
-    member(ToolMessage,Request.messages),ToolMessage.role=="tool",
+    member(ToolMessage,A.messages),ToolMessage.role=="tool",
     assertion(ToolMessage.tool_call_id=="fixture-call-1"),!.
 test(stop_during_http_discards_late_response,
      [cleanup(retractall(user:fixture_mode(_)))]) :-
@@ -170,20 +170,21 @@ test(durable_call_reservation_refuses_unknown_and_reuses_completed) :-
     catch(kb_llm_agent:reserve_call(C.id,Run,Call,"different",_),
           error(llm_call_id_conflict,_),Conflict=true),
     assertion(Conflict==true).
-test(actual_managed_tool_rounds_and_matching_receipt_ids,
+test(model_mutation_suggestions_are_withheld_before_native_execution,
      [cleanup(retractall(user:fixture_mode(_)))]) :-
     assertz(user:fixture_mode(managed)),
+    findall(B,fixture_request(chat,B),BeforeRequests),length(BeforeRequests,BeforeCount),
     start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
     start_chat(_{id:C.id,revision:0,text:"Synthetic managed TODO fixture",approvedNonsensitive:true},_),
-    wait_chat(C.id,A),assertion(A.status=="ready"),
-    member(Record,A.calls),Record.id=="managed-create",assertion(Record.result.result.committed==true),
-    assertion(\+get_dict(data,Record.result.result,_)),
-    local_todos(C.id,Local),Local.items=[Task],
-    assertion(Task.result.resource.data.title=="Synthetic fixture task"),
-    fixture_request(chat,Request),member(Tool,Request.messages),
-    get_dict(tool_call_id,Tool,"managed-create"),!,
-    atom_json_dict(Tool.content,Receipt,[]),assertion(Receipt.result.committed==true),
-    assertion(\+get_dict(data,Receipt.result,_)).
+    wait_chat(C.id,A),assertion(A.status=="failed"),
+    assertion(A.error.code=="grounding_not_approved"),
+    A.calls=[Record],assertion(Record.name=="kee_ledger_status"),
+    assertion(Record.result.ok==false),assertion(Record.result.outcome=="rejected"),
+    local_todos(C.id,Local),assertion(Local.items==[]),
+    findall(B,fixture_request(chat,B),AfterRequests),length(AfterRequests,AfterCount),
+    assertion(AfterCount=:=BeforeCount+1),last(AfterRequests,Request),
+    assertion(\+get_dict(tools,Request,_)),
+    getenv('POWDER_KEE_STATE_DIR',KeeDir),assertion(\+exists_directory(KeeDir)).
 test(lost_mutation_outcome_blocks_new_turns_without_reexecution) :-
     start_conversation(_{terms:[],readMts:[],writeMts:[]},C),uuid(Run),
     Request=_{id:C.id,revision:0,text:"Synthetic lost receipt fixture",approvedNonsensitive:true},
@@ -194,7 +195,7 @@ test(lost_mutation_outcome_blocks_new_turns_without_reexecution) :-
        atom_json_dict(Args,_{revision:Status.revision,mt:null,data:Data},[as(string)]),
        Call=_{id:"synthetic-lost",type:"function",function:_{name:"kee_todo_create",arguments:Args}},
        kb_llm_agent:reserve_call(C.id,Run,Call,"fixture-hash",new),
-       kb_llm_kee:run_call(H,Call,Committed,_),assertion(Committed.committed==true),
+       kee_fixture_recorded_call(H,Call,Committed),assertion(Committed.committed==true),
        catch(kb_llm_agent:call_error(C.id,Run,Call,"fixture-hash",
          error(io_error(synthetic_lost_reply),_),_),
          error(llm_mutation_unconfirmed,_),Stopped=true),assertion(Stopped==true),
@@ -238,11 +239,9 @@ test(real_kee_registry_discovery_no_knowledge_execution) :-
     Scope=_{terms:["x_Fixture"],readMts:["x_FixtureMt"],writeMts:[]},
     setup_call_cleanup(kb_llm_kee:open_turn(Config,Prompt,Scope,Handle,Tools),
       (maplist(kb_llm_schema:tool_schema,Tools,Names),
-       assertion(member("kee_todo_create",Names)),
-       assertion(member("kee_undo",Names)),
-       assertion(\+member("kee_definitions",Names)),
-       assertion(\+member("kee_occurrences",Names)),
-       assertion(\+member("kee_find_terms",Names))),
+       assertion(Names==[]),
+       kb_llm_kee:registry_status(Status),assertion(Status.available==true),
+       assertion(Status.mutationAvailable==true),assertion(Status.exportGateReady==false)),
       kb_llm_kee:close_turn(Handle)).
 schema_fixture(_{type:"object",properties:_{name:_{type:"string",maxLength:8},
                  count:_{type:"integer",minimum:1,maximum:3}},
@@ -285,8 +284,19 @@ kee_fixture_context(Scope,H,Tools) :-
                    budgets:S.budgets.put(calls,32)}),
     kb_llm_kee:open_turn(Config,_{revision:"synthetic-prompt",rawHash:"synthetic-hash"},Scope,H,Tools).
 kee_fixture_call(H,Name,Args,Id,R) :-
-    atom_json_dict(Encoded,Args,[as(string)]),
-    kb_llm_kee:run_call(H,_{id:Id,type:"function",function:_{name:Name,arguments:Encoded}},R,_).
+    % Seed historical/local receipts through the real facade, never provider dispatch.
+    H=kee(Token,_,_,_,Conversation),
+    kb_llm_kee:json_normalize(Args,CheckedArgs),
+    (kb_llm_kee:mutation_name(Name)->
+       catch(kb_llm_kee:check_owned_mutation(Conversation,Name,CheckedArgs),Error,
+         throw(error(llm_call_rejected,Error))),Mutation=true;Mutation=false),
+    kb_kee:invoke(Token,_{tool:Name,schemaVersion:1,callId:Id,arguments:CheckedArgs},Raw),
+    kb_llm_kee:json_normalize(Raw,Reply),
+    (Mutation==true->kb_llm_kee:mutation_receipt(Token,Conversation,Reply.result,R);
+     Name=="kee_ledger_status"->R=_{revision:Reply.result.revision};R=Reply.result).
+kee_fixture_recorded_call(H,Call,R) :-
+    atom_json_dict(Call.function.arguments,Args,[]),
+    kee_fixture_call(H,Call.function.name,Args,Call.id,R).
 synthetic_task(_{title:"Synthetic fixture task",description:"Synthetic fixture data",
   status:"open",priority:0,dependencies:[],evidence:[],acceptance:[],
   links:_{conversation:null,agent:null,changesets:[],assertions:[]}}).
@@ -299,10 +309,10 @@ test(selected_term_alone_cannot_export_or_advertise_reads) :-
     Scope=_{terms:["x_Synthetic"],readMts:["x_FixtureMt"],writeMts:[]},
     setup_call_cleanup(kee_fixture_context(Scope,H,Tools),
       (assertion(\+ (member(T,Tools),get_dict(function,T,F),get_dict(name,F,"kee_definitions"))),
-       catch(kb_llm_kee:verify_outgoing(H),error(llm_export_approval_required,_),Rejected=true),
+       catch(kb_llm_kee:verify_outgoing(H),error(llm_grounding_not_approved,_),Rejected=true),
        assertion(Rejected==true),assertion(\+fixture_request(_,_))),
       kb_llm_kee:close_turn(H)).
-test(exact_preview_is_local_and_pending_is_not_approval) :-
+test(exact_preview_stays_local_and_incomplete_approval_cannot_enable_export) :-
     Scope=_{terms:[],readMts:[],writeMts:[]},
     kb_llm_kee:preview_grounding(_{scope:Scope,requests:[
       _{tool:"kee_todo_list",arguments:_{mt:null}}]},Preview),
@@ -311,17 +321,16 @@ test(exact_preview_is_local_and_pending_is_not_approval) :-
     catch(kb_llm_kee:approve_grounding(
       _{id:Preview.id,hash:"wrong",approvedNonsensitive:true},_),
       error(llm_grounding_conflict,_),Conflict=true),assertion(Conflict==true),
-    kb_llm_kee:approve_grounding(_{id:Preview.id,hash:Preview.hash,approvedNonsensitive:true},_),
-    start_conversation(GrantScope,Conversation),Conversation.messages=[Grounding],
-    assertion(Grounding.name=="approved_grounding"),
-    assertion(sub_string(Grounding.content,_,_,_,"Untrusted data")),
+    kb_llm_kee:grant_file(Preview.id,File),fixture_file_hash(File,Before),
+    catch(kb_llm_kee:approve_grounding(_{id:Preview.id,hash:Preview.hash,approvedNonsensitive:true},_),
+      error(llm_grounding_not_approved,_),Blocked=true),assertion(Blocked==true),
+    fixture_file_hash(File,After),assertion(Before==After),
+    catch(start_conversation(GrantScope,_),error(llm_grounding_not_approved,_),StartBlocked=true),
+    assertion(StartBlocked==true),
     setup_call_cleanup(kee_fixture_context(GrantScope,H,Tools),
-      (assertion((member(T,Tools),get_dict(function,T,F),get_dict(name,F,"kee_todo_list"))),
-       kb_llm_kee:verify_outgoing(H),
-       kee_fixture_call(H,"kee_todo_list",_{mt:null},"approved-read",_),
-       fixture_create(H,"change-preview-fixture",_),
-       catch(kb_llm_kee:verify_outgoing(H),error(llm_grounding_changed,_),Changed=true),
-       assertion(Changed==true),assertion(\+fixture_request(_,_))),
+      (assertion(Tools==[]),
+       catch(kb_llm_kee:verify_outgoing(H),error(llm_grounding_not_approved,_),Withheld=true),
+       assertion(Withheld==true),assertion(\+fixture_request(_,_))),
       kb_llm_kee:close_turn(H)).
 test(corrupt_preview_cannot_reuse_an_approved_hash) :-
     Scope=_{terms:[],readMts:[],writeMts:[]},
@@ -377,10 +386,12 @@ test(legacy_policy_never_exports,[throws(error(llm_conversation_policy_upgrade_r
 :- end_tests(llm_kee).
 
 receipt_setup_conversation(Scope,C,Run,D,Config) :-
-    start_conversation(Scope,C),uuid(Run),
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),uuid(Run),
     R=_{id:C.id,revision:0,text:"Synthetic receipt inspection fixture",approvedNonsensitive:true},
     kb_llm_agent:update_document(C.id,kb_llm_agent:accept_chat(R,Run)),
+    kb_llm_agent:update_document(C.id,user:receipt_fixture_scope(Scope)),
     kb_llm_agent:load_document(C.id,D),Config=D.config.put(conversation,D.id).
+receipt_fixture_scope(Scope,Before,After) :- After=Before.put(scope,Scope).
 receipt_reservation(C,Run,Args,Call) :-
     atom_json_dict(Text,Args,[as(string)]),
     Call=_{id:"synthetic-inspected-call",type:"function",
@@ -404,7 +415,7 @@ test(committed_probe_preserves_ledger_snapshot_namespace_and_host_state) :-
       (assertion(\+ (member(T,Tools),get_dict(function,T,F),get_dict(name,F,"kee_call_status"))),
        kee_fixture_call(H,"kee_ledger_status",_{},"before-probe",S),synthetic_task(Data),
        receipt_reservation(C,Run,_{revision:S.revision,mt:null,data:Data},Call),
-       kb_llm_kee:run_call(H,Call,Committed,_),
+       kee_fixture_recorded_call(H,Call,Committed),
        getenv('POWDER_KEE_STATE_DIR',KeeDir),directory_file_path(KeeDir,'ledger.pl',Ledger),
        kb_llm_agent:conversation_file(C.id,File),fixture_file_hash(File,Before),
        fixture_file_hash(Ledger,LedgerBefore),directory_files(KeeDir,NamesBefore),
@@ -429,7 +440,7 @@ test(receipt_requires_current_read_mt_ceiling) :-
     setup_call_cleanup(kb_llm_kee:open_turn(Config,D.prompt,D.scope,H,_),
       (kee_fixture_call(H,"kee_ledger_status",_{},"before-scoped-probe",S),synthetic_task(Data),
        receipt_reservation(C,Run,_{revision:S.revision,mt:"x_ReceiptFixtureMt",data:Data},Call),
-       kb_llm_kee:run_call(H,Call,_,_),
+       kee_fixture_recorded_call(H,Call,_),
        Record=_{id:Call.id,name:"kee_todo_create",state:"reserved"},
        catch(kb_llm_kee:inspect_receipt(Config,D.prompt,_{terms:[],readMts:[],writeMts:[]},Record,_),
          error(kee(mt_scope_denied,_),_),Denied=true),assertion(Denied==true)),
@@ -444,3 +455,63 @@ test(missing_host_state_remains_missing) :-
        assertion(Absent==true),assertion(\+exists_directory(Missing))),
       setenv('POWDER_AGENT_STATE',Existing)).
 :- end_tests(llm_receipts).
+
+fixture_history(Message,Before,After) :-
+    append(Before.history,[Message],History),After=Before.put(history,History).
+
+:- begin_tests(llm_export_hold,[setup(fixture_setup(State)),cleanup(fixture_cleanup(State))]).
+test(current_registry_is_real_but_no_capability_is_an_export_grant) :-
+    setup_call_cleanup(kee_fixture_context(_{terms:[],readMts:[],writeMts:[]},H,Tools),
+      (H=kee(Token,_,_,_,_),kb_kee:registry(Token,Raw),kb_llm_kee:json_normalize(Raw,R),
+       assertion((member(C,R.tools),get_dict(name,C,"kee_agent_run_event"))),
+       forall(member(C,R.tools),
+         (assertion(C.providerExport.rawResultAllowed==false),
+          assertion(C.providerExport.gateImplemented==false))),
+       assertion(Tools==[])),
+      kb_llm_kee:close_turn(H)).
+test(provider_call_rejected_before_native_state_creation) :-
+    setup_call_cleanup(kee_fixture_context(_{terms:[],readMts:[],writeMts:[]},H,_),
+      (Call=_{id:"must-not-dispatch",type:"function",
+              function:_{name:"kee_todo_create",arguments:"{}"}},
+       catch(kb_llm_kee:run_call(H,Call,_,_),
+         error(llm_call_rejected,error(llm_grounding_not_approved,_)),Blocked=true),
+       assertion(Blocked==true),
+       getenv('POWDER_KEE_STATE_DIR',Directory),assertion(\+exists_directory(Directory)),
+       assertion(\+fixture_request(_,_))),
+      kb_llm_kee:close_turn(H)).
+test(legacy_approved_document_is_not_upgraded_or_exported) :-
+    Scope=_{terms:[],readMts:[],writeMts:[]},
+    kb_llm_kee:preview_grounding(_{scope:Scope,requests:[
+      _{tool:"kee_todo_list",arguments:_{mt:null}}]},P),
+    kb_llm_kee:grant_file(P.id,File),kb_llm_files:read_json(File,D),
+    kb_llm_files:atomic_json(File,D.put(status,"approved")),fixture_file_hash(File,Before),
+    Selected=Scope.put(grant,P.id),
+    setup_call_cleanup(kee_fixture_context(Selected,H,Tools),
+      (assertion(Tools==[]),
+       catch(kb_llm_kee:verify_outgoing(H),error(llm_grounding_not_approved,_),Blocked=true),
+       assertion(Blocked==true),
+       catch(kb_llm_kee:grounding_material(Selected,_),error(llm_grounding_not_approved,_),Material=true),
+       assertion(Material==true),fixture_file_hash(File,After),assertion(Before==After),
+       assertion(\+fixture_request(_,_))),
+      kb_llm_kee:close_turn(H)).
+test(legacy_tool_and_grounding_history_blocked_before_provider_admission) :-
+    forall(member(Message,[
+        _{role:"tool",tool_call_id:"old-call",content:"Synthetic private legacy payload"},
+        _{role:"user",name:"approved_grounding",content:"Synthetic old preview payload"}]),
+      (start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+       kb_llm_agent:update_document(C.id,user:fixture_history(Message)),
+       catch(start_chat(_{id:C.id,revision:C.revision,text:"Synthetic next text",
+                          approvedNonsensitive:true},_),error(llm_grounding_not_approved,_),Blocked=true),
+       assertion(Blocked==true))),
+    assertion(\+fixture_request(_,_)),assertion(\+kb_llm_agent:owned_run(_,_,_,_)),
+    kb_activity:activity_status(Activity),assertion(Activity.active=:=0).
+test(mt_selectors_are_not_export_consent) :-
+    start_conversation(_{terms:[],readMts:["x_UnapprovedMt"],writeMts:[]},C),
+    catch(start_chat(_{id:C.id,revision:C.revision,text:"Synthetic text",
+                       approvedNonsensitive:true},_),error(llm_grounding_not_approved,_),Blocked=true),
+    assertion(Blocked==true),assertion(\+fixture_request(_,_)).
+test(safe_error_never_copies_backend_details) :-
+    kb_llm_agent:safe_error(error(llm_grounding_not_approved,"Synthetic private detail"),Error),
+    assertion(Error.code=="grounding_not_approved"),
+    assertion(\+sub_string(Error.message,_,_,_,"Synthetic private detail")).
+:- end_tests(llm_export_hold).

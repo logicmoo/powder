@@ -38,10 +38,22 @@ does not detect Windows junctions.
 
 ## Disclosure and capability boundary
 
+**Current containment: no KEE tools are exposed to the provider.** Plain text
+Chat remains available only with empty term/read-MT/write-MT selections, no
+grounding grant, and no old tool-result or approved-grounding history. Other
+provider-bound inputs fail with the fixed `grounding_not_approved` error before
+network admission. The same checks run before every provider round. This is
+fail-closed containment, **not a completed export-consent gate**.
+
+Local previews, existing conversation inspection, TODO inspection and read-only
+receipt inspection remain available. Preview approval cannot enable export;
+existing v2 approval files are neither upgraded nor deleted. Provider-suggested
+tools are rejected before native invocation, even if the backend supports them.
+
 emullm retains durable JSONL request/reply and worker logs, reuses worker contexts,
 and may forward externally through SNET-compatible fallback. It is **not
-private-local-only**. Only explicit Chat/Generate may send bounded, explicitly
-approved nonsensitive input/grounding. Never send application code, secrets,
+private-local-only**. Only explicit Chat may send bounded, explicitly
+approved nonsensitive text; grounding remains disabled. Never send application code, secrets,
 raw private KB or bulk files. Opening the UI, saving settings, starting a
 conversation, and refreshing models must never trigger completion requests.
 
@@ -106,8 +118,8 @@ view controller does not arbitrate operator starts.
 | `llm/prompt/save` | POST | `{content,revision}` |
 | `llm/registry` | GET | Actual adapter availability/limitations |
 | `llm/grounding/preview` | POST | `{scope,requests:[{tool,arguments}]}`; local reads only |
-| `llm/grounding/approve` | POST | `{id,hash,approvedNonsensitive:true}`; exact local approval, no inference |
-| `llm/start` | POST | `{scope:{terms:[],readMts:[],writeMts:[],grant:null}}`; optional approved grant ID, no inference |
+| `llm/grounding/approve` | POST | Legacy preview validation only; approval fails with `grounding_not_approved`, without changing the document |
+| `llm/start` | POST | `{scope:{terms:[],readMts:[],writeMts:[],grant:null}}`; selected grounding/grants withheld, no inference |
 | `llm/conversation?id=...` | GET | Status, text, events, raw reply and execution records |
 | `llm/todos?id=...` | GET | Local conversation-owned TODO inspector, first 25 resources |
 | `llm/receipt?id=...&callId=...` | GET | Read-only native receipt for an already-recorded mutation call |
@@ -140,7 +152,7 @@ remain enforced locally. There is no automatic retry.
 The worker holds application admission, checks interruption around network and
 tool boundaries, and best-effort aborts its own pending HTTP request. Stop does
 not promise provider cancellation, erasure or rollback. Received late tool
-calls are discarded. Tool execution is one-shot, with durable reservations
+calls are discarded. Historical tool execution was one-shot, with durable reservations
 before dispatch and durable outcomes afterward. Repeated call IDs reuse a
 recorded result; changed arguments conflict; reserved/unknown outcomes are never
 automatically re-executed. An interrupted/crashed conversation is not silently
@@ -171,53 +183,61 @@ no automatic reconciliation/unblocking workflow.
 
 The real `kb_kee` API is used for actual discovery, context grants and invocation.
 Availability comes from actual registry discovery, not module-name presence.
-Context tokens stay host-only and expire/close. Every tool argument is parsed as
-a JSON object and strictly schema-validated, including canonical nullable
-`anyOf` fields and nested `additionalProperties:false`. Provider `strict:true`
-is not fabricated for schemas containing genuinely optional fields. Original
-assistant `tool_calls` and matching `role:tool` IDs are retained for later rounds.
+Context tokens stay host-only and expire/close. Local calls use the native
+canonical schemas, including nullable `anyOf` and nested
+`additionalProperties:false`. No provider function schemas are currently
+advertised. Original assistant `tool_calls` and matching rejected `role:tool`
+records remain inspectable locally, but are not sent in a subsequent round.
 
-### Exact outgoing grounding
+### Incomplete outgoing grounding gate
 
-Read-MT permission alone is **not** export consent. Selecting a term does not
-advertise its read tools. The local preview supports bounded catalog status,
-definitions, occurrences, TODO get/list and audit projections; the browser offers
-up to four term/MT pairs. A preview accepts at most eight requests, limits each
-paged read to five records and each projected result to 16 KiB of UTF-8 JSON.
-Unsupported tools and mutations cannot be previewed.
+Read-MT permission, selectors and removal of paths do **not** establish
+nonsensitivity of expressions or strings. The existing local preview supports
+bounded catalog status, definitions, occurrences, TODO get/list and audit
+projections. It accepts at most eight requests, five records per page and
+16 KiB per projected result. These previews remain strictly local.
 
-The preview displays the exact permitted material plus local identity evidence
-(IDs, source identities, MTs and revisions). Source paths and arbitrary
-diagnostics are never automatically included in outgoing material. Evidence
-remains local; outgoing snapshots include material, request and content hash.
-Approval binds the entire preview hash and selected scope. Stored entry hashes
-are checked for corruption. Changed selection requires a new preview/approval.
-These actions perform no provider request and cannot be invoked as model tools.
+The earlier `llm-exact-grounding-v2` preview tied material/hash to scope but
+lacked authenticated actor/conversation, destination/model/logging-policy,
+outgoing Chat text and expiry binding. Its UI also forms a Cartesian product
+of term and MT selections rather than explicit approved pairs. Neither that
+preview nor an existing `status:"approved"` file is an export grant now.
+Immutable old policy/receipt identities are retained, not silently migrated.
 
-Conversation policy `llm-exact-grounding-v2` snapshots approved material as an
-explicitly untrusted data message, never system instructions. Before **every**
-provider round, the host re-reads all approved requests through KEE and requires
-the same material/identity hashes. Each read tool call must also match an exact
-approved request and return the approved hash. Changed data is withheld, even if
-the change came from an otherwise authorized TODO mutation. Old-policy
-conversations must be replaced explicitly; their history is not silently
-upgraded or exported.
+The planned narrow gate is limited to `kee_definitions` and `kee_occurrences`
+for explicit canonical case-preserving term/MT pairs. A real authenticated user
+must review the exact minimal outgoing ID/MT/expression projection and Chat
+text. Host-private evidence must bind source identity, concrete IDs, content
+hashes/revisions, allowed fields, actor/conversation, exact destination/model/
+logging policy and expiry. Later calls may expose only approved IDs whose
+projected hashes still match; changed/new rows and extra pages require fresh
+approval. Selected-only counts or a labelled approved snapshot must never imply
+complete KB coverage. Global catalog totals, inferred types, source paths,
+properties, warnings and raw errors are not automatically safe.
+
+Native discovery's `providerExport` is default deny and reports no KEE gate.
+It is not approval, and the host must not flip it into blanket raw-result
+permission. The complete two-tool gate is not implemented by this containment.
 
 ### Real application TODOs
 
-The adapter connects actual available `kee_ledger_status`, `kee_todo_create`,
-`kee_todo_update`, `kee_todo_delete`, `kee_undo` and `kee_redo`. Ledger status
-exports only its revision. Ordinary valid mutations are automatic, not subject
-to per-change approval. Exact ledger/resource revisions, permissions, MT
-ceilings and durable replay are enforced by KEE.
+The backend already implements `kee_ledger_status`, `kee_todo_create`,
+`kee_todo_update`, `kee_todo_delete`, `kee_undo`, `kee_redo` and read-only
+`kee_call_status`. They are **not exposed by this chat bridge during the export
+hold**; this is not a claim that backend TODO capabilities are unavailable.
+Ordinary authorized local mutations remain automatic, audited and undoable.
+No new per-change permission gate is added to KEE.
 
 An additional durable conversation ownership set prevents changing, depending
 on or undoing another conversation's resources/changesets. New MTs must be in
 the explicit write ceiling (itself a subset of selected read MTs); `null` is
 application-global, never all MTs. The model cannot mark tasks done: KEE requires
-real user-kind completion attestation. Mutation results expose only committed
-receipts, changeset/resource IDs and revisions, not raw task text or audit images.
-The local TODO inspector does not export its contents.
+real user-kind completion attestation. Historical receipts and the local TODO
+inspector remain readable without exporting their contents. Native KEE is the
+only commit authority; the Teacher journal is not a second effect ledger.
+
+Native lifecycle data create/CAS/events also exist, but do not execute agents,
+and LLM-kind cannot write lifecycle-control state. They are not chat tools.
 
 These are **application TODOs**, not KB assertions or Copilot session tasks.
 Managed KB assertion edits, native annotation mutation, both source-loading

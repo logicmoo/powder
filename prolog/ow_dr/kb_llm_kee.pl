@@ -1,5 +1,5 @@
 :- module(kb_llm_kee,[validate_scope/1,registry_status/1,open_turn/5,close_turn/1,run_call/4,
-                     preview_grounding/2,approve_grounding/2,verify_outgoing/1,
+                     preview_grounding/2,approve_grounding/2,verify_outgoing/1,verify_provider_input/2,
                      grounding_material/2,conversation_todos/4,inspect_receipt/5]).
 :- use_module(kb_agent_settings,[strict_keys/2]).
 :- use_module(kb_llm_schema).
@@ -29,9 +29,10 @@ registry_status(Status) :-
        findall(Name,(member(C,Registry.tools),C.available==true,
                      get_dict(name,C,Name),mutation_name(Name)),Mutations),
        (length(Mutations,5)->MutationsAvailable=true;MutationsAvailable=false),
-       Status=_{available:true,adapter:"exact approved grounding and managed application TODOs",
+       Status=_{available:true,adapter:"local KEE inspection; provider tools withheld",
          mutationAvailable:MutationsAvailable,mutationTools:Mutations,managedKbAssertions:false,
-         limitation:"Managed TODOs have audit/undo; they are not KB assertions. KB/task/audit text requires exact local preview approval. No load, native annotation or KB assertion mutation tool is connected."}
+         providerTools:[],exportGateReady:false,
+         limitation:"The TODO backend is available, but no KEE tools are exposed to this chat. Grounding export is disabled pending authenticated, conversation/destination/model/logging/expiry-bound exact-material consent. Local previews and TODO/receipt inspection remain local."}
     ;Status=_{available:false,mutationAvailable:false,
        limitation:"Typed KEE discovery is unavailable. No tools are advertised."}).
 registry_context(Token) :-
@@ -54,11 +55,8 @@ open_turn(Config,Prompt,Scope,Handle,Tools) :-
      json_normalize(Principal,CheckedPrincipal),
      setup_call_catcher_cleanup(kb_kee:open_context(CheckedPrincipal,Token),
        (kb_kee:registry(Token,Raw),json_normalize(Raw,Registry),
-        findall(Tool,
-          (Config.budgets.calls>0,member(C,Registry.tools),C.available==true,connected(C.name,Scope),
-           Tool=_{type:"function",function:_{name:C.name,description:C.description,
-                                           parameters:C.inputSchema}}),Tools),
-        validate_tools(Tools),Handle=kee(Token,Registry.revision,Scope,Tools,Config.conversation)),
+        % Local preview v2 is not the bound export grant required by KEE.
+        Tools=[],Handle=kee(Token,Registry.revision,Scope,Tools,Config.conversation)),
        Catcher,(Catcher==exit->true;kb_kee:close_context(Token)))).
 policy(Config,Policy) :-
     (get_dict(policyVersion,Config,Policy),Policy=="llm-exact-grounding-v2"->true;
@@ -101,39 +99,11 @@ inspect_receipt_with_context(Token,Identity,Record,Reply) :-
 snapshot_matches(Identity,Actor) :-
     forall(member(K,[actor,kind,agent,conversation,policyVersion,model,promptVersion,promptHash]),
       (get_dict(K,Identity,V),get_dict(K,Actor,V))).
-connected(Name,_) :-
-    memberchk(Name,["kee_ledger_status","kee_todo_create","kee_todo_update",
-                  "kee_todo_delete","kee_undo","kee_redo"]),!.
-connected(Name,Scope) :-
-    approved_document(Scope,Grant),member(Entry,Grant.entries),Entry.request.tool==Name,!.
 close_turn(none).
 close_turn(kee(Token,_,_,_,_)) :- kb_kee:close_context(Token).
 
-run_call(none,_,_,_) :- throw(error(llm_call_rejected,error(llm_tool_unavailable,_))).
-run_call(Handle,Call,Result,Audit) :-
-    Handle=kee(Token,Revision,_,_,Conversation),
-    catch(prepare_call(Handle,Call,Request,Mutation,Approved),Error,
-          throw(error(llm_call_rejected,Error))),
-    Name=Request.tool,
-    kb_kee:invoke(Token,_{tool:Name,schemaVersion:1,callId:Call.id,arguments:Request.arguments},Raw),
-    json_normalize(Raw,Reply),
-    (Mutation==true->mutation_receipt(Token,Conversation,Reply.result,Result);
-     Name=="kee_ledger_status"->Result=_{revision:Reply.result.revision};
-     entry_result(Request,Reply.result,CurrentEntry),
-     (CurrentEntry.hash==Approved.hash->Result=Approved.material;
-      throw(error(llm_grounding_changed,_)))),
-    Audit=_{callId:Call.id,tool:Call.function.name,registryRevision:Revision,
-            mutation:Mutation,outcome:Reply.ok,receipt:Result},!.
-prepare_call(kee(Token,Revision,Scope,Tools,Conversation),Call,Request,Mutation,Approved) :-
-    (validate_call(Call,Tools)->true;throw(error(llm_tool_unavailable,_))),
-    member(Tool,Tools),Tool.function.name==Call.function.name,
-    validate_arguments(Tool.function.parameters,Call.function.arguments,Arguments),
-    kb_kee:registry(Token,Current),json_normalize(Current,Registry),
-    (Registry.revision==Revision->true;throw(error(llm_registry_changed,_))),
-    Name=Call.function.name,normalize_request(_{tool:Name,arguments:Arguments},Request),
-    (mutation_name(Name)->check_owned_mutation(Conversation,Name,Arguments),Mutation=true;
-     Name=="kee_ledger_status"->Mutation=false;
-     approved_entry(Scope,Request,Approved),Mutation=false),!.
+run_call(_,_,_,_) :-
+    throw(error(llm_call_rejected,error(llm_grounding_not_approved,_))).
 
 mutation_name(Name) :-
     memberchk(Name,["kee_todo_create","kee_todo_update","kee_todo_delete","kee_undo","kee_redo"]).
@@ -158,7 +128,7 @@ validate_preview_selection(Scope,R) :-
       (memberchk(R.arguments.term,Scope.terms),memberchk(R.arguments.mt,Scope.readMts)->true;
        throw(error(llm_export_scope_denied,_)));
      true).
-approve_grounding(Request,Reply) :-
+approve_grounding(Request,_) :-
     strict_keys(Request,[approvedNonsensitive,hash,id]),
     (Request.approvedNonsensitive==true->true;permission_error(export,grounding,approval_required)),
     grant_file(Request.id,File),
@@ -166,8 +136,7 @@ approve_grounding(Request,Reply) :-
       (kb_llm_files:read_json(File,D),
        validate_grant(D),
        (D.hash==Request.hash->true;throw(error(llm_grounding_conflict,_))),
-       Approved=D.put(status,"approved"),kb_llm_files:atomic_json(File,Approved))),
-    Reply=_{id:Request.id,hash:Request.hash,approved:true}.
+       throw(error(llm_grounding_not_approved,_)))).
 grant_file(Id,File) :- state_file('grounding-',Id,File).
 state_file(Prefix,Id0,File) :-
     (string(Id0)->atom_string(Id,Id0);Id=Id0),must_be(atom,Id),
@@ -240,22 +209,21 @@ local_context(Scope,Conversation,Token) :-
       expiresAt:Expires,budgets:_{calls:32,mutations:0,resultBytes:65536,seconds:15}},Principal),
     kb_kee:open_context(Principal,Token).
 verify_outgoing(none) :- throw(error(llm_registry_unavailable,_)).
-verify_outgoing(kee(Token,_,Scope,_,Conversation)) :-
+verify_outgoing(kee(Token,_,Scope,_,_)) :-
     kb_kee:registry(Token,_),
-    ((get_dict(grant,Scope,G),G\==null)->
-      (approved_document(Scope,D)->true;throw(error(llm_export_approval_required,_))),
-      setup_call_cleanup(local_context(Scope,Conversation,PreviewToken),
-        forall(member(Approved,D.entries),
-          (preview_entry(PreviewToken,Approved.request,Current),
-           (Current.hash==Approved.hash->true;throw(error(llm_grounding_changed,_))))),
-        kb_kee:close_context(PreviewToken))
-    ;Scope.terms==[]->true;
-     throw(error(llm_export_approval_required,_))).
+    verify_provider_input(Scope,[]).
+verify_provider_input(Scope,History) :-
+    validate_scope(Scope),must_be(list,History),
+    (Scope.terms==[],Scope.readMts==[],Scope.writeMts==[],
+     \+ (get_dict(grant,Scope,G),G\==null),
+     forall(member(Message,History),
+      (is_dict(Message),get_dict(role,Message,Role),
+       memberchk(Role,["system","user","assistant"]),
+       \+get_dict(name,Message,"approved_grounding")))
+     ->true;throw(error(llm_grounding_not_approved,_))).
 grounding_material(Scope,Material) :-
-    (approved_document(Scope,D)->findall(_{request:R,hash:H,material:M},
-       (member(E,D.entries),get_dict(request,E,R),get_dict(hash,E,H),get_dict(material,E,M)),Material);
-     Scope.terms==[],\+ (get_dict(grant,Scope,G),G\==null)->Material=[];
-     throw(error(llm_export_approval_required,_))).
+    (Scope.terms==[],\+ (get_dict(grant,Scope,G),G\==null)->Material=[];
+     throw(error(llm_grounding_not_approved,_))).
 
 % Ordinary automatic mutations are limited to this conversation's own TODOs.
 ownership_file(Conversation,File) :- state_file('todo-ownership-',Conversation,File).

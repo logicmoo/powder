@@ -94,6 +94,7 @@ accept_chat(Request,Run,D,After) :-
     (D.revision=:=Request.revision->true;throw(error(agent_conversation_conflict,_))),
     (D.status=="closed"->permission_error(chat,conversation,closed);true),
     (D.status=="running"->throw(error(agent_conversation_busy,_));true),
+    verify_provider_input(D.scope,D.history),
     append(D.history,[_{role:"user",content:Request.text}],History),
     bounded_json(History,D.config.budgets.historyBytes),
     Turns is D.turns+1,(Turns=<100->true;resource_error(llm_conversation_turns)),
@@ -117,7 +118,8 @@ run_turn(Id,Run) :-
 rounds(Id,Run,Config,Handle,Tools,History,Rounds,Calls) :-
     ensure_current(Id,Run),
     (Rounds<Config.budgets.rounds->true;resource_error(llm_round_budget)),
-    verify_outgoing(Handle),ensure_current(Id,Run),
+    verify_outgoing(Handle),Handle=kee(_,_,Scope,_,_),
+    verify_provider_input(Scope,History),ensure_current(Id,Run),
     bounded_json(History,Config.budgets.historyBytes),set_phase(Id,Run,http),
     chat_completion(Config,History,Tools,Response),
     set_phase(Id,Run,validating),ensure_current(Id,Run),
@@ -239,6 +241,9 @@ safe_error(error(llm_http_status(Status),_),_{code:"provider_http",status:Status
 safe_error(error(kee(Code,_),_),_{code:Code,
   message:"KEE rejected the operation. Check permissions, scope and revisions; no raw private diagnostics are exported."}) :- !.
 safe_error(error(llm_call_rejected,Underlying),Safe) :- !,safe_error(Underlying,Safe).
+safe_error(error(llm_grounding_not_approved,_),
+  _{code:"grounding_not_approved",
+    message:"Provider tools and KB/task grounding are withheld: complete bound disclosure approval is not implemented. Use an empty-scope text-only conversation; local inspectors remain available."}) :- !.
 safe_error(error(llm_mutation_unconfirmed,_),_{code:"mutation_unconfirmed",
   message:"A mutation outcome is unconfirmed. This conversation is blocked to prevent accidental repetition; inspect its durable call receipt locally."}) :- !.
 safe_error(error(llm_conversation_policy_upgrade_required,_),

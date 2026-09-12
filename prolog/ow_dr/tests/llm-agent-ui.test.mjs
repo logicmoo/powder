@@ -15,6 +15,12 @@ test('model choice never falls back and scope keys are concrete', () => {
   assert.equal(canChat({ conversation: { status: 'ready' }, text: 'Hi', approved: true }), true);
   assert.equal(canChat({ conversation: { status: 'failed', calls: [{ state: 'unknown' }] },
     text: 'Hi', approved: true }), false);
+  assert.equal(canChat({ conversation: { status: 'ready', scope: {
+    terms: [], readMts: ['x_UnapprovedMt'], writeMts: [], grant: null,
+  } }, text: 'Hi', approved: true }), false);
+  assert.equal(canChat({ conversation: { status: 'ready', messages: [
+    { role: 'tool', content: 'Synthetic legacy data' },
+  ] }, text: 'Hi', approved: true }), false);
 });
 test('isolated browser: explicit model refresh, consent, snapshots and text-only controls', {
   skip: !process.env.LOGOS_CHROME, timeout: 60000,
@@ -65,7 +71,9 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     else if (action === 'settings/save') { settings = { ...settings, ...body.settings, revision: 'r2' }; result = settings; }
     else if (action === 'grounding/preview') result = { id: 'fixture-grant', hash: 'fixture-hash',
       entries: [{ material: { term: 'x_Synthetic', text: 'Synthetic approved evidence' }, evidence: [{ id: 'a-fixture', revision: 'r-fixture' }] }] };
-    else if (action === 'grounding/approve') result = { id: 'fixture-grant', approved: true };
+    else if (action === 'grounding/approve') {
+      res.statusCode = 400; result = { error: { code: 'grounding_not_approved', message: 'Disclosure approval is unavailable.' } };
+    }
     else if (action === 'todos') result = { available: true, items: [{ title: 'Synthetic local task' }] };
     else if (action === 'receipt') result = { status: 'unknown', callId: url.searchParams.get('callId'),
       localState: 'unknown', commit: null, notice: 'Unknown may still commit. No retry or unblocking.' };
@@ -103,18 +111,23 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     await browser.evaluate(`for(const [name,value] of [['llm-term-keys','x_Synthetic'],['llm-read-mts','x_FixtureMt']]) {
       const input=document.querySelector('[name="'+name+'"]');input.value=value;input.dispatchEvent(new Event('input'));}`);
     await click('Start new conversation');
-    await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Preview and approve')`);
+    await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Grounding export is disabled')`);
     assert.equal(requests.some(r => r.action === 'start'), false);
     await click('Preview grounding locally');
     await browser.wait(`document.querySelector('.llm-grounding-preview').textContent.includes('Synthetic approved evidence')`);
     assert.equal(requests.some(r => r.action === 'chat' || r.action === 'start'), false);
     assert.equal(requests.find(r => r.action === 'grounding/preview').body.requests.length, 2);
-    await click('Approve exactly this nonsensitive preview');
-    await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Exact preview approved')`);
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Disclosure approval unavailable').disabled`), true);
+    await click('Disclosure approval unavailable');
+    assert.equal(requests.some(r => r.action === 'grounding/approve'), false);
     await browser.evaluate('teacher.deactivate();teacher.activate()');
+    assert.equal(await browser.evaluate(`document.querySelector('.llm-grounding-preview').textContent.includes('Synthetic approved evidence')`), true);
+    await browser.evaluate(`for(const name of ['llm-term-keys','llm-read-mts','llm-write-mts']) {
+      const input=document.querySelector('[name="'+name+'"]');input.value='';input.dispatchEvent(new Event('input'));}`);
     await click('Start new conversation');
     await browser.wait(`document.body.textContent.includes('prompt p1')`);
-    assert.equal(requests.find(r => r.action === 'start').body.scope.grant, 'fixture-grant');
+    assert.deepEqual(requests.find(r => r.action === 'start').body.scope,
+      { terms: [], readMts: [], writeMts: [], grant: null });
     await click('Todos'); await click('Refresh local TODOs');
     await browser.wait(`document.querySelector('.llm-local-todos').textContent.includes('Synthetic local task')`);
     assert.equal(requests.some(r => r.action === 'chat'), false);

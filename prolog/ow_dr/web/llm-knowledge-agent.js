@@ -41,6 +41,10 @@ export function selectedKeys(text) {
   return [...new Set(text.split(/\r?\n/u).map(value => value.trim()).filter(Boolean))];
 }
 export function canChat({ conversation, text, approved, pending }) {
+  const scope = conversation?.scope;
+  if (scope && (['terms', 'readMts', 'writeMts'].some(key => !Array.isArray(scope[key]) || scope[key].length)
+      || scope.grant != null)) return false;
+  if (conversation?.messages?.some(message => message.role === 'tool' || message.name === 'approved_grounding')) return false;
   return !!conversation && !pending && !['running', 'closed'].includes(conversation.status)
     && !conversation.calls?.some(call => ['reserved', 'unknown'].includes(call.state))
     && !!text.trim() && approved;
@@ -73,7 +77,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   const composer = el('form', { className: 'llm-composer', onsubmit: event => { event.preventDefault(); sendChat(); } },
     el('label', { className: 'field' }, 'Message (text only)', text),
     el('label', { className: 'llm-consent' }, consent,
-      'I approve sending this nonsensitive message and the selected bounded KB grounding under the provider notice.'),
+      'I approve sending this nonsensitive text conversation under the provider notice. No KB or task grounding is enabled.'),
     el('div', { className: 'form-actions' }, send, interrupt, stop),
     el('p', { className: 'muted' }, 'Responses arrive after completion, not incrementally. Interrupt is best effort; provider logs and processing may remain.'));
   const main = el('section', { className: 'llm-chat' }, identity, transcript, composer, feedback);
@@ -109,12 +113,12 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   const modelState = el('p', { className: 'muted' }, 'Use Refresh models to verify the saved selection. No model runs on refresh.');
   const base = el('output', { className: 'llm-provider-address' });
   const termKeys = el('textarea', { rows: 3, name: 'llm-term-keys', placeholder: 'One canonical term key per line' });
-  const readMts = el('textarea', { rows: 2, name: 'llm-read-mts', placeholder: 'One explicitly approved nonsensitive MT key per line' });
+  const readMts = el('textarea', { rows: 2, name: 'llm-read-mts', placeholder: 'One canonical MT selector per line; not disclosure consent' });
   const writeMts = el('textarea', { rows: 2, name: 'llm-write-mts', placeholder: 'Writable TODO MT keys; empty means application-global tasks only' });
   const groundingPreview = el('section', { className: 'llm-grounding-preview', 'aria-label': 'Local grounding preview' });
   const previewButton = button('Preview grounding locally', previewGrounding, 'button secondary');
-  const approveButton = button('Approve exactly this nonsensitive preview', approveGrounding, 'button secondary');
-  approveButton.disabled = true;
+  const approveButton = el('button', { type: 'button', className: 'button secondary', disabled: true },
+    'Disclosure approval unavailable');
   const budgetInputs = {};
   const budgets = el('fieldset', { className: 'llm-budgets' }, el('legend', {}, 'Per-turn budgets'));
   for (const [key, label, max] of [['rounds', 'Model rounds', 8], ['calls', 'Tool calls', 32],
@@ -136,18 +140,18 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     el('label', { className: 'field' }, 'Explicit model', model),
     button('Refresh models', refreshModels, 'button secondary'), modelState, budgets,
     button('Save agent settings', saveSettings, 'button secondary'),
-    el('h2', {}, 'Next conversation grounding'),
-    el('p', { className: 'muted' }, 'Optional KB grounding: preview up to four term/MT pairs locally, then approve exact nonsensitive content, IDs and revisions. Changed content is withheld. Automatic audited TODO edits are limited to this conversation’s tasks, not KB assertions. No whole-file uploads or load tools.'),
-    el('label', { className: 'field' }, 'Approved term keys', termKeys),
-    el('label', { className: 'field' }, 'Approved read MTs', readMts),
+    el('h2', {}, 'Local-only grounding preview'),
+    el('p', { className: 'muted' }, 'Grounding export is disabled: complete bound disclosure approval is not implemented. Previews and existing TODO/receipt inspectors stay local. The backend supports audited TODO edits, but this chat exposes no KEE tools. Clear all selectors to start text-only Chat.'),
+    el('label', { className: 'field' }, 'Preview term selectors', termKeys),
+    el('label', { className: 'field' }, 'Preview read-MT selectors', readMts),
     el('label', { className: 'field' }, 'TODO write-MT ceiling', writeMts),
     previewButton, groundingPreview, approveButton, start, promptEditor);
   let settings, promptRevision, conversation = null, pending = false, timer, polling = false, disposed = false;
-  let preview = null, groundingGrant = null;
+  let preview = null;
   let receiptPending = false;
   for (const input of [termKeys, readMts, writeMts]) input.addEventListener('input', () => {
-    preview = null; groundingGrant = null; approveButton.disabled = true;
-    groundingPreview.replaceChildren(el('p', { className: 'muted' }, 'Scope changed. Preview and approve again before exporting KB content.'));
+    preview = null;
+    groundingPreview.replaceChildren(el('p', { className: 'muted' }, 'Selectors changed. Preview again locally; disclosure approval remains unavailable.'));
   });
   signal.addEventListener('abort', () => { disposed = true; clearTimeout(timer); }, { once: true });
   if (signal.aborted) disposed = true;
@@ -174,7 +178,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   }
   function updateControls() {
     previewButton.disabled = pending;
-    approveButton.disabled = pending || !preview;
+    approveButton.disabled = true;
     send.disabled = !canChat({ conversation, text: text.value, approved: consent.checked, pending });
     start.disabled = pending || !settings || conversation?.status === 'running';
     interrupt.disabled = !conversation || conversation.status !== 'running';
@@ -234,12 +238,13 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   }
   async function startConversation() {
     await action(async () => {
-      if (selectedKeys(termKeys.value).length && !groundingGrant) {
-        feedback.textContent = 'Preview and approve the exact nonsensitive grounding first. No provider request was sent.';
+      const scope = selectedScope();
+      if (Object.values(scope).some(keys => keys.length)) {
+        feedback.textContent = 'Grounding export is disabled. Clear all scope selectors to start text-only Chat. No provider request was sent.';
         return;
       }
       feedback.textContent = 'Capturing model settings and exact prompt bytes…';
-      const data = await request('start', { scope: { ...selectedScope(), grant: groundingGrant } });
+      const data = await request('start', { scope: { ...scope, grant: null } });
       drawConversation(data);
       if (container?.updateLocation !== false) {
         const params = new URLSearchParams(route.params); params.set('conversation', data.id);
@@ -270,27 +275,10 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
         return;
       }
       preview = result;
-      groundingGrant = null;
       groundingPreview.replaceChildren(el('h3', {}, 'Local preview — not sent to the provider'),
-        el('p', {}, 'Review every displayed field. Do not approve secrets, code, private KB material or bulk content.'),
+        el('p', {}, 'For local inspection only. This preview cannot authorize disclosure to a provider.'),
         json(preview.entries), el('p', { className: 'muted' }, `Exact preview hash: ${preview.hash}`));
-      approveButton.disabled = false;
-      feedback.textContent = 'Local preview ready. Approval is separate from Start and Chat.';
-    });
-  }
-  async function approveGrounding() {
-    if (!preview) return;
-    const captured = preview;
-    await action(async () => {
-      const result = await request('grounding/approve', {
-        id: captured.id, hash: captured.hash, approvedNonsensitive: true,
-      });
-      if (preview !== captured) {
-        feedback.textContent = 'Scope changed during approval. Preview the new scope before starting.';
-        return;
-      }
-      groundingGrant = result.id;
-      feedback.textContent = 'Exact preview approved. Changes invalidate export; Start captures this approval and Chat still requires explicit consent.';
+      feedback.textContent = 'Local preview ready. Disclosure approval remains unavailable; nothing was sent to the provider.';
     });
   }
   async function refreshTodos() {
@@ -382,8 +370,8 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     promptState.textContent = `Raw SHA-256: ${document.rawHash}`;
     identity.textContent = `LLM · saved model ${saved.model} · no conversation started`;
     transcript.append(el('div', { className: 'llm-empty' },
-      el('h2', {}, 'Start with an explicit scope'),
-      el('p', {}, 'Review the provider notice and settings, optionally select nonsensitive terms and MTs, then start a conversation. Nothing is sent until you choose Chat.')));
+      el('h2', {}, 'Start a text-only conversation'),
+      el('p', {}, 'Review the provider notice and settings. Leave scope selectors empty; KB and task grounding are disabled. Nothing is sent until you choose Chat.')));
     if (route.params.has('conversation')) drawConversation(await api('llm/conversation', { id: route.params.get('conversation') }, { signal }));
     updateControls();
   } catch (error) { feedback.textContent = `Agent unavailable: ${error.message}. No model request was sent.`; }
