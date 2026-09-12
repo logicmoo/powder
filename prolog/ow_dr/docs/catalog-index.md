@@ -288,6 +288,13 @@ loaded-module state. A reported primary timeout must still be checked there;
 increasing its heap ceiling or rebuilding the validated projection is not justified
 by the measured bounded-directory path.
 
+The same real-artifact probe verified `source_pack_snapshot/1` in 2 ms with
+`model/1` forbidden: the small directory manifest reported
+`provider_enrichment_pending`, so the 523,398,637-byte `query.data` was not read.
+`real_pending_provider_snapshot_reads_only_the_small_manifest` exercises this
+contract under `OPENWORLD_CATALOG_REAL_PROBE=1`. A legacy/stale running accessor
+must not be mistaken for the current bounded pending-provider gate.
+
 `/api/catalog/status` includes `exactLookups`: the serving PID, bounded-path
 implementation marker, active request phases and the latest completed lookup.
 Phases distinguish directory access, active-manifest capture, source descriptor,

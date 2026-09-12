@@ -105,5 +105,18 @@ test(real_cold_exact_http_uses_bounded_directory_not_monolithic_model,
         kb_server:stop_server),
       unwrap_predicate(kb_catalog_query:model(_),forbid_real_monolithic)),
     kb_store:generation(Generation).
+test(real_pending_provider_snapshot_reads_only_the_small_manifest,
+     [condition((getenv('OPENWORLD_CATALOG_REAL_PROBE','1'),
+       kb_catalog_directory:directory_status(Status),get_dict(providerCoverage,Status,pending)))]) :-
+    setup_call_cleanup(
+      wrap_predicate(kb_catalog_query:model(_),forbid_real_pending_model,_,
+        throw(error(monolithic_model_for_pending_provider_snapshot,_))),
+      (statistics(walltime,[Start,_]),source_pack_snapshot(Snapshot),
+       statistics(walltime,[End,_]),Elapsed is End-Start,
+       assertion(Snapshot.status==unavailable),
+       assertion(Snapshot.coverage.reason==provider_enrichment_pending),
+       assertion(Snapshot.files==t),
+       format(user_error,'REAL_PENDING_PROVIDER_SNAPSHOT_MS ~d~n',[Elapsed])),
+      unwrap_predicate(kb_catalog_query:model(_),forbid_real_pending_model)).
 
 :- end_tests(catalog_directory).
