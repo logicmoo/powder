@@ -49,5 +49,20 @@ test(source_scope_is_retained_without_mt_entailment) :-
     proof(P),build_catalog_schema([claim(genls,x_A,x_Predicate,P),claim(isa,x_p,x_A,P)],S),
     term_classification(x_p,[],S,R),assertion(R.scope==catalog_taxonomy_not_mt_entailment),
     R.evidence=[predicates-type_evidence(x_A,P,x_Predicate,[P])].
+test(do_invocations_use_exact_case_and_predicate_evidence) :-
+    schema([],S),
+    forall(member(Key,[x_doAttack,x_doMove,x_doInvoke]),
+      (term_classification(Key,[predicate_symbol],S,R),
+       assertion(memberchk(do_invocations,R.groups)),assertion(memberchk(predicates,R.groups)))),
+    forall(member(Key,[x_domain,x_double,x_dog,x_do,x_doattack,x_DoAttack]),
+      (term_classification(Key,[predicate_symbol],S,R),assertion(\+memberchk(do_invocations,R.groups)))).
+test(do_named_unrelated_constant_and_collection_are_excluded) :-
+    schema([c(isa,x_doSomething,x_Collection)],S),
+    term_classification(x_doSomething,[],S,R),assertion(R.groups==[collections]),
+    term_classification(x_doUnknown,[],S,U),assertion(U.groups==[unclassified]).
+test(do_relation_type_and_schema_declaration_qualify) :-
+    schema([c(isa,x_doRel,x_Relation),c(relation_declaration,x_doDeclared,declared)],S),
+    term_classification(x_doRel,[],S,R),assertion(memberchk(do_invocations,R.groups)),
+    term_classification(x_doDeclared,[],S,D),assertion(memberchk(do_invocations,D.groups)).
 
 :- end_tests(catalog_schema).

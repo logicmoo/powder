@@ -6,6 +6,7 @@ export const CATALOG_SCOPES = Object.freeze([
 export const CATALOG_GROUPS = Object.freeze([
   ['all', 'All categories'], ['predicates', 'Predicates'], ['functions', 'Functions'],
   ['collections', 'Collections'], ['microtheories', 'Microtheories'],
+  ['do_invocations', 'doInvocations'],
   ['external_symbols', 'External symbols'], ['individuals', 'Individuals'],
   ['unclassified', 'Unclassified'],
 ]);
@@ -79,7 +80,8 @@ export async function catalogSearchPage(host, route, signal) {
       el('thead', {}, el('tr', {}, ['Term', 'Kinds / recorded types', 'Files / assertions', 'Definition evidence'].map(text => el('th', { scope: 'col' }, text)))),
       el('tbody', {}, data.items.map(item => el('tr', {},
         el('td', {}, renderExpression(item.expression)),
-        el('td', {}, item.groups.join(', '), el('div', { className: 'muted' }, item.types.join(', '))),
+        el('td', {}, item.groups.join(', '),
+          el('div', { className: 'muted' }, (item.typeEntries ?? []).map(type => renderExpression(type.expression, { inline: true })))),
         el('td', {}, `${item.files} files; ${item.sentences} assertions; ${item.occurrences} occurrences`),
         el('td', {}, link(`Definitional Info (${item.definitions})`, 'definitions', { term: item.term, scope: params.scope }),
           el('div', {}, link('All occurrences', 'definitions', { term: item.term, facet: 'semantic', scope: params.scope })))))))));

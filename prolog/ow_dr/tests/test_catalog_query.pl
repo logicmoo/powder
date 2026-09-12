@@ -43,6 +43,13 @@ test(ontology_target_second_slot_and_source_order,
     build,catalog_query_term(json{term:x_p},R),
     assertion(R.total==1),R.items=[Item],assertion(Item.line==1),
     assertion(Item.positions==[[args,1]]).
+test(indexed_arg_isa_supplies_proven_schema_target_role,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(isa aboutRelation MetaRelation)\n(arg2Isa aboutRelation Relation)\n",_),
+    compiled('b.krf',"(aboutRelation Wrong p)\n(aboutRelation p Wrong)\n",_),
+    build,catalog_query_term(json{term:x_p},R),
+    assertion(R.total==1),R.items=[Item],assertion(Item.line==1),
+    assertion(Item.positions==[[args,1]]).
 test(meta_function_type_and_declaration_groups,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('a.krf',"(genls MetaFunction MetaRelation)\n(genls MetaRelation Predicate)\n(isa resultIsa MetaFunction)\n",_),
@@ -87,5 +94,20 @@ test(real_http_definition_and_coverage_routes_without_kb_loading,
        assertion(Item.properties\==[])),
       kb_server:stop_server),
     kb_store:generation(Generation),assertion(\+kb_store:source_info(_,_)).
+test(catalog_do_filter_uses_same_naming_and_relation_rule,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(doAttack a)\n(domain a)\n(mentions doSomething)\n(arity doDeclared 1)\n(isa doCollection Collection)\n",_),
+    build,catalog_query_search(json{group:do_invocations},R),
+    findall(Key,(member(Item,R.items),Key=Item.term),Keys),sort(Keys,Sorted),
+    assertion(Sorted==[x_doAttack,x_doDeclared]).
+test(source_pack_accessor_is_current_and_detects_removed_source,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(isa p Predicate)\n",Source),build,
+    source_pack_snapshot(Snapshot),assertion(Snapshot.status==available),
+    assoc_to_values(Snapshot.files,[File]),
+    assertion(File.providerExtensions.declared=[_]),
+    assertion(is_dict(File.dependencySummary)),
+    delete_file(Source),source_pack_snapshot(Stale),assertion(Stale.status==stale),
+    assertion(Stale.coverage.complete==false).
 
 :- end_tests(catalog_query).

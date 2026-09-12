@@ -1,9 +1,10 @@
 :- module(kb_catalog_query,
     [build_query_catalog/1,catalog_query_status/1,catalog_query_search/2,
-     catalog_query_term/2,catalog_query_assertion/4]).
+     catalog_query_term/2,catalog_query_assertion/4,source_pack_snapshot/1]).
 :- use_module(kb_catalog_index,[]).
 :- use_module(kb_catalog_schema).
-:- use_module(kb_catalog,[authorize_sources/2]).
+:- use_module(kb_catalog_providers,[source_provider_extensions/4]).
+:- use_module(kb_catalog,[authorize_sources/2,directory_manifest/3]).
 :- use_module(kb_cache,[]).
 :- use_module(kb_paths).
 :- use_module(kb_store,[]).
@@ -68,7 +69,7 @@ build_query_locked(File,Report) :-
     (After==Revision->true;throw(error(catalog_changed_during_projection,_))),
     Projection=query_catalog{schema:catalog_query_v1,revision:Revision,
       taxonomy:SchemaHash,coverage:Catalog.coverage,verifiedAt:Catalog.verifiedAt,
-      terms:ByTerm,postings:Terms,ranked:Order,files:ByFile},
+      expected:Catalog.expected,terms:ByTerm,postings:Terms,ranked:Order,files:ByFile},
     kb_catalog_index:atomic_data(File,catalog_query(Projection)),
     length(Entries,N),Report=json{terms:N,coverage:Catalog.coverage,revision:Revision}.
 fresh(File) :- File.status==fresh.
@@ -101,8 +102,9 @@ project_source(Schema,Directory,File,projected(Before,Files),projected(After,[Ke
        validate_postings(Stage,File.identity,Digest),
        kb_catalog_index:install_catalog_stage(Stage,Path,0)),
       kb_cache:remove_if_exists(Stage)),
+    source_provider_extensions(File.path,Data,Schema,Extensions),
     path_key(File.path,Key),Info=File.put(json{postings:Path,postingsDigest:Digest,
-      termSchema:Data.termSchema}),
+      termSchema:Data.termSchema,dependencySummary:Data.dependencies,providerExtensions:Extensions}),
     flag(powder_projection_completed,_,N+1).
 source_views(Data,Sentences,Applications) :-
     maplist(sentence_pair,Data.sentences,SentencePairs),list_to_assoc(SentencePairs,Sentences),
@@ -159,6 +161,34 @@ catalog_query_status(Reply) :-
        Projection=json{available:false}),
     query_progress(Progress),kb_catalog_index:external_job_status(File,Progress,Job),
     Reply=Status.put(json{projection:Projection,projectionProgress:Job}).
+source_pack_snapshot(Snapshot) :-
+    query_file(File),
+    (exists_file(File)->
+       model(Model),
+       (get_dict(expected,Model,Expected),
+        forall(gen_assoc(_,Model.files,F),
+          (get_dict(dependencySummary,F,_),get_dict(providerExtensions,F,_)))->
+          directory_manifest('KBs',_,Manifest),pairs_keys(Manifest,Current),
+          maplist(path_key,Current,CurrentKeys0),sort(CurrentKeys0,CurrentKeys),
+          maplist(path_key,Expected,ExpectedKeys0),sort(ExpectedKeys0,ExpectedKeys),
+          (CurrentKeys==ExpectedKeys,forall(gen_assoc(_,Model.files,F),file_stats_current(F))->
+             State=available,Coverage=Model.coverage
+          ;State=stale,Coverage=Model.coverage.put(json{complete:false,
+             freshness:catalog_or_file_stats_changed})),
+          Snapshot=source_pack_catalog{status:State,revision:Model.revision,taxonomy:Model.taxonomy,
+            verifiedAt:Model.verifiedAt,coverage:Coverage,files:Model.files}
+       ;empty_source_pack_snapshot(projection_requires_refresh,Snapshot))
+    ;empty_source_pack_snapshot(query_projection_unavailable,Snapshot)).
+empty_source_pack_snapshot(Reason,Snapshot) :-
+    empty_assoc(Files),
+    Snapshot=source_pack_catalog{status:unavailable,revision:none,taxonomy:none,verifiedAt:null,
+      coverage:json{complete:false,reason:Reason},files:Files}.
+file_stats_current(File) :-
+    repo_root(Root),directory_file_path(Root,File.path,Source),
+    exists_file(Source),exists_file(File.normalized),
+    size_file(Source,Size),time_file(Source,Time),
+    Size=:=File.sizeBytes,Time=:=File.modified,
+    kb_catalog_index:file_stamp(File.normalized,Stamp),Stamp==File.normalizedStamp.
 model(Model) :-
     query_file(File),kb_catalog_index:file_stamp(File,Stamp),
     (nb_current(powder_catalog_query,cache(File,Stamp,Model))->true
@@ -186,7 +216,7 @@ options(Input,Options) :-
     maplist(text_option(Options),[q,term,scope,group,facet,source,mt]),
     (memberchk(Options.scope,[all,loaded,unloaded])->true;domain_error(catalog_scope,Options.scope)),
     (memberchk(Options.group,[all,predicates,functions,collections,microtheories,
-       external_symbols,individuals,unclassified])->true;domain_error(catalog_group,Options.group)),
+       external_symbols,do_invocations,individuals,unclassified])->true;domain_error(catalog_group,Options.group)),
     (memberchk(Options.facet,[semantic,definition,context])->true;domain_error(catalog_facet,Options.facet)).
 text_option(Dict,Key) :- get_dict(Key,Dict,Value),must_be(atom,Value).
 
@@ -213,7 +243,9 @@ search_json(Model,Active,Scope,Key,entry(_,Groups,Types,Roles,_,_),Row) :-
     findall(N,member(p(_,_,_,N,_,_),Selected),Os),sum_list(Os,Occurrences),
     findall(N,member(p(_,_,_,_,N,_),Selected),Ds),sum_list(Ds,Definitions),
     length(Selected,FileCount),key_expression(Key,Expression),
+    findall(json{term:T,expression:AST},(member(T,Types),key_expression(T,AST)),TypeEntries),
     Row=json{term:Key,expression:Expression,groups:Groups,types:Types,roles:Roles,
+      typeEntries:TypeEntries,
       files:FileCount,sentences:Sentences,occurrences:Occurrences,definitions:Definitions}.
 key_expression(Key,Expression) :-
     (atom_concat('nat:',_,Key)->non_atomic_from_key(Key,Term),annotated_context_ast(Term,Expression)

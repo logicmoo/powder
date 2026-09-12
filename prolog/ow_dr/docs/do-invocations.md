@@ -64,6 +64,16 @@ generation or invalid role/retention schema retains its existing rebuild policy.
 No source, compiled companion, native TVA, store setting or compiler fingerprint
 input is changed. This upgrade does not recompile the corpus or reset the KB.
 
+## All-file catalog
+
+The catalog projection uses the same naming helper. Predicate positions,
+explicit relation typing (including recorded hierarchy evidence), and stored
+relation-schema declarations supply the separate role requirement. Unrelated
+constants and Collection-only subjects remain excluded. Global source/type
+evidence is broader than the loaded snapshot; the naming rule is identical.
+Refresh the query projection, not the original-source compilation, after a
+category-policy change.
+
 ## Focused tests
 
 ```powershell
