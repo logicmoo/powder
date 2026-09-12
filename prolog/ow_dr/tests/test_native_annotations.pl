@@ -2,6 +2,7 @@
 :- use_module('../kb_native_annotations').
 :- use_module('../kb_cache',[]).
 :- use_module('../kb_store',[]).
+:- use_module('../kb_activity',[]).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
 :- use_module(library(process)).
@@ -38,6 +39,137 @@ source_fixture(Semantic,Direction,Monotonicity) :-
     kb_terms:term_ast(Semantic,[],Expression),
     assertz(kb_store:assertion(a123,_{properties:Properties,expression:Expression,
       source:'KBs/fixture.krf',line:9})).
+
+native_memory_image(Image) :-
+    findall(Name-Clauses,
+      (member(Name-Arity,[nars_tva-2,oc_tva-2,cyc_bayes_value-3,baseline-4,snapshot_cache-3,storage_binding-1]),
+       functor(Head,Name,Arity),findall((Head:-Body),clause(kb_native_annotations:Head,Body),Clauses)),Image).
+
+test(copy_only_cold_empty_creates_no_state_or_directory,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    F=fixture(Directory,_,_),directory_file_path(Directory,'never-created',Missing),
+    directory_file_path(Missing,'native.pl',File),setenv('POWDER_NATIVE_TVA_FILE',File),
+    native_memory_image(Before),
+    export_native_snapshot(S),restored_native_snapshot(M),
+    assertion(S==M),assertion(S.records==[]),assertion(S.sequence==0),
+    assertion(ground(S)),assertion(\+exists_directory(Missing)),
+    native_memory_image(After),assertion(Before=@=After).
+
+test(copy_only_cold_disk_and_memory_inspection_are_distinct,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    F=fixture(_,File,_),revision(R),initialize_defaults(R,_),
+    put(opencog,default,null,stv(0.9,0.9)),export_native_state(Expected),
+    kb_cache:file_digest(File,Bytes),clear_memory,native_memory_image(Before),
+    export_native_snapshot(S),assertion(S==Expected),
+    restored_native_snapshot(M),assertion(M.records==[]),
+    native_memory_image(After),assertion(Before=@=After),
+    kb_cache:file_digest(File,BytesAfter),assertion(Bytes==BytesAfter).
+
+test(copy_only_dirty_repl_never_commits_or_replaces_memory,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    F=fixture(_,File,_),revision(R),initialize_defaults(R,_),
+    kb_cache:file_digest(File,Bytes),assertz(kb_native_annotations:oc_tva(x_Local,custom(false,[]))),
+    native_memory_image(Before),export_native_snapshot(S),restored_native_snapshot(M),
+    assertion(S==M),assertion(memberchk(oc_tva(x_Local,custom(false,[])),S.records)),
+    export_native_snapshot(Again),assertion(S==Again),
+    native_memory_image(After),assertion(Before=@=After),
+    kb_cache:file_digest(File,BytesAfter),assertion(Bytes==BytesAfter),
+    native_status(Persisted),assertion(Persisted.revision==S.revision).
+
+test(copy_only_unbased_local_and_imported_without_sidecar,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    F=fixture(_,File,_),assertz(kb_native_annotations:nars_tva(default,false)),
+    native_memory_image(Before),export_native_snapshot(S),assertion(S.sequence==1),
+    assertion(S.records==[nars_tva(default,false)]),assertion(\+exists_file(File)),
+    native_memory_image(After),assertion(Before=@=After),
+    import_native_state(S),restored_native_snapshot(M),assertion(M==S),
+    export_native_snapshot(Imported),assertion(Imported==S),assertion(\+exists_file(File)).
+
+test(copy_only_disk_drift_is_copied_not_adopted,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    revision(R),put(nars,x_Local,null,0),restored_native_snapshot(Memory),
+    format(string(Body),"native_status(S),get_dict(revision,S,R),upsert_native(opencog,x_External,null,false,R,_)",[]),
+    child_goal(Body,Goal),run_child(Goal,exit(0)),
+    native_memory_image(Before),export_native_snapshot(Current),
+    assertion(Current.revision\==R),assertion(Current.revision\==Memory.revision),
+    assertion(memberchk(oc_tva(x_External,false),Current.records)),
+    restored_native_snapshot(StillMemory),assertion(StillMemory==Memory),
+    native_memory_image(After),assertion(Before=@=After).
+
+test(copy_only_local_and_disk_drift_conflict_preserves_everything,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    F=fixture(_,File,_),put(nars,x_A,null,0),
+    assertz(kb_native_annotations:oc_tva(x_Local,false)),
+    child_goal("native_status(S),get_dict(revision,S,R),upsert_native(cyc,x_External,utility,0,R,_)",Goal),
+    run_child(Goal,exit(0)),native_memory_image(Before),kb_cache:file_digest(File,Bytes),
+    catch(export_native_snapshot(_),error(native_tva_persistence_conflict(_,_),_),Caught=true),
+    assertion(Caught==true),native_memory_image(After),assertion(Before=@=After),
+    kb_cache:file_digest(File,BytesAfter),assertion(Bytes==BytesAfter).
+
+test(copy_only_unbased_conflict_and_invalid_data_no_side_effects,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    put(nars,x_Disk,null,0),clear_memory,assertz(kb_native_annotations:oc_tva(x_Local,false)),
+    native_memory_image(Before),
+    catch(export_native_snapshot(_),error(native_tva_unloaded_store_conflict,_),Caught=true),
+    assertion(Caught==true),native_memory_image(After),assertion(Before=@=After),
+    clear_memory,assertz(kb_native_annotations:nars_tva(x_Bad,_)),
+    catch(restored_native_snapshot(_),error(instantiation_error,_),Invalid=true),assertion(Invalid==true).
+
+test(restored_inspection_ignores_corrupt_disk_and_changed_storage,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    F=fixture(_,File,_),put(nars,x_A,null,0),restored_native_snapshot(Expected),
+    setup_call_cleanup(open(File,write,S),write(S,':- throw(must_not_execute).\n'),close(S)),
+    native_memory_image(Before),
+    restored_native_snapshot(Actual),assertion(Actual==Expected),
+    catch(export_native_snapshot(_),error(domain_error(native_state_header,_),_),BadDisk=true),
+    assertion(BadDisk==true),setenv('POWDER_NATIVE_TVA_FILE','not-absolute'),
+    restored_native_snapshot(Again),assertion(Again==Expected),
+    native_memory_image(After),assertion(Before=@=After).
+
+test(copy_only_snapshot_obeys_existing_native_crossprocess_lock,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    F=fixture(_,File,_),put(nars,x_A,null,0),atom_concat(File,'.lock',LockPath),
+    setup_call_cleanup(kb_cache:try_lock(LockPath,Lock),
+      (child_goal("catch(export_native_snapshot(_),error(native_tva_busy,_),Caught=true),Caught==true",Goal),
+       run_child(Goal,exit(0))),kb_cache:release_lock(Lock)).
+
+test(facade_mutations_and_synchronizing_reads_are_admission_gated,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    export_native_snapshot(Empty),native_memory_image(Before),
+    kb_activity:with_exclusive_reload(plunit_native_annotations:
+      (forall(member(Goal,[native_status(_),native_update([],Empty.revision,_),
+            save_native_settings(null,_{utility:0},Empty.revision,_),
+            export_native_state(_),persist_native_state(_),import_native_state(Empty),reset_transient]),
+        (catch(call(Goal),error(application_reload_busy,_),Blocked=true),assertion(Blocked==true))),
+       export_native_snapshot(Copy),restored_native_snapshot(Memory),
+       assertion(Copy==Empty),assertion(Memory==Empty))),
+    native_memory_image(After),assertion(Before=@=After),
+    kb_activity:activity_status(Activity),assertion(Activity.active==0),assertion(Activity.exclusive==false).
+
+test(lease_owner_can_import_and_inspect_but_other_threads_cannot_mutate,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    put(nars,x_A,null,0),export_native_snapshot(State),
+    setup_call_cleanup(kb_activity:begin_admission_lease(Token),
+      (import_native_state(State),restored_native_snapshot(Restored),assertion(Restored==State),
+       thread_create(
+         (catch(native_update([],State.revision,_),error(application_reload_busy,_),Blocked=true),
+          (Blocked==true->true;throw(mutation_not_blocked))),Thread,[]),
+       thread_join(Thread,true),
+       catch(native_status(_),error(application_reload_busy,_),OwnerRead=true),assertion(OwnerRead==true)),
+      kb_activity:end_admission_lease(Token)).
+
+test(inflight_native_facade_participates_in_promotion_drain,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    setup_call_cleanup(message_queue_create(Q),
+      (setup_call_cleanup(
+         wrap_predicate(kb_native_annotations:synchronize(S),native_activity_probe,Wrapped,
+           (kb_activity:activity_status(A),thread_send_message(Q,active(A.active)),thread_get_message(Q,continue),call(Wrapped),nonvar(S))),
+         (thread_create(native_status(_),Thread,[]),
+          thread_get_message(Q,active(Count)),assertion(Count>0),
+          catch(kb_activity:begin_admission_lease(_),error(application_reload_busy,_),Blocked=true),
+          assertion(Blocked==true),thread_send_message(Q,continue),thread_join(Thread,true)),
+         unwrap_predicate(kb_native_annotations:synchronize(_),native_activity_probe))),
+      message_queue_destroy(Q)).
+
+test(copy_only_detects_local_mutation_during_disk_capture,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    setup_call_cleanup(
+      wrap_predicate(kb_native_annotations:read_snapshot_disk(File,S,E),copy_capture_race,Wrapped,
+        (call(Wrapped),assertz(kb_native_annotations:oc_tva(x_Race,0)),nonvar(File),nonvar(S),nonvar(E))),
+      catch(export_native_snapshot(_),error(native_tva_concurrent_repl_change,_),Caught=true),
+      unwrap_predicate(kb_native_annotations:read_snapshot_disk(_,_,_),copy_capture_race)),
+    assertion(Caught==true),assertion(oc_tva(x_Race,0)),
+    assertion(\+kb_native_annotations:baseline(_,_,_,_)),
+    assertion(\+kb_native_annotations:snapshot_cache(_,_,_)),
+    assertion(\+kb_native_annotations:storage_binding(_)),
+    F=fixture(_,Path,_),assertion(\+exists_file(Path)).
 
 test(module_and_empty_reads_no_seeding,[setup(fixture(F)),cleanup(dispose(F))]) :-
     F=fixture(_,File,_),native_status(S),assertion(S.recordCount==0),
@@ -270,7 +402,7 @@ test(real_restart,[setup(fixture(F)),cleanup(dispose(F))]) :-
     child_goal("native_status(S),get_dict(recordCount,S,10),nars_tva(default,nars_truth_value(0.5,0.0)),oc_tva(default,stv(0.5,0.0)),cyc_bayes_value(default,utility,0.5),cyc_bayes_value(default,asserted_positive_truth,1.0),cyc_bayes_value(default,asserted_monotonic_confidence,0.97),cyc_bayes_value(default,asserted_default_confidence,0.66)",Goal),
     run_child(Goal,exit(0)).
 test(real_qsave_restore_without_sidecar,[setup(fixture(F)),cleanup(dispose(F))]) :-
-    F=fixture(Directory,File,_),revision(R),initialize_defaults(R,_),export_native_state(State),
+    F=fixture(Directory,File,_),revision(R),initialize_defaults(R,_),export_native_snapshot(State),
     directory_file_path(Directory,'restore.state',Save),
     directory_file_path(Directory,'qsave-builder.pl',Builder),
     source_file(kb_native_annotations:native_status(_),Module),
@@ -280,6 +412,7 @@ test(real_qsave_restore_without_sidecar,[setup(fixture(F)),cleanup(dispose(F))])
        kb_cache:write_one_line(S,(main:-saved_data(X),import_native_state(X),
          qsave_program(Save,[goal(restored),stand_alone(false),toplevel(halt)]),halt)),
        kb_cache:write_one_line(S,(restored:-
+         saved_data(Expected),restored_native_snapshot(Actual),Actual==Expected,
          native_status(Status),get_dict(recordCount,Status,10),
          nars_tva(default,nars_truth_value(0.5,0.0)),cyc_bayes_value(default,utility,0.5),
          cyc_bayes_value(default,asserted_monotonic_confidence,0.97),halt)),

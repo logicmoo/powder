@@ -7,6 +7,7 @@
      native_pair_settings/2,save_native_pair/6,
      native_entity/3,native_record_dto/2,
      export_native_state/1,import_native_state/1,persist_native_state/1,
+     export_native_snapshot/1,restored_native_snapshot/1,
      reset_transient/0]).
 
 /** <module> Independent, inert native truth-value annotations
@@ -16,15 +17,17 @@ clauses. Canonical whole records are nars_truth_value(Frequency,Confidence)
 and stv(Strength,Confidence). Other supported ground data is retained verbatim.
 Only explicit writes initialize defaults; importing this module has no I/O.
 
-All facade reads synchronize a validated snapshot with the durable sidecar.
+Ordinary facade reads synchronize a validated snapshot with the durable sidecar.
 Direct REPL mutations are detected by predicate generations and persisted on
-the next facade call (or explicit persist_native_state/1). REPL writes must be
+the next synchronizing facade call (or explicit persist_native_state/1).
+The two copy-only snapshot APIs never persist or adopt data. REPL writes must be
 serialized with other writers; use native_update/3 for concurrent applications.
 There is no crash-durability promise for an unflushed REPL edit.
 
 See docs/native-tva.md for the exact DTO, conflict, restore and scope contracts.
 */
 :- use_module(kb_cache,[]).
+:- use_module(kb_activity,[]).
 :- use_module(kb_paths,[app_dir/1]).
 :- use_module(kb_terms,[context_key/2,context_from_key/2,term_ast/3]).
 :- use_module(kb_non_atomic,[non_atomic_key/2,non_atomic_from_key/2]).
@@ -39,15 +42,21 @@ See docs/native-tva.md for the exact DTO, conflict, restore and scope contracts.
 :- dynamic baseline/4.
 :- dynamic snapshot_cache/3,storage_binding/1.
 :- volatile snapshot_cache/3,storage_binding/1.
-:- meta_predicate storage_lock(+,0).
+:- meta_predicate storage_lock(+,0),native_access(0),restore_access(0).
 :- initialization(restore_annotations,restore).
 
-reset_transient :-
+native_access(Goal) :-
+    kb_activity:with_application(with_mutex(powder_native_annotations,Goal)).
+restore_access(Goal) :-
+    (kb_activity:owns_admission_lease->with_mutex(powder_native_annotations,Goal)
+    ;native_access(Goal)).
+reset_transient :- restore_access(clear_transient).
+clear_transient :-
     retractall(snapshot_cache(_,_,_)),retractall(storage_binding(_)).
 restore_annotations :-
-    reset_transient,
-    (retract(baseline(Revision,Sequence,Digest,_))->
-      assertz(baseline(Revision,Sequence,Digest,imported));true).
+    restore_access((clear_transient,
+      (retract(baseline(Revision,Sequence,Digest,_))->
+        assertz(baseline(Revision,Sequence,Digest,imported));true))).
 
 text_atom(Text,Atom) :-
     (atom(Text)->Atom=Text;string(Text)->atom_string(Atom,Text);type_error(text,Text)).
@@ -139,23 +148,27 @@ native_generations(Generations) :-
 local_snapshot(Facts,Digest) :-
     native_generations(Before),
     (snapshot_cache(Before,Facts,Digest)->true
-    ;snapshot(findall(Head,
+    ;collect_local(Before,Facts,Digest),
+     retractall(snapshot_cache(_,_,_)),assertz(snapshot_cache(Before,Facts,Digest))).
+collect_local(Before,Facts,Digest) :-
+     snapshot(findall(Head,
        (member(Head,[nars_tva(_,_),oc_tva(_,_),cyc_bayes_value(_,_,_)]),
         clause(Head,Body),require(Body==true,domain_error(native_data_fact,(Head:-Body)))),Raw)),
      maplist(validate_fact,Raw),length(Raw,Count),
      require(Count=<50000,resource_error(native_record_count)),
      msort(Raw,Facts),kb_cache:terms_digest(Facts,Digest),
-     native_generations(After),require(Before==After,native_tva_concurrent_repl_change),
-     retractall(snapshot_cache(_,_,_)),assertz(snapshot_cache(Before,Facts,Digest))).
+     native_generations(After),require(Before==After,native_tva_concurrent_repl_change).
 
 storage_file(File) :-
+    configured_storage_file(File),
+    (storage_binding(_)->true;assertz(storage_binding(File))).
+configured_storage_file(File) :-
     (getenv('POWDER_NATIVE_TVA_FILE',Override),Override\==''->
       require(is_absolute_file_name(Override),domain_error(absolute_native_storage,Override)),
       File=Override
     ;app_dir(App),directory_file_path(App,'.logos-state',Directory),
      directory_file_path(Directory,'native-tva.pl',File)),
-    (storage_binding(Bound)->require(Bound==File,native_tva_storage_changed)
-    ;assertz(storage_binding(File))).
+    (storage_binding(Bound)->require(Bound==File,native_tva_storage_changed);true).
 
 state(Facts,Sequence,State) :-
     kb_cache:terms_digest([native_annotations_v1,Sequence|Facts],Revision),
@@ -254,7 +267,7 @@ check_revision(Expected,Actual) :-
     require(Revision==Actual,native_tva_revision_conflict(Revision,Actual)).
 
 native_status(Reply) :-
-    with_mutex(powder_native_annotations,(synchronize(State),state_status(State,Reply))).
+    native_access((synchronize(State),state_status(State,Reply))).
 state_status(State,Reply) :-
     length(State.records,Count),maplist(fact_key,State.records,Keys0),msort(Keys0,Keys),
     group_pairs_by_key_pairs(Keys,Groups),length(Groups,KeyCount),
@@ -278,7 +291,7 @@ native_update(Changes,Expected,Reply) :-
     must_be(list,Changes),length(Changes,N),require(N=<500,resource_error(native_update_count)),
     must_be(ground,Changes),
     maplist(normalize_change,Changes,Normalized),
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(Before),check_revision(Expected,Before.revision),
        foldl(apply_change,Normalized,Before.records,Raw),msort(Raw,Records),
        commit_update(Before,Records,After),state_status(After,Reply))).
@@ -304,7 +317,7 @@ commit_update(Before,Records,After) :-
         install_memory(After,durable)))).
 
 initialize_defaults(Expected,Reply) :-
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(Before),check_revision(Expected,Before.revision),
        foldl(apply_change,[put(nars,default,null,nars_truth_value(0.5,0.0)),
          put(opencog,default,null,stv(0.5,0.0)),put(cyc,default,utility,0.5)],
@@ -318,7 +331,7 @@ initial_setting(P-V,Before,After) :-
     ;After=[cyc_bayes_value(default,P,V)|Before]).
 
 reset_global_defaults(Expected,Reply) :-
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(Before),check_revision(Expected,Before.revision),
        findall(put(cyc,default,P,V),
          member(P-V,[utility-0.5,monotonic_strength-1.0,default_strength-0.7,
@@ -357,7 +370,7 @@ effective(Facts,Entity,Context,Family,Prop,Effective,Records) :-
 
 native_summary(Entity0,Context0,Reply) :-
     native_entity(Entity0,Entity,Key),context(Context0,Context,ContextKey),
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(State),summary(State,Entity,Key,Context,ContextKey,Reply))).
 summary(State,Entity,Key,Context,ContextKey,Reply) :-
     term_ast(Entity,[],EntityExpression),context_expression(Context,ContextExpression),
@@ -405,7 +418,7 @@ shape_summary(Value,Summary) :-
 native_detail(Entity0,Context0,Family0,Property0,Expected,Reply) :-
     native_entity(Entity0,Entity,Key),context(Context0,Context,ContextKey),
     family(Family0,Family),family_property(Family,Property0,Prop),
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(State),effective(State.records,Entity,Context,Family,Prop,E,Records),
        check_record_revision(Expected,E.recordRevision),maplist(record_detail,Records,Details),
        (Family==cyc->atom_string(Prop,PropertyName);PropertyName=null),
@@ -437,7 +450,7 @@ native_batch(Inputs,Context0,Options,Reply) :-
     context(Context0,Context,ContextKey),maplist(entity_pair,Inputs,Entities0),
     context_expression(Context,ContextExpression),
     list_to_set(Entities0,Entities),batch_options(Options,Config),
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(State),maplist(batch_summary(State,Context,ContextKey,Config),Entities,Rows),
        findall(SortKey-Row,(member(Row,Rows),batch_match(Config,Row,SortKey)),Pairs),
        keysort(Pairs,Sorted0),
@@ -527,7 +540,7 @@ valid_setting_effective(Prop,E,Records,Out) :-
 
 native_settings(Context0,Reply) :-
     settings_context(Context0,Entity,ContextKey),
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(State),settings_reply(State,Entity,ContextKey,Reply))).
 settings_reply(State,Entity,ContextKey,Reply) :-
     findall(P,(setting_key(P)),Props),
@@ -556,7 +569,7 @@ save_native_settings(Context0,Patch,Expected,Reply) :-
     dict_pairs(Patch,_,GroundPairs),must_be(ground,GroundPairs),
     findall(Key,setting_key(Key),Allowed),known_options(Patch,Allowed),
     dict_pairs(Patch,_,Pairs),maplist(setting_change(Entity),Pairs,Changes),
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(Before),check_revision(Expected,Before.revision),
        foldl(apply_change,Changes,Before.records,Raw),msort(Raw,Records),
        commit_update(Before,Records,State),settings_reply(State,Entity,ContextKey,Reply))).
@@ -568,7 +581,7 @@ setting_change(Entity,Prop-Value0,put(cyc,Entity,Prop,Value)) :-
 
 native_pair_settings(Context0,Reply) :-
     settings_context(Context0,Entity,ContextKey),
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(State),pair_settings_reply(State,Entity,ContextKey,Reply))).
 pair_settings_reply(State,Entity,ContextKey,Reply) :-
     pair_setting(State.records,Entity,nars,Nars),pair_setting(State.records,Entity,opencog,OC),
@@ -607,7 +620,7 @@ save_native_pair(Context0,Family0,Pair,Expected,Replace,Reply) :-
     must_be(boolean,Replace),
     (Pair==null->Change=remove(Family,Entity,null)
     ;typed_pair(Family,Pair,Record),Change=put(Family,Entity,null,Record)),
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(Before),check_revision(Expected,Before.revision),
        pair_setting(Before.records,Entity,Family,Existing),
        require((Existing.replacementRequired==false;Replace==true),
@@ -619,7 +632,7 @@ assertion_annotation_settings(Entity0,Context0,Reply) :-
     assertion_editor_entity(Entity0,Entity),context(Context0,Context,ContextKey),
     with_mutex(openworld_store,
       (source_generation(Generation),editor_source(Entity,SourceData,Identity))),
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(State),assertion_editor_reply(State,Entity,Context,ContextKey,
         Generation,SourceData,Identity,Reply))).
 assertion_editor_entity(Input,Entity) :-
@@ -673,7 +686,7 @@ save_assertion_annotations(Entity0,Context0,Patch,Expected,Reply) :-
        require(Generation==Expected.generation,generation_conflict(Expected.generation,Generation)),
        editor_source(Entity,SourceData,Identity),
        require(Identity==ExpectedIdentity,native_assertion_identity_conflict),
-       with_mutex(powder_native_annotations,
+       native_access(
          (synchronize(Before),check_revision(Expected.revision,Before.revision),
           foldl(apply_change,Changes,Before.records,Raw),msort(Raw,Records),
           commit_update(Before,Records,After),
@@ -682,7 +695,7 @@ save_assertion_annotations(Entity0,Context0,Patch,Expected,Reply) :-
 assertion_interpretation(Entity0,Context0,Reply) :-
     native_entity(Entity0,Entity,Key),context(Context0,Context,ContextKey),
     single_source_snapshot(Entity,SourceData,Generation),
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(State),
        interpretation(State,Context,ContextKey,Generation,Entity-Key-SourceData,Reply))).
 
@@ -693,7 +706,7 @@ assertion_interpretations(Inputs,Context0,Reply) :-
     maplist(entity_pair,Inputs,Entities0),list_to_set(Entities0,Entities),
     with_mutex(openworld_store,
       (source_generation(Generation),maplist(capture_source,Entities,Sources))),
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(State),
        maplist(interpretation(State,Context,ContextKey,Generation),Sources,Items),
        Reply=_{revision:State.revision,generation:Generation,context:ContextKey,items:Items})).
@@ -874,12 +887,59 @@ unavailable_prior_family(Family,Status,
       notation:null,notationFormat:null}).
 
 export_native_state(State) :-
-    with_mutex(powder_native_annotations,synchronize(State)),validate_state(State).
+    native_access(synchronize(State)),validate_state(State).
+
+% Copy-only readers deliberately bypass admission: they are safe under a lease.
+export_native_snapshot(State) :-
+    with_mutex(powder_native_annotations,
+      (native_generations(Before),memory_snapshot(Local,Digest,Bases,Memory),
+       configured_storage_file(File),read_snapshot_disk(File,Disk,Exists),
+       select_snapshot(Bases,Local,Digest,Memory,Disk,Exists,State),
+       validate_state(State),native_generations(After),
+       require(Before==After,native_tva_concurrent_repl_change))).
+restored_native_snapshot(State) :-
+    with_mutex(powder_native_annotations,
+      (memory_snapshot(_,_,_,State),validate_state(State))).
+memory_snapshot(Local,Digest,Bases,Memory) :-
+    native_generations(Before),collect_local(Before,Local,Digest),
+    findall(baseline(R,S,D,M),baseline(R,S,D,M),Bases),
+    must_be(ground,Bases),
+    (Bases=[]->(Local==[]->Seq=0;Seq=1),state(Local,Seq,Memory)
+    ;Bases=[baseline(Revision,Sequence,BaseDigest,Mode)]->
+       must_be(nonneg,Sequence),must_be(atom,Revision),must_be(atom,BaseDigest),
+       require(memberchk(Mode,[durable,imported]),domain_error(native_baseline_mode,Mode)),
+       (Digest==BaseDigest->
+         state(Local,Sequence,Memory),require(Memory.revision==Revision,native_tva_invalid_revision)
+       ;Next is Sequence+1,state(Local,Next,Memory))
+    ;throw(error(native_tva_baseline_conflict,kb_native_annotations))),
+    native_generations(After),require(Before==After,native_tva_concurrent_repl_change).
+read_snapshot_disk(File,State,Exists) :-
+    atom_concat(File,'.lock',LockFile),
+    (exists_file(LockFile)->
+       catch(open(LockFile,read,Lock,[type(binary),lock(read),wait(false),close_on_abort(true)]),
+         error(permission_error(lock,source_sink,_),_),throw(error(native_tva_busy,kb_native_annotations))),
+       setup_call_cleanup(true,read_state(File,State,Exists),close(Lock))
+    ;read_state(File,State,Exists),
+     require(\+exists_file(LockFile),native_tva_snapshot_race)).
+select_snapshot([],Local,_,Memory,Disk,Exists,State) :-
+    (Local==[]->State=Disk
+    ;Exists==true,Disk.records\==[]->
+       throw(error(native_tva_unloaded_store_conflict,kb_native_annotations))
+    ;Next is Disk.sequence+1,state(Memory.records,Next,State)).
+select_snapshot([baseline(Base,Seq,BaseDigest,Mode)],_,Digest,Memory,Disk,Exists,State) :-
+    (Digest==BaseDigest->
+       (Exists==false,Mode==imported->State=Memory
+       ;Exists==false,Seq>0->throw(error(native_tva_storage_missing,kb_native_annotations))
+       ;State=Disk)
+    ;require((Disk.revision==Base;(Exists==false,Mode==imported)),
+       native_tva_persistence_conflict(Base,Disk.revision)),
+     State=Memory).
+
 import_native_state(State) :-
     validate_state(State),
-    with_mutex(powder_native_annotations,(install_memory(State,imported),reset_transient)).
+    restore_access((install_memory(State,imported),clear_transient)).
 persist_native_state(Reply) :-
-    with_mutex(powder_native_annotations,
+    native_access(
       (synchronize(State),storage_file(File),
        storage_lock(File,
          (read_state(File,Disk,Exists),

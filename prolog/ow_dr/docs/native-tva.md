@@ -708,15 +708,16 @@ clauses, or KB generations are changed.
 
 Facade APIs observe current predicate generations and a validated snapshot,
 including direct qualified `assertz/retract/retractall` changes to the exact
-three predicates. Such REPL edits are persisted on the **next facade call** or
+three predicates. Such REPL edits are persisted on the **next synchronizing facade call** or
 `persist_native_state/1`; they are not immediately durable at the raw
 `assertz/1` return and have no implicit at-halt flusher. A crash before flushing
 can lose them. Raw reads of the predicates do not automatically open the
 sidecar: attach using `native_status/1` first.
 
 **Concurrent applications must use the revision-safe write APIs.** Trusted
-REPL edits should be serialized, e.g. under `with_mutex(powder_native_annotations,
-...)`, and flushed before exit. The module detects snapshot drift but cannot
+REPL edits should be serialized under `kb_activity:with_application/1` and then
+`with_mutex(powder_native_annotations, ...)`, and flushed before exit. The
+module detects snapshot drift but cannot
 make a naked assertion racing a disk rename transactional. It never promises
 that unsupported race is safe. REPL records invalidating the data-only contract
 must be repaired by the trusted REPL before a facade API can continue.
@@ -731,6 +732,8 @@ input and resource limits are typed errors for the host to translate.
 
 ```prolog
 export_native_state(State).     % synchronize; ground completed records only
+export_native_snapshot(State).  % COPY ONLY: memory/disk authoritative selection
+restored_native_snapshot(State). % COPY ONLY: memory integrity, no disk/env reads
 import_native_state(State).     % trusted isolated-builder MEMORY replacement
 reset_transient.                % cache/path attachment only; retains records
 persist_native_state(Status).   % explicit flush
@@ -744,8 +747,61 @@ the captured baseline imported; dynamic native facts survive. If the sidecar is
 absent, that snapshot remains active (`snapshot_only`), not emptied. An existing
 sidecar is authoritative when the imported/local snapshot has no unsynced
 edits. Explicit persistence can recreate a missing sidecar under its lock.
-The host's saved-state bridge should export and import these records rather
-than serializing native handles. A restore does not implicitly seed defaults.
+The host's saved-state bridge must capture with `export_native_snapshot/1`,
+import into its isolated builder, and check `restored_native_snapshot/1` against
+the captured state. Do not use the older synchronizing `export_native_state/1`
+for copy-only save capture. A restore does not implicitly seed defaults.
+
+### Copy-only snapshot and promotion contract
+
+Both new snapshot APIs return the same validated, ground schema-1 state above,
+with no clause references, threads or handles. They do not replace facts,
+baseline, cache or path bindings; create no files, directories or lock files;
+and never initialize defaults, persist REPL edits or adopt sidecar records.
+`export_native_snapshot/1` selects as follows:
+
+* Cold empty memory: return the validated sidecar (or empty state if absent),
+  without attaching it to the live process.
+* Clean established memory: return a newer authoritative sidecar as a copy.
+  A missing imported sidecar retains the imported state; a missing established
+  durable sidecar remains `native_tva_storage_missing`.
+* Dirty REPL memory with unchanged disk, or an imported state with absent disk:
+  copy the current records with the same next sequence/hash a successful flush
+  would use. This sequence is **not allocated or persisted** by snapshotting.
+* Dirty local memory and changed disk: `native_tva_persistence_conflict(Base,Disk)`.
+  Nonempty unbased local and disk data: `native_tva_unloaded_store_conflict`.
+  Neither side is discarded, merged, adopted or flushed.
+
+Existing stable lock files are opened read-only with a nonblocking shared native
+lock; an active writer produces `native_tva_busy`. With no lock file, only the
+atomically replaced, fully validated data file is read. Appearance of a writer's
+lock during that read produces `native_tva_snapshot_race`, rather than creating
+an absent lock. Predicate generation changes across capture produce
+`native_tva_concurrent_repl_change`. Corrupt files/records and conflicting
+baselines are explicit errors. A failed capture leaves all reader-owned state
+unchanged.
+
+`restored_native_snapshot/1` inspects **memory only**, ignoring even corrupt or
+differently configured sidecars. It validates current facts and clean baseline
+integrity; dirty memory gets a content-addressed candidate next sequence as
+above. This makes comparison with the expected builder snapshot meaningful
+without importing external state during integrity verification.
+
+Every synchronizing/mutating native facade now enters
+`kb_activity:with_application/1` **before** its native mutex, so an admitted
+operation blocks promotion drain and an exclusive lease rejects new operations.
+Snapshot readers remain usable under a lease because they cannot mutate native
+state. Only trusted import/reset/restore paths permit the current
+`kb_activity:owns_admission_lease/0` owner to mutate while promoting; other
+threads are still rejected. A naked REPL `assertz/retract` bypasses this admission
+protocol: trusted callers must use the gate and mutex, not assume arbitrary
+unguarded Prolog writes can be excluded.
+
+Snapshot/admission extension validation: **97 native PL-Unit tests passed**,
+including 13 new copy-only/admission fixtures, real cross-process disk drift and
+locking, failed-capture preservation, in-flight promotion drain, lease-owner
+restoration, and a detached qsave roundtrip using the new APIs. Tests use only
+isolated storage; no live facade calls, state writes or service reloads occurred.
 
 ## Focused validation
 
