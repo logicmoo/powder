@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CATALOG_GROUPS, catalogParameters, catalogCoverageText, catalogAssertionHref, catalogJobText, catalogContextHref } from '../web/catalog-index.js';
+import { CATALOG_GROUPS, catalogParameters, catalogCoverageText, catalogAssertionHref, catalogJobText, catalogContextHref, catalogTypeProofHref } from '../web/catalog-index.js';
 import { launchChromium } from './chromium.mjs';
 import { APP_BASE } from '../web/paths.js';
 
@@ -49,6 +49,15 @@ test('catalog MT navigation includes unloaded context assertions with the select
   assert.equal(params.get('term'), 'mt:(x_Fn x_A)');
   assert.equal(params.get('scope'), 'unloaded');
   assert.equal(params.get('facet'), 'context');
+});
+test('type declarations link to the correct unloaded assertion occurrence', () => {
+  const proof = { source: 'KBs/ontology #1.krf', id: 'a1234' };
+  const url = new URL(catalogTypeProofHref(proof, 'nat:(x_Fn x_A)'), 'http://localhost/');
+  assert.match(url.hash, /^#\/catalog-assertion/u);
+  const params = new URLSearchParams(url.hash.split('?')[1]);
+  assert.equal(params.get('source'), proof.source);
+  assert.equal(params.get('id'), proof.id);
+  assert.equal(params.get('term'), 'nat:(x_Fn x_A)');
 });
 
 test('published all-file catalog serves real unloaded evidence without changing the live generation', {

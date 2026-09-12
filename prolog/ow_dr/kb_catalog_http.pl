@@ -9,6 +9,7 @@
 :- http_handler(openworld_dr(api/catalog/term),catalog_endpoint(term),[method(get)]).
 :- http_handler(openworld_dr(api/catalog/files),catalog_endpoint(files),[method(get)]).
 :- http_handler(openworld_dr(api/catalog/assertion),catalog_endpoint(assertion),[method(get)]).
+:- http_handler(openworld_dr(api/catalog/types),catalog_endpoint(types),[method(get)]).
 :- http_handler(openworld_dr(api/catalog/cancel),catalog_endpoint(cancel),[method(post)]).
 
 catalog_endpoint(Name,Request) :-
@@ -24,6 +25,9 @@ catalog_error(error(catalog_directory_pending,_)) :- !,
 catalog_error(error(catalog_search_pending,_)) :- !,
     reply_json_dict(json{error:json{code:catalog_search_pending,
       message:"The compact search view is pending; exact-term browsing remains available."}},[status(503)]).
+catalog_error(error(catalog_types_pending,_)) :- !,
+    reply_json_dict(json{error:json{code:catalog_types_pending,
+      message:"Source-located type support is pending for this query directory."}},[status(503)]).
 catalog_error(error(catalog_directory_stale,_)) :- !,
     reply_json_dict(json{error:json{code:catalog_directory_stale,
       message:"The term directory needs refreshing for the current query revision."}},[status(409)]).
@@ -46,6 +50,10 @@ catalog_action(term,Request,Reply) :-
       limit(Limit,[integer,default(25)])]),
     catalog_query_term(json{term:Term,scope:Scope,facet:Facet,source:Source,mt:Mt,
       offset:Offset,limit:Limit},Reply).
+catalog_action(types,Request,Reply) :-
+    http_parameters(Request,[term(Term,[atom]),offset(Offset,[integer,default(0)]),
+      limit(Limit,[integer,default(25)])]),
+    catalog_query_types(json{term:Term,offset:Offset,limit:Limit},Reply).
 catalog_action(files,Request,Reply) :-
     http_parameters(Request,[term(Term,[atom]),scope(Scope,[atom,default(all)]),
       facet(Facet,[atom,default(semantic)]),offset(Offset,[integer,default(0)]),

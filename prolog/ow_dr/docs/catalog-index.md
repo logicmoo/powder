@@ -158,6 +158,35 @@ are persisted in this catalog.
 
 ## Definition evidence and limits
 
+The lazy **Recorded type support** disclosure in Definitional Info shows each
+positive type declaration with its original source, assertion ID, line and MT.
+It links the declaration to its unloaded catalog assertion and renders type,
+root and MT symbols through the shared expression renderer. Classification
+supports show the original source/MT at every `genls` step. Paths are
+representative shortest paths, **not exhaustive alternative proofs or MT
+entailment**; source identity is never replaced with the occurrence file's identity.
+An empty result stays unknown rather than manufacturing an Individual type.
+
+`GET /api/catalog/types?term=x_p&offset=0&limit=25` paginates declarations.
+Its supports are query-revision-bound, hash-bucketed metadata in the same immutable
+directory, derived from the validated taxonomy checkpoint. They neither copy
+sentences nor invoke the monolithic model during a request. Changed/failed/removed
+source evidence retracts during the normal shared update; native unload does not
+delete it. The initial declaration is assertion-linked; hierarchy steps use
+authorized original-source excerpts rather than guessing an assertion term key.
+
+New publication includes these support records. Upgrade only an existing
+directory with:
+
+```powershell
+swipl --stack-limit=8g prolog\ow_dr\index_catalog.pl -- --type-directory
+```
+
+This reads the current taxonomy checkpoint once, preserves query/search/bucket/
+posting identities, holds the existing directory lock, and switches the small
+manifest only after the new support directory is complete. Missing support is
+explicitly pending; it does not disable basic exact-term browsing.
+
 Known schema target slots reuse `declaration_target/4`. Explicit positive `isa`
 assertions define the selected **subject's type**, including whole NAT subjects.
 Nested implication antecedents/consequents, negative assertions and ordinary

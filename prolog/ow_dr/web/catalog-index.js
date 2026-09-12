@@ -37,6 +37,9 @@ export function catalogJobText(label, job = {}) {
 export function catalogContextHref(mt, scope = 'all') {
   return routeHref('definitions', { term: mt, facet: 'context', scope });
 }
+export function catalogTypeProofHref(proof, term) {
+  return routeHref('catalog-assertion', { term, source: proof.source, id: proof.id });
+}
 
 function filters(host, route, values, fields) {
   const { element: el } = host;
@@ -115,8 +118,47 @@ export async function catalogSearchPage(host, route, signal) {
         el('td', {}, link(`Definitional Info (${item.definitions})`, 'definitions', { term: item.term, scope: params.scope }),
           el('div', {}, link('All occurrences', 'definitions', { term: item.term, facet: 'semantic', scope: params.scope })))))))));
   page.append(pagination(data, route),
-    el('p', { className: 'muted' }, 'Categories retain multiple memberships and unknowns. Lexical words identifies the exact “-TheWord” naming convention, not an inferred ontology type. Recorded types use catalog-wide evidence, even when occurrences are filtered to loaded files. Detailed type-support links are pending. Type declarations and static definitions do not establish an executable implementation.'));
+    el('p', { className: 'muted' }, 'Categories retain multiple memberships and unknowns. Lexical words identifies the exact “-TheWord” naming convention, not an inferred ontology type. Recorded type-support links are available in Definitional Info and use catalog-wide evidence, even when occurrences are filtered to loaded files. Type declarations and static definitions do not establish an executable implementation.'));
   return page;
+}
+
+function typeSupportPanel(host, term, signal) {
+  const { element: el } = host;
+  const content = el('div');
+  let requested = false;
+  const load = async offset => {
+    content.replaceChildren(el('p', { className: 'muted', role: 'status' }, 'Reading recorded type support…'));
+    try {
+      const data = await host.api('catalog/types', { term, offset, limit: 25 }, { signal });
+      if (signal.aborted) return;
+      const provenance = (proof, declaration = false) => el('span', {},
+        host.file(proof.source, proof.line), ' · ',
+        declaration ? el('a', { href: catalogTypeProofHref(proof, term) }, proof.id) : el('code', {}, proof.id),
+        ' · ', renderExpression(proof.microtheoryExpression, { inline: true }),
+        ' ', el('a', { href: catalogContextHref(proof.microtheory) }, 'MT assertions'));
+      content.replaceChildren(
+        el('p', { className: 'muted' }, `${data.total} positive type declarations. Classification paths are representative catalog-wide evidence, not MT entailment or executable implementations.`),
+        data.items.length ? el('ul', {}, data.items.map(item => el('li', {},
+          renderExpression(item.expression, { inline: true }), ' — ', provenance(item.declaration, true),
+          item.categories.length > 0 && el('ul', {}, item.categories.map(category => el('li', {},
+            `${category.group} via `, renderExpression(category.expression, { inline: true }),
+            category.steps.length > 0 && el('ol', {}, category.steps.map(step => el('li', {}, provenance(step))))))))))
+          : el('p', { className: 'empty-state' }, 'No positive type declaration is recorded in this snapshot. Positional categories and naming conventions are not substituted for type evidence.'),
+        el('div', { className: 'filter-bar', 'aria-label': 'Type evidence pagination' },
+          el('button', { type: 'button', className: 'button secondary', disabled: offset === 0,
+            onclick: () => load(Math.max(0, offset - 25)) }, 'Previous type evidence'),
+          el('button', { type: 'button', className: 'button secondary', disabled: offset + 25 >= data.total,
+            onclick: () => load(offset + 25) }, 'Next type evidence')));
+    } catch (error) {
+      if (signal.aborted) return;
+      content.replaceChildren(el('p', { className: 'statistics-error', role: 'alert' }, error.message),
+        el('button', { type: 'button', className: 'button secondary', onclick: () => load(offset) }, 'Retry type evidence'));
+    }
+  };
+  const panel = el('details', { ontoggle: () => {
+    if (panel.open && !requested) { requested = true; void load(0); }
+  } }, el('summary', {}, 'Recorded type support'), content);
+  return panel;
 }
 
 function catalogCards(host, items, term, { detail = false, offset = 0, scope = 'all' } = {}) {
@@ -169,6 +211,7 @@ export async function catalogTermPage(host, route, signal) {
       ['facet', 'Evidence', [['definition', 'Definitional Info'], ['semantic', 'All semantic occurrences'], ['context', 'Context membership']]]]),
     coveragePanel(host, data),
     el('p', {}, `${data.total} distinct assertions; ${data.occurrences} matching positions. Counts include all filtered pages.`));
+  page.append(typeSupportPanel(host, data.term, signal));
   if (params.source || params.mt) page.append(link('Clear source and MT filters', route.name,
     { ...Object.fromEntries(route.params), source: '', mt: '', offset: 0 }, 'text-button'));
   if (data.files.length) page.append(el('details', {}, el('summary', {}, `Original files (${data.files.length})`),

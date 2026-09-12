@@ -1,8 +1,9 @@
 :- module(kb_catalog_directory,
-    [build_catalog_directory/1,build_from_model/3,directory_status/1,
+    [build_catalog_directory/1,build_from_model/3,build_from_model/4,directory_status/1,
      lookup_term/3,lookup_terms/3,lookup_source/3,request_cancel/2]).
 :- use_module(kb_catalog_index,[]).
 :- use_module(kb_catalog_search,[]).
+:- use_module(kb_catalog_types,[]).
 :- use_module(kb_paths).
 :- use_module(kb_cache,[]).
 :- use_module(library(assoc)).
@@ -30,13 +31,15 @@ build_catalog_directory(Report) :-
     setup_call_cleanup(begin_progress(Manifest),
       catch((progress(reading_projection,0,null),
              kb_catalog_index:read_data(Query,catalog_query(Model)),
-             build_locked(Query,Manifest,Model,Report)),
+             build_locked(Query,Manifest,Model,none,Report)),
         Error,(failed_progress(Error),throw(Error))),
       kb_cache:release_lock(Lock)).
 build_from_model(Query,Model,Report) :-
+    build_from_model(Query,Model,none,Report).
+build_from_model(Query,Model,Schema,Report) :-
     paths(Query,Manifest),acquire(Manifest,Lock),
     setup_call_cleanup(begin_progress(Manifest),
-      catch(build_locked(Query,Manifest,Model,Report),Error,
+      catch(build_locked(Query,Manifest,Model,Schema,Report),Error,
         (failed_progress(Error),throw(Error))),
       kb_cache:release_lock(Lock)).
 acquire(Manifest,Lock) :-
@@ -73,7 +76,7 @@ request_cancel(Input,Reply) :-
     atom_concat(Progress,'.cancel',Cancel),
     kb_catalog_index:atomic_data(Cancel,catalog_cancellation(Run)),
     Reply=json{state:cancellation_requested,phase:directory,runId:Run}.
-build_locked(Query,Manifest,Model,Report) :-
+build_locked(Query,Manifest,Model,Schema,Report) :-
     statistics(walltime,[Start,_]),kb_catalog_index:file_stamp(Query,Stamp),
     crypto_file_hash(Query,InputHash,[algorithm(sha256),encoding(octet)]),
     file_directory_name(Manifest,Parent),uuid(Run),atom_concat('lookup-',Run,Name),
@@ -101,7 +104,8 @@ build_locked(Query,Manifest,Model,Report) :-
         (get_dict(definitionSchema,Model,Definition)->Typed=Base.put(definitionSchema,Definition);Typed=Base),
         progress(writing_search,Count,Count),
         kb_catalog_search:write_model_search(Directory,Model,Typed,Search),
-        Data=Typed.put(search,Search),
+        kb_catalog_types:write_type_projection(Directory,Typed,Schema,Types),
+        Data=Typed.put(json{search:Search,types:Types}),
        progress(publishing,Count,Count),
        write_record(Manifest,catalog_directory(Data)),
        nb_setarg(1,Published,true),
@@ -181,8 +185,9 @@ directory_status(Reply) :-
           current_catalog_revision(Data.revision)->
           Available=true,State=ready;Available=false,State=stale),
        kb_catalog_search:search_status(Data,Search),
+       kb_catalog_types:type_status(Data,Types),
        Reply=json{available:Available,state:State,terms:Data.termCount,files:Data.fileCount,job:Job,
-         search:Search,
+         search:Search,types:Types,
          buckets:Data.buckets,revision:Data.revision,taxonomy:Data.taxonomy,
          coverage:Data.coverage,providerCoverage:Data.providerCoverage}
     ;Reply=json{available:false,state:pending,job:Job}).

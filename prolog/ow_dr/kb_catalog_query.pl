@@ -1,12 +1,13 @@
 :- module(kb_catalog_query,
     [build_query_catalog/1,build_query_catalog/2,catalog_query_status/1,catalog_query_search/2,
      catalog_query_term/2,catalog_query_assertion/4,source_pack_snapshot/1,catalog_query_files/2,
-     maintain_query_catalog/3]).
+     maintain_query_catalog/3,catalog_query_types/2]).
 :- use_module(kb_catalog_index,[]).
 :- use_module(kb_catalog_schema).
 :- use_module(kb_catalog_providers,[source_provider_extensions/4]).
 :- use_module(kb_catalog_directory,[]).
 :- use_module(kb_catalog_search,[]).
+:- use_module(kb_catalog_types,[]).
 :- use_module(kb_catalog,[authorize_sources/2,directory_manifest/3]).
 :- use_module(kb_cache,[]).
 :- use_module(kb_paths).
@@ -87,7 +88,7 @@ build_query_locked(File,Providers,Report) :-
       taxonomy:SchemaHash,definitionSchema:DefinitionHash,coverage:Catalog.coverage,verifiedAt:Catalog.verifiedAt,
       expected:Catalog.expected,terms:ByTerm,postings:Terms,ranked:Order,files:ByFile},
     kb_catalog_index:atomic_data(File,catalog_query(Projection)),
-    kb_catalog_directory:build_from_model(File,Projection,_),
+    kb_catalog_directory:build_from_model(File,Projection,verified(Schema),_),
     statistics(walltime,[End,_]),Seconds is (End-Start)/1000,
     length(Entries,N),Report=json{terms:N,coverage:Catalog.coverage,revision:Revision,
       providerCoverage:ProviderCoverage,seconds:Seconds}.
@@ -392,6 +393,25 @@ search_json(Model,Active,Scope,Key,entry(_,StoredGroups,Types,Roles,_,_),Row) :-
 key_expression(Key,Expression) :-
     (atom_concat('nat:',_,Key)->non_atomic_from_key(Key,Term),annotated_context_ast(Term,Expression)
     ;Expression=json{type:symbol,value:Key}).
+
+catalog_query_types(Input,Reply) :-
+    options(Input,Options),canonical_key(Options.term,Key),
+    kb_catalog_directory:manifest(Header),
+    kb_catalog_types:type_page(Header,Key,Options.offset,Options.limit,Data),
+    maplist(type_support_json,Data.items,Items),active(Generation,_),
+    Reply=Data.put(json{term:Key,items:Items,generation:Generation,revision:Header.revision,
+      coverage:Header.coverage,verifiedAt:Header.verifiedAt,
+      freshness:verified_snapshot,implementation:unknown}).
+type_support_json(Item,Reply) :-
+    key_expression(Item.type,Expression),maplist(category_support_json,Item.categories,Categories),
+    type_proof_json(Item.declaration,Declaration),
+    Reply=Item.put(json{expression:Expression,categories:Categories,declaration:Declaration}).
+category_support_json(Item,Reply) :-
+    key_expression(Item.root,Expression),maplist(type_proof_json,Item.steps,Steps),
+    Reply=Item.put(json{expression:Expression,steps:Steps}).
+type_proof_json(Item,Reply) :-
+    context_from_key(Item.microtheory,Context),annotated_context_ast(Context,Expression),
+    Reply=Item.put(microtheoryExpression,Expression).
 
 catalog_query_files(Input,Reply) :-
     options(Input,Options),canonical_key(Options.term,Key),
