@@ -137,6 +137,13 @@ or proof of absence. Complete fast cold lookup remains a release prerequisite
 under active repair/validation. Do not extrapolate complete vocabulary, global
 uniqueness or executable support from a partial index.
 
+**Coordinator-verified readback (2026-09-12):** a cold actual HTTP lookup of
+unloaded `x_diplomaticState` returned 6 definitions from 1 file in **3966 ms**,
+without a KB change. This successful sample does not establish complete
+all-file coverage or general
+cold/warm latency. The measurement did not supply source filenames or
+assertion IDs, so this reference does not invent them.
+
 Additional routes in `kb_server.pl`:
 
 | Method | Relative route | Actual operation |

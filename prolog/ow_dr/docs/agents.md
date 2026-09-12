@@ -11,7 +11,7 @@ an agent, configure a model, or grant tool permissions. See the verified
 | Area | Status |
 |---|---|
 | Loaded-KB browsing, assertion/source/MT inspection, bounded executable queries and proofs | Implemented; see `kb_server.pl`, `kb_store.pl`, `kb_runtime.pl`. |
-| All-file catalog search, definitions and occurrences | Routes and index machinery exist. Complete, fast cold lookup is a prerequisite still being repaired/validated; endpoint existence is not evidence of complete coverage. |
+| All-file catalog search, definitions and occurrences | Routes/index machinery exist; one coordinator-reported cold HTTP lookup succeeded (below). Complete, fast corpus-wide coverage remains a validation prerequisite. |
 | SourcePack composition, resolution and loading | Implemented application operations; static provider evidence does not prove executable behavior. |
 | Native annotation inspection and revision-checked editing | Implemented, independently of general KB assertion editing and measured rule utility. |
 | Operational task pools, source editor, checkpoints and debug console | Implemented application facilities, not an agent permission grant. Debug is **never a KEE tool**. |
@@ -30,6 +30,12 @@ are durable, worker contexts can be reused, and external fallback is possible.
 No KB filename, ontology symbol inventory or language capability is inferred
 here. Find and cite actual indexed assertions before claiming that knowledge
 exists. Retain IDs, source locations, MTs, revisions and coverage qualifications.
+
+**Reported readback, 2026-09-12:** the coordinator verified a cold HTTP lookup
+of unloaded `x_diplomaticState`: 6 definitions from 1 file in **3966 ms**, with
+no KB change. This is one measured lookup, not proof of complete corpus coverage
+or general symbolic language ability. No source filename or assertion IDs were
+provided with that measurement; none are invented here.
 
 ## Two distinct agents — planned
 
