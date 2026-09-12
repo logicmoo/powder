@@ -51,6 +51,7 @@
 :- http_handler(openworld_dr(api/tva/settings), endpoint(tva_settings), [method(get)]).
 :- http_handler(openworld_dr(api/tva/settings/save), endpoint(tva_settings_save), [method(post)]).
 :- http_handler(openworld_dr(api/tva/initialize), endpoint(tva_initialize), [method(post)]).
+:- http_handler(openworld_dr(api/tva/reset), endpoint(tva_reset), [method(post)]).
 :- http_handler(openworld_dr(api/tva/interpretation), endpoint(tva_interpretation), [method(post)]).
 :- http_handler(openworld_dr(api/tva/interpretations), endpoint(tva_interpretations), [method(post)]).
 :- http_handler(openworld_dr(api/terms/sections), endpoint(term_sections), [method(post)]).
@@ -212,6 +213,9 @@ action(tva_settings_save,Request,Reply) :-
 action(tva_initialize,Request,Reply) :-
     native_body(Request,[revision],Body),
     kb_native_annotations:initialize_defaults(Body.revision,Result),native_generation(Result,Reply).
+action(tva_reset,Request,Reply) :-
+    native_body(Request,[revision],Body),
+    kb_native_annotations:reset_global_defaults(Body.revision,Result),native_generation(Result,Reply).
 action(tva_interpretation,Request,Reply) :-
     native_body(Request,[entity,context],Body),
     kb_native_annotations:assertion_interpretation(Body.entity,Body.context,Reply).
@@ -271,7 +275,7 @@ action(editor_save,Request,Reply) :-
 action(reload_application,Request,Reply) :-
     body(Request,Body),
     (dict_pairs(Body,_,[])->true;throw(error(domain_error(empty_reload_request,Body),_))),
-    kb_activity:with_exclusive_reload(reload_changed_files(Reply)),
+    kb_activity:with_exclusive_reload(kb_reload:reload_changed_files(Reply)),
     (member(File,Reply.reloaded),file_base_name(File,Name),
      memberchk(Name,['kb_term_roles.pl','kb_non_atomic.pl'])->
       kb_term_roles:clear_term_role_cache;true).

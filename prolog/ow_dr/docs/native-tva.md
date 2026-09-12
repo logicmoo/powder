@@ -279,7 +279,8 @@ cyc_bayes_value(default,asserted_default_confidence,0.66).
 ```
 
 All other keys/overrides are retained. Existing duplicate setting keys remain
-visible conflicts, not implicitly repaired. No direction is seeded. Utility
+visible conflicts, not implicitly repaired. The subsequently approved direction
+default is `:BACKWARD`, and missing assertion strength defaults to `:DEFAULT`. Utility
 0.5 is a configured default, not an observed rate. The asserted-prior settings
 do not overwrite or supplement native-family resolution.
 
@@ -428,6 +429,35 @@ not be stored in `oc_tva/2`, overwritten with defaults, or confused with
 propositional truth. This module neither calls nor changes that telemetry store.
 
 ## Durability, conflicts, REPL, and saved states
+
+### Missing assertion strength category
+
+The global-only Cyc property `missing_assertion_strength` is initially
+`:DEFAULT`, and may be changed to `:MONOTONIC` or explicitly cleared.
+It is a category, not numerical strength, confidence, utility or native TVA.
+Only absent source `monotonicity`/`strength` and absent exact-assertion native
+`monotonicity` use it. Invalid/conflicting explicit categories remain errors.
+An agreeing native category corroborates an explicit source label; a disagreeing
+one is a conflict. MT/default native `monotonicity` records are not this policy.
+
+Interpretations retain `monotonicity` as recorded and return separate
+`effectiveMonotonicity` and `strengthCategory` with its supplier. The effective
+category selects the existing current-MT/global numeric mapping and configured
+prior confidence. Nothing is copied into assertion metadata. Negative formulas
+stay negative. Native NARS/OpenCog/Cyc record fallback is unchanged.
+
+This eighth Settings key is editable only at global scope. Initialization adds
+it only if absent; upgrading a running installation should save only this key,
+not reinitialize the other native defaults. Inline marker refresh uses the same
+interpretation result, so only inheriting assertions change color.
+
+`reset_global_defaults(ExpectedRevision,Reply)` is an explicit global-only
+reset. It restores the two native `.5/0` family records, Cyc utility `.5`,
+numeric source mappings `1/.7`, assertion-prior truth/confidences `1/.97/.66`,
+direction `:BACKWARD`, and missing category `:DEFAULT`. It does not modify any
+atom/MT override, unrelated Cyc property, source label, formula or KB selection.
+The UI's **Reset global defaults** button uses this revision-safe operation and
+reloads the saved values. It is not run implicitly when opening Settings.
 
 Default sidecar: application `.logos-state\native-tva.pl`, outside disposable
 cache trees. A **trusted process environment** override

@@ -24,6 +24,7 @@ export const TVA_SETTING_FIELDS = Object.freeze({
   default_strength: 'Default source mapping strength',
   direction: 'Direction',
   utility: 'Configured utility',
+  missing_assertion_strength: 'Missing assertion strength',
   ...ASSERTION_PRIOR_FIELDS,
 });
 const own = (value, key) => value != null && Object.hasOwn(value, key);
@@ -725,7 +726,10 @@ export function validateTVASettingsPatch(draft) {
   for (const [field, value] of Object.entries(draft)) {
     if (!own(TVA_SETTING_FIELDS, field)) throw new TypeError(`Setting is not editable: ${field}`);
     if (value === null) { patch[field] = null; continue; }
-    if (field === 'direction') {
+    if (field === 'missing_assertion_strength') {
+      if (![':DEFAULT', ':MONOTONIC'].includes(value)) throw new TypeError('Choose DEFAULT or MONOTONIC, or clear the missing-strength policy.');
+      patch[field] = value;
+    } else if (field === 'direction') {
       if (![':FORWARD', ':BACKWARD'].includes(value)) throw new TypeError('Choose Forward or Backward, or clear direction.');
       patch[field] = value;
     } else {
@@ -848,7 +852,7 @@ export function createTVASettingsController({
  */
 export function renderTVASettings({
   document: doc = globalThis.document, signal, readSettings, saveSettings,
-  listMicrotheories, microtheories, initialContext = null, onSaved, ...host
+  listMicrotheories, microtheories, initialContext = null, onSaved, resetDefaults, ...host
 } = {}) {
   const root = element(doc, 'section', 'native-tva-settings');
   root.append(element(doc, 'h2', null, 'Annotation defaults and source interpretation'),
@@ -877,11 +881,16 @@ export function renderTVASettings({
     const check = element(doc, 'input'); check.type = 'checkbox'; check.name = `tva-override-${key}`;
     const useText = element(doc, 'span');
     use.append(check, useText);
-    const input = element(doc, key === 'direction' ? 'select' : 'input');
+    const input = element(doc, ['direction', 'missing_assertion_strength'].includes(key) ? 'select' : 'input');
     input.name = `tva-setting-${key}`;
     // Wrapping the input keeps labels unique even when settings are embedded twice.
     title.append(input);
-    if (key === 'direction') {
+    if (key === 'missing_assertion_strength') {
+      for (const [value, text] of [['', 'Uninitialized — no missing-strength policy'], [':DEFAULT', 'DEFAULT'], [':MONOTONIC', 'MONOTONIC']]) {
+        const option = element(doc, 'option', null, text); option.value = value; input.append(option);
+      }
+      group.append(element(doc, 'p', 'muted', 'Global category used only when assertion strength is absent. Explicit or invalid labels are not overwritten; no source record is changed.'));
+    } else if (key === 'direction') {
       for (const [value, text] of [['', 'Uninitialized — choose a direction'], [':FORWARD', 'Forward'], [':BACKWARD', 'Backward']]) {
         const option = element(doc, 'option', null, text); option.value = value; input.append(option);
       }
@@ -900,7 +909,7 @@ export function renderTVASettings({
     const effective = element(doc, 'div', 'native-tva-setting-effective muted');
     group.append(title, holder, effective);
     (own(ASSERTION_PRIOR_FIELDS, key) ? priorFields : fields).append(group);
-    controls.set(key, { input, check, clear, effective, useText });
+    controls.set(key, { input, check, clear, effective, useText, group });
   }
   root.append(fields, priorGroup);
   const actions = element(doc, 'div', 'native-tva-settings-actions');
@@ -911,6 +920,30 @@ export function renderTVASettings({
   const feedback = element(doc, 'p', 'native-tva-settings-feedback');
   feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite');
   root.append(actions, feedback);
+  const reset = typeof resetDefaults === 'function' ? element(doc, 'button', 'button secondary', 'Reset global defaults') : null;
+  if (reset) {
+    reset.type = 'button';
+    reset.title = 'Restore the approved native global records, Backward direction, DEFAULT missing strength and configured priors. Atom and MT overrides are preserved.';
+    reset.addEventListener('click', async () => {
+      const current = settings.get();
+      if (current.saving || !current.snapshot) return;
+      let written = false;
+      root.inert = true;
+      reset.disabled = true;
+      try {
+        const reply = await resetDefaults({ revision: current.snapshot.revision }, { signal });
+        written = true;
+        settings.discard();
+        await settings.load();
+        onSaved?.(reply);
+        feedback.textContent = 'Global defaults restored. Atom/MT overrides, source assertions and the loaded KB are unchanged.';
+      } catch (error) {
+        feedback.textContent = written ? `Global defaults were saved, but refresh failed: ${error.message}` : `Global defaults were not reset: ${error.message}`;
+        feedback.setAttribute('role', 'alert');
+      } finally { root.inert = false; reset.disabled = false; }
+    });
+    actions.append(reset);
+  }
   const catalog = new Map();
   function addMt(item) {
     const key = entityKey(item.key);
@@ -937,11 +970,13 @@ export function renderTVASettings({
   const unsubscribe = settings.subscribe(state => {
     if (dead) return;
     picker.value = state.context ?? ''; picker.disabled = state.saving;
+    if (reset) { reset.hidden = state.context !== null; reset.disabled = state.saving || !state.snapshot; }
     const snapshot = state.snapshot;
     scopeIdentity.replaceChildren(element(doc, 'span', null, state.context === null ? 'Global defaults' : 'MT override: '));
     if (state.context !== null) scopeIdentity.append(reference(doc, state.context,
       snapshot?.contextExpression ?? catalog.get(state.context)?.expression, host, 'context'));
     for (const [key, control] of controls) {
+      control.group.hidden = key === 'missing_assertion_strength' && state.context !== null;
       const drafted = own(state.draft, key);
       const enabled = drafted ? state.draft[key] !== null : snapshot?.overrides?.[key] === true;
       const value = drafted ? enabled ? state.draft[key]

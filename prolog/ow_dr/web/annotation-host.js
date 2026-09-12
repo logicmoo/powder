@@ -1,4 +1,5 @@
 import { createTVAClient, createTVAInspector, renderAssertionPrior } from './native-tva.js';
+import { colorAssertionBalls } from './assertion-markers.js';
 
 /** Shared, viewport-bounded host bridge; native records and source interpretation stay separate. */
 export function createAnnotationHost({ api, presentation, reference, sourceLink, getGeneration, document: doc = globalThis.document }) {
@@ -8,7 +9,7 @@ export function createAnnotationHost({ api, presentation, reference, sourceLink,
   });
   const records = new Set();
   let revision = null, generation = null, controller, scheduled = false, epoch = 0;
-  const wanted = record => record.detail || presentation.get().fields.strength || presentation.get().fields.assertionPrior;
+  const wanted = record => record.assertion;
   const observer = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
     for (const entry of entries) {
       const record = entry.target.annotationRecord;
@@ -38,9 +39,11 @@ export function createAnnotationHost({ api, presentation, reference, sourceLink,
     if (revision === null) revision = data.revision;
     if (generation === null) generation = data.generation;
     record.mapping.replaceChildren(
+      effectiveValue(data.strengthCategory, 'Effective strength category'),
       effectiveValue(data.mappedStrength, 'Mapped source strength (display only)'),
       effectiveValue(data.direction, 'Effective assertion direction'));
     record.prior.replaceChildren(renderAssertionPrior(data, { document: doc, reference, sourceLink }));
+    if (record.data) colorAssertionBalls(record.node, [{ ...record.data, strengthCategory: data.strengthCategory }]);
     record.revision = data.revision;
     record.generation = data.generation;
     record.readContext = data.context;
@@ -92,12 +95,12 @@ export function createAnnotationHost({ api, presentation, reference, sourceLink,
       }
     }
   }
-  function attach(node, entity, { context = null, assertion = false, detail = false, signal, inline = true, visible } = {}) {
+  function attach(node, entity, { context = null, assertion = false, detail = false, signal, inline = true, visible, data } = {}) {
     const initiallyVisible = visible ?? (!observer || !assertion);
     const inspector = createTVAInspector({ client, target: entity, currentMt: context, presentation,
       document: doc, signal, reference, visible: initiallyVisible, inline });
     node.append(inspector);
-    const record = { node, entity, context, assertion, detail, inspector, visible: initiallyVisible };
+    const record = { node, entity, context, assertion, detail, inspector, visible: initiallyVisible, data };
     if (assertion) {
       record.mapping = element('div', 'assertion-field assertion-interpretation');
       record.mapping.dataset.field = 'strength';

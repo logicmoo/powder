@@ -266,7 +266,7 @@ test(import_bad_revision,[setup(fixture(F)),cleanup(dispose(F)),
 
 test(real_restart,[setup(fixture(F)),cleanup(dispose(F))]) :-
     revision(R),initialize_defaults(R,_),
-    child_goal("native_status(S),get_dict(recordCount,S,8),nars_tva(default,nars_truth_value(0.5,0.0)),oc_tva(default,stv(0.5,0.0)),cyc_bayes_value(default,utility,0.5),cyc_bayes_value(default,asserted_positive_truth,1.0),cyc_bayes_value(default,asserted_monotonic_confidence,0.97),cyc_bayes_value(default,asserted_default_confidence,0.66)",Goal),
+    child_goal("native_status(S),get_dict(recordCount,S,10),nars_tva(default,nars_truth_value(0.5,0.0)),oc_tva(default,stv(0.5,0.0)),cyc_bayes_value(default,utility,0.5),cyc_bayes_value(default,asserted_positive_truth,1.0),cyc_bayes_value(default,asserted_monotonic_confidence,0.97),cyc_bayes_value(default,asserted_default_confidence,0.66)",Goal),
     run_child(Goal,exit(0)).
 test(real_qsave_restore_without_sidecar,[setup(fixture(F)),cleanup(dispose(F))]) :-
     F=fixture(Directory,File,_),revision(R),initialize_defaults(R,_),export_native_state(State),
@@ -279,7 +279,7 @@ test(real_qsave_restore_without_sidecar,[setup(fixture(F)),cleanup(dispose(F))])
        kb_cache:write_one_line(S,(main:-saved_data(X),import_native_state(X),
          qsave_program(Save,[goal(restored),stand_alone(false),toplevel(halt)]),halt)),
        kb_cache:write_one_line(S,(restored:-
-         native_status(Status),get_dict(recordCount,Status,8),
+         native_status(Status),get_dict(recordCount,Status,10),
          nars_tva(default,nars_truth_value(0.5,0.0)),cyc_bayes_value(default,utility,0.5),
          cyc_bayes_value(default,asserted_monotonic_confidence,0.97),halt)),
        kb_cache:write_one_line(S,(:-initialization(main,main)))),close(S)),
@@ -410,7 +410,7 @@ test(direct_qsave_native_facts_survive_restore,[setup(fixture(F)),cleanup(dispos
        kb_cache:write_one_line(S,(main:-native_status(Initial),get_dict(schema,Initial,1),
          qsave_program(Save,[goal(restored),stand_alone(false),toplevel(halt)]),halt)),
        kb_cache:write_one_line(S,(restored:-
-         native_status(Status),get_dict(recordCount,Status,8),
+         native_status(Status),get_dict(recordCount,Status,10),
          get_dict(persistence,Status,snapshot_only),oc_tva(default,stv(0.5,0.0)),
          cyc_bayes_value(default,asserted_default_confidence,0.66),halt)),
        kb_cache:write_one_line(S,(:-initialization(main,main)))),close(S)),
@@ -571,8 +571,9 @@ test(asserted_prior_unknown_source_or_category_unsupported,
     assertion_interpretation(x_Term,null,Term),assertion(Term.assertionPrior.status==unsupported),
     assertion(Term.assertionPrior.reason==not_loaded_assertion),
     source_fixture([],[]),assertion_interpretation(a123,null,Unknown),
-    assertion(Unknown.assertionPrior.status==unsupported),
-    assertion(Unknown.assertionPrior.reason==unsupported_source_monotonicity).
+    assertion(Unknown.assertionPrior.status==initialized),
+    assertion(Unknown.monotonicity==[]),
+    assertion(Unknown.strengthCategory.reason==global_missing_strength).
 
 test(initialization_preserves_explicit_assertion_prior_settings,
      [setup(fixture(F)),cleanup(dispose(F))]) :-

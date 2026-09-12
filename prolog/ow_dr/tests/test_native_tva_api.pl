@@ -20,7 +20,7 @@ test(summary_reads_do_not_seed_or_change_kb,[setup(setup(F)),cleanup(cleanup(F))
     kb_native_annotations:native_status(S),assertion(S.recordCount==0).
 test(approved_defaults_persist_only_at_default,[setup(setup(F)),cleanup(cleanup(F))]) :-
     kb_server:action(tva_status,[],Before),
-    request(tva_initialize,_{revision:Before.revision},Saved),assertion(Saved.recordCount==8),
+    request(tva_initialize,_{revision:Before.revision},Saved),assertion(Saved.recordCount==10),
     request(tva_summary,_{entities:["x_A"],context:null,options:_{}},R),
     R.items=[A],assertion(A.families.opencog.effective.origin==default),
     assertion(A.families.opencog.effective.summary.strength=:=0.5),
@@ -47,4 +47,8 @@ test(unexpected_fields_do_not_become_an_editor,[setup(setup(F)),cleanup(cleanup(
     request(tva_summary,_{entities:["x_A"],context:null,options:_{},execute:"halt"},_).
 test(detail_revision_conflict_is_structured) :-
     kb_server:error_response(error(native_tva_record_revision_conflict(a,b),kb_native_annotations),409,native_record_changed).
+test(reload_gate_keeps_the_reload_module_context) :-
+    kb_reload:remember_loaded_code,
+    request(reload_application,_{},R),
+    assertion(R.count=:=0).
 :- end_tests(native_tva_api).

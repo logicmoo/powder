@@ -1,7 +1,7 @@
 :- module(kb_native_annotations,
     [nars_tva/2,oc_tva/2,cyc_bayes_value/3,
      native_status/1,native_summary/3,native_batch/4,native_detail/6,
-     native_update/3,upsert_native/6,clear_native/5,initialize_defaults/2,
+     native_update/3,upsert_native/6,clear_native/5,initialize_defaults/2,reset_global_defaults/2,
      native_settings/2,save_native_settings/4,assertion_interpretation/3,assertion_interpretations/3,
      native_entity/3,native_record_dto/2,
      export_native_state/1,import_native_state/1,persist_native_state/1,
@@ -309,11 +309,23 @@ initialize_defaults(Expected,Reply) :-
          Before.records,Base),
        foldl(initial_setting,[monotonic_strength-1.0,default_strength-0.7,
          asserted_positive_truth-1.0,asserted_monotonic_confidence-0.97,
-         asserted_default_confidence-0.66],Base,Raw),
+         asserted_default_confidence-0.66,missing_assertion_strength-':DEFAULT',direction-':BACKWARD'],Base,Raw),
        msort(Raw,Records),commit_update(Before,Records,After),state_status(After,Reply))).
 initial_setting(P-V,Before,After) :-
     (member(Fact,Before),matches_key(cyc,default,P,Fact)->After=Before
     ;After=[cyc_bayes_value(default,P,V)|Before]).
+
+reset_global_defaults(Expected,Reply) :-
+    with_mutex(powder_native_annotations,
+      (synchronize(Before),check_revision(Expected,Before.revision),
+       findall(put(cyc,default,P,V),
+         member(P-V,[utility-0.5,monotonic_strength-1.0,default_strength-0.7,
+           asserted_positive_truth-1.0,asserted_monotonic_confidence-0.97,
+           asserted_default_confidence-0.66,missing_assertion_strength-':DEFAULT',direction-':BACKWARD']),Cyc),
+       append([put(nars,default,null,nars_truth_value(0.5,0.0)),
+               put(opencog,default,null,stv(0.5,0.0))],Cyc,Changes),
+       foldl(apply_change,Changes,Before.records,Raw),msort(Raw,Records),
+       commit_update(Before,Records,After),settings_reply(After,default,null,Reply))).
 
 keys(Entity,Context,Keys) :-
     (Context==null->Candidates=[atom-Entity,default-default]
@@ -500,6 +512,9 @@ setting_key(direction).
 setting_key(asserted_positive_truth).
 setting_key(asserted_monotonic_confidence).
 setting_key(asserted_default_confidence).
+setting_key(missing_assertion_strength).
+setting_value(missing_assertion_strength,Value) :- !,
+    require(memberchk(Value,[':DEFAULT',':MONOTONIC']),domain_error(assertion_strength_category,Value)).
 setting_value(direction,Value) :- !,
     require(memberchk(Value,[':FORWARD',':BACKWARD']),domain_error(native_direction,Value)).
 setting_value(_,Value) :- unit_value(Value).
@@ -523,10 +538,15 @@ settings_reply(State,Entity,ContextKey,Reply) :-
     Reply=_{revision:State.revision,context:ContextKey,contextExpression:ContextExpression,
       global:Global,effective:Effective,overrides:Overrides}.
 setting_pair(Facts,Entity,Prop,Prop-Effective) :-
+    Prop==missing_assertion_strength,Entity\==default, !,
+    setting_pair(Facts,default,Prop,Prop-Effective).
+setting_pair(Facts,Entity,Prop,Prop-Effective) :-
     effective(Facts,Entity,null,cyc,Prop,E,Records),valid_setting_effective(Prop,E,Records,Checked),
     (Entity\==default,Checked.origin==atom->Effective=Checked.put(origin,mt)
     ;Entity==default,Checked.origin==atom->Effective=Checked.put(origin,default)
     ;Effective=Checked).
+override_pair(_Facts,Entity,Prop,Prop-Present) :-
+    Prop==missing_assertion_strength,Entity\==default, !,Present=false.
 override_pair(Facts,Entity,Prop,Prop-Present) :-
     (member(Fact,Facts),matches_key(cyc,Entity,Prop,Fact)->Present=true;Present=false).
 save_native_settings(Context0,Patch,Expected,Reply) :-
@@ -538,9 +558,11 @@ save_native_settings(Context0,Patch,Expected,Reply) :-
       (synchronize(Before),check_revision(Expected,Before.revision),
        foldl(apply_change,Changes,Before.records,Raw),msort(Raw,Records),
        commit_update(Before,Records,State),settings_reply(State,Entity,ContextKey,Reply))).
-setting_change(Entity,Prop-null,remove(cyc,Entity,Prop)) :- !.
+setting_change(Entity,Prop-null,remove(cyc,Entity,Prop)) :- !,
+    (Prop==missing_assertion_strength->require(Entity==default,domain_error(global_only_setting,Prop));true).
 setting_change(Entity,Prop-Value0,put(cyc,Entity,Prop,Value)) :-
-    (Prop==direction->text_atom(Value0,Value);Value=Value0),setting_value(Prop,Value).
+    (Prop==missing_assertion_strength->require(Entity==default,domain_error(global_only_setting,Prop));true),
+    (memberchk(Prop,[direction,missing_assertion_strength])->text_atom(Value0,Value);Value=Value0),setting_value(Prop,Value).
 
 assertion_interpretation(Entity0,Context0,Reply) :-
     native_entity(Entity0,Entity,Key),context(Context0,Context,ContextKey),
@@ -566,12 +588,18 @@ interpretation(State,Context,ContextKey,Generation,
     effective(State.records,Entity,Context,cyc,direction,E,Records),
     valid_setting_effective(direction,E,Records,NativeDirection),
     source_direction(Directions,Source,NativeDirection,Records,Direction),
-    mapped_strength(State.records,Context,Labels,Strength),
-    assertion_prior(State.records,Context,Source,Polarity,Labels,Prior),
+    strength_category(State.records,Entity,Source,Labels,Category),
+    (Category.status==initialized->text_atom(Category.summary.value,Label),EffectiveLabels=[Label];EffectiveLabels=[]),
+    mapped_strength(State.records,Context,EffectiveLabels,Strength0),
+    (Category.status==initialized->Strength=Strength0;Strength=Category.put(interpretation,display_only)),
+    assertion_prior(State.records,Context,Source,Polarity,EffectiveLabels,Prior0),
+    (Category.status\==initialized,Polarity==positive,Source\==null->
+      Prior1=Prior0.put(_{status:Category.status,reason:Category.reason});Prior1=Prior0),
+    Prior=Prior1.put(_{sourceMonotonicity:Labels,effectiveMonotonicity:EffectiveLabels,strengthCategory:Category}),
     term_ast(Entity,[],EntityExpression),context_expression(Context,ContextExpression),
     Reply=_{revision:State.revision,generation:Generation,entity:Key,context:ContextKey,
       entityExpression:EntityExpression,contextExpression:ContextExpression,
-      source:Source,monotonicity:Labels,direction:Direction,mappedStrength:Strength,
+      source:Source,monotonicity:Labels,effectiveMonotonicity:EffectiveLabels,strengthCategory:Category,direction:Direction,mappedStrength:Strength,
       assertionPrior:Prior}.
 
 single_source_snapshot(Entity,SourceData,Generation) :-
@@ -593,7 +621,7 @@ capture_source_data(Entity,SourceData) :-
       findall(source(Source,Directions,Labels,Polarity),
         (kb_store:assertion(Entity,Row),
          source_values(Row.properties,direction,Directions),
-         source_values(Row.properties,monotonicity,Labels),
+         source_strength_values(Row.properties,Labels),
          Source=_{assertionId:Entity,file:Row.source,line:Row.line},
          source_polarity(Row,Polarity)),Rows),
       (Rows=[]->SourceData=source(null,[],[],unknown)
@@ -613,6 +641,29 @@ source_values(Properties,Name,Values) :-
     must_be(list,Properties),
     findall(Value,(member(Item,Properties),must_be(dict,Item),
       Item.name==Name,text_atom(Item.value,Value)),Values).
+source_strength_values(Properties,Values) :-
+    findall(Value,(member(Item,Properties),memberchk(Item.name,[monotonicity,strength]),
+      ((atom(Item.value);string(Item.value))->text_atom(Item.value,Value);Value=Item.value)),Values).
+
+strength_category(_,_,null,_,_{status:unsupported,reason:not_loaded_assertion}) :- !.
+strength_category(Facts,Entity,Source,Labels,Category) :-
+    effective(Facts,Entity,null,cyc,monotonicity,Native,Records),
+    (Labels\=[]->
+      kb_cache:terms_digest([source_strength(Labels,Source)],Revision),
+      (Labels=[Value],memberchk(Value,[':DEFAULT',':MONOTONIC'])->
+        (Native.origin==atom,(Native.status\==initialized;Records\==[Value])->
+          Status=conflict,Summary=null,Reason=source_native_strength_conflict
+        ;Status=initialized,atom_string(Value,Text),Summary=_{renderer:native_data,kind:atom,value:Text},Reason=explicit_source)
+      ;Labels=[_]->Status=invalid,Summary=null,Reason=invalid_source_strength
+      ;Status=conflict,Summary=null,Reason=ambiguous_source_strength),
+      term_ast(Entity,[],AST),
+      Category=_{status:Status,origin:source,supplier:Entity,supplierExpression:AST,
+        summary:Summary,reason:Reason,recordRevision:Revision}
+    ;Native.origin==atom->
+      valid_setting_effective(missing_assertion_strength,Native,Records,Checked),
+      Category=Checked.put(reason,explicit_native_strength)
+    ;setting_pair(Facts,default,missing_assertion_strength,missing_assertion_strength-Global),
+     Category=Global.put(_{property:missing_assertion_strength,reason:global_missing_strength,recorded:false})).
 source_direction([],_,Native,_,Native) :- !.
 source_direction(Values,Source,Native,Records,Direction) :-
     kb_cache:terms_digest([source_direction(Values,Source,Native.recordRevision)],Revision),

@@ -6,8 +6,13 @@ const values = (item, names) => (item.properties ?? [])
 export function assertionMarker(item) {
   const truth = new Set(values(item, ['truth', 'truth_value', 'truthValue']));
   const strength = new Set(values(item, ['monotonicity', 'strength']));
-  const category = strength.has('MONOTONIC') && !strength.has('DEFAULT') ? 'MONOTONIC'
+  let category = strength.has('MONOTONIC') && !strength.has('DEFAULT') ? 'MONOTONIC'
     : strength.has('DEFAULT') && !strength.has('MONOTONIC') ? 'DEFAULT' : 'unknown or conflicting';
+  const effective = item.strengthCategory;
+  if (effective) {
+    const value = effective.status === 'initialized' ? effective.summary?.value : null;
+    category = value === ':MONOTONIC' ? 'MONOTONIC' : value === ':DEFAULT' ? 'DEFAULT' : 'unknown or conflicting';
+  }
   const originalTruth = new Set(values(item, ['cyc::original-tv', 'original-tv', 'original_tv']));
   const metta = item.dialect === 'metta' || /\.metta$/iu.test(item.source ?? '');
   const expression = item.expression;
@@ -20,7 +25,10 @@ export function assertionMarker(item) {
   const description = [
     negative ? 'Canonical negative assertion.' : falseRecord ? 'Original truth status: FALSE-DEF.' : storedFalse ? 'Stored assertion truth: FALSE.' : '',
     falseRecord && negative ? 'Original truth status: FALSE-DEF.' : '',
-    `Declared strength: ${category}.`,
+    effective?.reason === 'global_missing_strength'
+      ? `Effective strength: ${category}, from global Missing assertion strength; not stored on this assertion.`
+      : `Declared strength: ${category}.`,
+    effective && effective.status !== 'initialized' ? `Strength status: ${effective.status} (${effective.reason ?? 'unavailable'}).` : '',
     direction ? `Stored direction: ${direction}.` : '',
     rule ? 'Executable back-chaining rule (<===); direction metadata does not enable forward execution.' : '',
     'Color does not encode numeric strength, confidence, utility or TVA fallback origin.',

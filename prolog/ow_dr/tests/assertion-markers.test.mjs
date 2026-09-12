@@ -28,6 +28,13 @@ test('only canonical outer negation or compact false evidence marks a negative',
   assert.equal(assertionMarker({ source: 'KBs/a.metta', expression: app('not', app('p')) }).kind, 'unknown');
   assert.equal(assertionMarker({ properties: [{ name: 'cyc::original-tv', value: ':FALSE-DEF' }] }).kind, 'false');
 });
+test('missing-category policy colors only an initialized effective category, with negative precedence', () => {
+  const strengthCategory = { status: 'initialized', summary: { value: ':DEFAULT' }, reason: 'global_missing_strength' };
+  assert.equal(assertionMarker({ strengthCategory }).kind, 'default');
+  assert.match(assertionMarker({ strengthCategory }).description, /global Missing assertion strength/);
+  assert.equal(assertionMarker({ strengthCategory, expression: app('not', symbol('A')) }).kind, 'false');
+  assert.equal(assertionMarker({ strengthCategory: { status: 'invalid', reason: 'invalid_source_strength' } }).kind, 'unknown');
+});
 
 test('all 71 converted FALSE-DEF occurrences retain red markers from the existing read-only cache', {
   skip: !process.env.POWDER_MARKER_CACHE,

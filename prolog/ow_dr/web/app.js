@@ -59,7 +59,7 @@ function annotateCards(container, items, { detail = false, context = annotationC
     if (!item) continue;
     const ball = card.querySelector('.assertion-ball');
     if (ball && context) ball.href = routeHref('assertion', { id: item.id, mt: context });
-    annotations.attach(card, item.id, { context, assertion: true, detail, signal: state.routeController?.signal });
+    annotations.attach(card, item.id, { context, assertion: true, detail, data: item, signal: state.routeController?.signal });
   }
   return container;
 }
@@ -2008,6 +2008,7 @@ function uiSettingsPage(_route, signal) {
     signal, reference: nativeReference, sourceLink,
     readSettings: ({ context }, options) => api('tva/settings', { context }, options),
     saveSettings: (body, options) => api('tva/settings/save', {}, { ...options, method: 'POST', body }),
+    resetDefaults: (body, options) => api('tva/reset', {}, { ...options, method: 'POST', body }),
     listMicrotheories: async ({ offset, limit }, options) => {
       contexts ??= await api('microtheories', {}, options);
       return { items: contexts.items.slice(offset, offset + limit).map(item => ({ key: item.mt, expression: item.mtExpression })), total: contexts.total };
