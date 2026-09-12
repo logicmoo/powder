@@ -92,6 +92,17 @@ test(repeated_projection_reuses_validated_postings_and_taxonomy,
     catalog_query_term(json{term:x_a,facet:semantic},After),
     assertion(After.total==Before.total),assertion(After.occurrences==Before.occurrences),
     assertion(After.items=@=Before.items).
+test(definition_publication_does_not_require_provider_enrichment,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(isa aboutRelation MetaRelation)\n(arg2Isa aboutRelation Relation)\n",_),
+    compiled('b.krf',"(aboutRelation Other p)\n",_),refresh_catalog(all,_),
+    build_query_catalog(false,Report),assertion(Report.coverage.complete==true),
+    assertion(Report.providerCoverage==pending),
+    catalog_query_term(json{term:x_p},Definitions),
+    assertion(Definitions.total==1),Definitions.items=[Item],
+    assertion(Item.loaded==false),assertion(Item.positions==[[args,1]]),
+    source_pack_snapshot(Pack),assertion(Pack.status==unavailable),
+    assertion(Pack.coverage.reason==provider_enrichment_pending).
 test(readers_do_not_leave_native_file_handles,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('a.krf',"(arity p 1)\n",_),build,

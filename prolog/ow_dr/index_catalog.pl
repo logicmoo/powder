@@ -2,6 +2,12 @@
 :- use_module(kb_catalog_query).
 :- initialization(main,main).
 main(Args) :-
+    (Args=['--query','--defer-providers'];Args=['--','--query','--defer-providers']),!,
+    catch((build_query_catalog(false,Report)->true;throw(error(catalog_projection_failed,_))),
+      Error,(print_message(error,Error),halt(1))),
+    write_term(Report,[quoted(true)]),nl,
+    (Report.coverage.complete==true->halt;halt(1)).
+main(Args) :-
     (Args=['--summary'];Args=['--','--summary']),!,
     catch((rebuild_catalog_summary(Report)->true;throw(error(catalog_summary_failed,_))),
       Error,(print_message(error,Error),halt(1))),
@@ -22,4 +28,4 @@ main(Args) :-
       Error,(print_message(error,Error),halt(1))),
     write_term(Report,[quoted(true)]),nl,
     (Report.complete==true->halt;halt(1)).
-main(_) :- format(user_error,'Usage: swipl index_catalog.pl -- --all | --query | --summary~n',[]),halt(2).
+main(_) :- format(user_error,'Usage: swipl index_catalog.pl -- --all | --query [--defer-providers] | --summary~n',[]),halt(2).

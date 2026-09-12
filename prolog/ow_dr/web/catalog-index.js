@@ -49,6 +49,8 @@ function coveragePanel(host, data) {
   const coverage = data.coverage ?? data;
   return el('section', { className: 'term-occurrences', 'aria-label': 'Catalog coverage' },
     el('p', { className: coverage.complete ? 'muted' : 'statistics-error' }, catalogCoverageText(coverage)),
+    data.providerCoverage === 'pending' && el('p', { className: 'muted' },
+      'Term membership and definition browsing are available. SourcePack provider enrichment is still pending.'),
     data.verifiedAt && el('p', { className: 'muted' }, `Verified ${new Date(data.verifiedAt * 1000).toLocaleString()}. Source detail is checked again when read.`),
     coverage.issues?.length > 0 && el('details', {}, el('summary', {}, `Files needing attention (${coverage.issues.length})`),
       el('ul', {}, coverage.issues.map(issue => el('li', {}, file(issue.path), ` · ${issue.status}: ${issue.message}`)))));

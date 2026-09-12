@@ -1,5 +1,5 @@
 :- module(kb_catalog_query,
-    [build_query_catalog/1,catalog_query_status/1,catalog_query_search/2,
+    [build_query_catalog/1,build_query_catalog/2,catalog_query_status/1,catalog_query_search/2,
      catalog_query_term/2,catalog_query_assertion/4,source_pack_snapshot/1]).
 :- use_module(kb_catalog_index,[]).
 :- use_module(kb_catalog_schema).
@@ -33,18 +33,20 @@ query_file(File) :-
 query_progress(File) :-
     query_file(Query),file_directory_name(Query,Dir),
     directory_file_path(Dir,'query-progress.data',File).
-build_query_catalog(Report) :-
+build_query_catalog(Report) :- build_query_catalog(true,Report).
+build_query_catalog(Providers,Report) :-
+    must_be(boolean,Providers),
     query_file(File),atom_concat(File,'.lock',LockPath),kb_cache:try_lock(LockPath,Lock),
     (Lock==busy->throw(error(catalog_busy,_));true),
     query_progress(Progress),
     setup_call_cleanup(kb_catalog_index:begin_catalog_run(Progress,query),
-      catch((build_query_locked(File,Report)->
+      catch((build_query_locked(File,Providers,Report)->
                kb_catalog_index:write_progress(Progress,json{state:succeeded,phase:completed,
                  completed:Report.coverage.freshFiles,total:Report.coverage.expectedFiles,coverage:Report.coverage})
              ;throw(error(catalog_projection_failed,_))),
         Error,(kb_catalog_index:fail_catalog_run(Progress,Error),throw(Error))),
       kb_cache:release_lock(Lock)).
-build_query_locked(File,Report) :-
+build_query_locked(File,Providers,Report) :-
     statistics(walltime,[Start,_]),nb_setval(powder_projection_started,Start),
     kb_catalog_index:catalog_paths(CatalogFile,_),
     kb_cache:file_digest(CatalogFile,Revision),
@@ -57,7 +59,7 @@ build_query_locked(File,Report) :-
     file_directory_name(File,Dir),atomic_list_concat([Revision,'-',SchemaHash],Version),
     directory_file_path(Dir,Version,VersionDir),make_directory_path(VersionDir),
     flag(powder_projection_completed,_,0),
-    empty_assoc(Empty),foldl(project_source(Schema,VersionDir),Files,
+    empty_assoc(Empty),foldl(project_source(Schema,VersionDir,Providers),Files,
       projected(Empty,[]),projected(Terms,FilePairs)),
     maplist(classify_entry(Schema),Catalog.terms,Entries),
     maplist(entry_pair,Entries,EntryPairs),list_to_assoc(EntryPairs,ByTerm),
@@ -68,12 +70,14 @@ build_query_locked(File,Report) :-
     verify_catalog_manifest(Catalog.expected),
     (forall(member(SourceFile,Files),file_stats_current(SourceFile))->true;
       throw(error(catalog_stale(source_changed_during_projection),_))),
-    Projection=query_catalog{schema:catalog_query_v1,revision:Revision,
+    (Providers==true->ProviderCoverage=complete;ProviderCoverage=pending),
+    Projection=query_catalog{schema:catalog_query_v1,revision:Revision,providerCoverage:ProviderCoverage,
       taxonomy:SchemaHash,coverage:Catalog.coverage,verifiedAt:Catalog.verifiedAt,
       expected:Catalog.expected,terms:ByTerm,postings:Terms,ranked:Order,files:ByFile},
     kb_catalog_index:atomic_data(File,catalog_query(Projection)),
     statistics(walltime,[End,_]),Seconds is (End-Start)/1000,
-    length(Entries,N),Report=json{terms:N,coverage:Catalog.coverage,revision:Revision,seconds:Seconds}.
+    length(Entries,N),Report=json{terms:N,coverage:Catalog.coverage,revision:Revision,
+      providerCoverage:ProviderCoverage,seconds:Seconds}.
 verify_catalog_manifest(Expected) :-
     directory_manifest('KBs',_,Manifest),pairs_keys(Manifest,Paths),
     maplist(path_key,Paths,CurrentKeys0),sort(CurrentKeys0,CurrentKeys),
@@ -106,7 +110,7 @@ read_source(File,Data) :-
     kb_catalog_index:read_data(File.cache,source_catalog(Data)),
     (Data.identity==File.identity->true;throw(error(catalog_stale(File.path),_))).
 
-project_source(Schema,Directory,File,projected(Before,Files),projected(After,[Key-Info|Files])) :-
+project_source(Schema,Directory,Providers,File,projected(Before,Files),projected(After,[Key-Info|Files])) :-
     flag(powder_projection_completed,N,N),projection_progress(postings,File.path,N,null),
     read_source(File,Data),
     crypto_data_hash(File.path,Name,[algorithm(sha256),encoding(utf8)]),
@@ -115,10 +119,14 @@ project_source(Schema,Directory,File,projected(Before,Files),projected(After,[Ke
        foldl(add_projection_post,Posts,Before,After)
     ;source_views(Data,Sentences,Applications),
      write_source_postings(Path,File,Data,Sentences,Applications,Schema,Before,After,Digest)),
-    source_provider_extensions(File.path,Data,Schema,Extensions),
-    path_key(File.path,Key),Info=File.put(json{postings:Path,postingsDigest:Digest,
-      termSchema:Data.termSchema,dependencySummary:Data.dependencies,providerExtensions:Extensions}),
+    provider_info(Providers,File.path,Data,Schema,ProviderInfo),
+    path_key(File.path,Key),BaseInfo=File.put(json{postings:Path,postingsDigest:Digest,
+      termSchema:Data.termSchema,dependencySummary:Data.dependencies}),
+    Info=BaseInfo.put(ProviderInfo),
     flag(powder_projection_completed,_,N+1).
+provider_info(false,_,_,_,json{providerCoverage:pending}).
+provider_info(true,Source,Data,Schema,json{providerCoverage:complete,providerExtensions:Extensions}) :-
+    source_provider_extensions(Source,Data,Schema,Extensions).
 write_source_postings(Path,File,Data,Sentences,Applications,Schema,Before,After,Digest) :-
     kb_cache:stage_path(Path,Stage),
     setup_call_cleanup(true,
@@ -229,7 +237,9 @@ source_pack_snapshot(Snapshot) :-
              freshness:catalog_or_file_stats_changed})),
           Snapshot=source_pack_catalog{status:State,revision:Model.revision,taxonomy:Model.taxonomy,
             verifiedAt:Model.verifiedAt,coverage:Coverage,files:Model.files}
-       ;empty_source_pack_snapshot(projection_requires_refresh,Snapshot))
+       ;(get_dict(providerCoverage,Model,pending)->Reason=provider_enrichment_pending;
+         Reason=projection_requires_refresh),
+        empty_source_pack_snapshot(Reason,Snapshot))
     ;empty_source_pack_snapshot(query_projection_unavailable,Snapshot)).
 empty_source_pack_snapshot(Reason,Snapshot) :-
     empty_assoc(Files),
@@ -278,13 +288,16 @@ text_option(Dict,Key) :- get_dict(Key,Dict,Value),must_be(atom,Value).
 
 catalog_query_search(Input,Reply) :-
     options(Input,Options),model(Model),active(Generation,Active),
+    provider_coverage(Model,ProviderCoverage),
     downcase_atom(Options.q,Query),
     search_keys(Model,Options,Active,Generation,Query,Keys),
     kb_catalog_index:page(Keys,Options.offset,Options.limit,Selected,Total),
     maplist(search_key_json(Model,Active,Options.scope),Selected,Items),
     Reply=json{items:Items,total:Total,offset:Options.offset,limit:Options.limit,
       generation:Generation,coverage:Model.coverage,verifiedAt:Model.verifiedAt,
-      revision:Model.revision,scope:Options.scope}.
+      revision:Model.revision,scope:Options.scope,providerCoverage:ProviderCoverage}.
+provider_coverage(Model,Coverage) :-
+    (get_dict(providerCoverage,Model,Coverage)->true;Coverage=unknown).
 search_keys(Model,Options,_,_,'',Keys) :-
     Options.scope==all,Options.group==all,!,Keys=Model.ranked.
 search_keys(Model,Options,Active,Generation,Query,Keys) :-
@@ -320,6 +333,7 @@ key_expression(Key,Expression) :-
 
 catalog_query_term(Input,Reply) :-
     options(Input,Options),canonical_key(Options.term,Key),model(Model),active(Generation,Active),
+    provider_coverage(Model,ProviderCoverage),
     (get_assoc(Key,Model.postings,Posts)->true;Posts=[]),
     findall(Source-Rows,(member(p(Source,Offset,_,_,_,_),Posts),
       source_filter(Options,Source,Active),
@@ -339,7 +353,8 @@ catalog_query_term(Input,Reply) :-
     Reply=json{term:Key,expression:Expression,facet:Options.facet,scope:Options.scope,
       items:Items,total:Total,occurrences:Occurrences,files:Files,
       offset:Options.offset,limit:Options.limit,generation:Generation,
-      coverage:Model.coverage,verifiedAt:Model.verifiedAt,revision:Model.revision}.
+      coverage:Model.coverage,verifiedAt:Model.verifiedAt,revision:Model.revision,
+      providerCoverage:ProviderCoverage}.
 canonical_key(Input,Key) :-
     term_input(Input,Found,_),
     (atom_concat('mt:',_,Found)->context_from_key(Found,T),non_atomic_key(T,Key);Key=Found).

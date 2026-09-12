@@ -102,6 +102,20 @@ After enriching the source catalog, publish the direct-seek query projection:
 swipl --stack-limit=8g prolog\ow_dr\index_catalog.pl -- --query
 ```
 
+If SourcePack provider enrichment is unavailable, publish the same complete
+membership/definition projection independently:
+
+```powershell
+swipl --stack-limit=8g prolog\ow_dr\index_catalog.pl -- --query --defer-providers
+```
+
+This still uses the complete taxonomy, exact term/file/assertion positions and
+the same `query.data`/postings codec. It reports `providerCoverage:pending`;
+`source_pack_snapshot/1` explicitly reports `provider_enrichment_pending`, not
+SourcePack readiness. A later normal `--query` enriches that same projection,
+reusing its taxonomy and posting files. A failed enrichment leaves the readable
+membership projection in place.
+
 This builds `tmp\catalog\query.data` and versioned, immutable per-source posting
 files. Each term posting has its own validated digest and exact source/MT/ID/
 position locators. Requests seek the selected term rather than parsing entire
