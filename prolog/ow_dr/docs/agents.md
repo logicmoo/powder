@@ -23,12 +23,28 @@ data/templates, not ready agent execution.
 | Declarative workflow applications and held-out symbolic learning pipeline | **PLANNED.** |
 
 The coordinator's read-only probe and emullm owner verified 61 models, including
-`emullm/default`, and supplied the verified transport/tool
+`emullm/default` as a previous catalog example, and supplied the verified transport/tool
 [emullm provider contract](kee-tools.md#verified-emullm-provider-contract).
 This establishes provider behavior, **not an installed application integration**
 or a configuration default. No model or network call was made to write these
 documents. The loopback address is not a privacy guarantee: request/reply logs
 are durable, worker contexts can be reused, and external fallback is possible.
+
+**Initial application-agent model choice — configuration planned**
+
+The user selected the verified exact model **`gpt-5.6-sol`** at
+`http://127.0.0.1:8801/v1`. The future host must initially send that explicit
+model for this application agent. `emullm/default` is only a previously verified
+catalog example, **not the selected model**. If `gpt-5.6-sol` is unavailable,
+stop and report it; do not substitute `emullm/default`, Gemma or another GPT model.
+
+A model Refresh/picker must use the actual `/models` response and persist an
+explicit user selection in revisioned registered-agent configuration **when
+implemented**. This configuration/picker is pending, not live or applied by
+these documents. This selection does **not** change the Copilot coding model.
+No LLM request or user-data transfer was made as part of the choice. Explicit
+model selection does not remove the provider retention/context-reuse/external
+routing disclosure requirements.
 
 No KB filename, ontology symbol inventory or language capability is inferred
 here. Find and cite actual indexed assertions before claiming that knowledge

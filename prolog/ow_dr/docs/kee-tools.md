@@ -21,14 +21,23 @@ not a new KEE capability.
 | Provider surface | Verified behavior |
 |---|---|
 | Base | `http://127.0.0.1:8801/v1`; recorded evidence, not hardcoded application configuration |
-| GET `/models`, GET `/models/{model-id}` | Model listing/detail; read-only probe verified 61 models, including `emullm/default` |
+| GET `/models`, GET `/models/{model-id}` | Model listing/detail; read-only probe verified 61 models, including the previous catalog example `emullm/default` |
 | POST `/chat/completions` | OpenAI-shaped conversation request; always supply an explicit authorized `model` |
-| Model selection | `emullm/default` is valid. **Never omit `model`:** omission routes through `worker-copilot-n/percent100` |
+| Model selection | Initial user-selected application-agent model: **`gpt-5.6-sol`**, explicit. **Never omit `model`:** omission routes through `worker-copilot-n/percent100` |
 | Incoming authentication | Keyless; incoming `Authorization` is ignored. This is not application/agent authorization |
 | Caller tools | Schemas are rendered into text; worker JSON is used to synthesize `tool_calls`. The provider never executes caller tools |
 | Tool selection | `tool_choice` is ignored; strict-schema/selection hints are not enforcement |
 | Streaming | Start integration with `stream:false`. SSE is post-completion: role, one whole content/tool-call payload, finish, `[DONE]`; not incremental token generation |
 | Timing/cancellation | Relay timeout is 900 seconds. Clients need their own shorter deadline; abort is best effort and there is no public cancellation endpoint |
+
+**Model configuration is PLANNED, not live.** The user verified and selected
+exact `gpt-5.6-sol` at this provider base for the application agent. The future
+host must send that explicit initial choice. A Refresh/picker must read actual
+`/models` entries and persist explicit selection in revisioned registered-agent
+configuration when implemented. If the selected model is unavailable, fail
+clearly; never silently substitute `emullm/default`, Gemma or another GPT model.
+`emullm/default` remains a previous catalog example only. This does not alter
+the Copilot coding model; no LLM request or user data was sent for this choice.
 
 **Not private/local-only.** Durable JSONL request/reply records and worker logs
 retain payloads. Stable workers reuse contexts; a new powder conversation or
@@ -36,6 +45,8 @@ prompt snapshot does not establish fresh provider context or isolation.
 An external SNET-compatible fallback is possible after approximately 20 seconds.
 Do not promise local-only processing, ephemeral storage, erasure on Stop or
 isolation between requests.
+An explicit model field does not remove these provider-side routing/privacy
+risks; the no-substitution rule also forbids an application fallback model.
 
 The future UI must clearly disclose retention, context reuse and possible
 external routing **before export**. Only explicit Chat/Generate actions may

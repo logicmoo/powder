@@ -44,12 +44,21 @@ Do not configure endpoints, credentials, default priors or backend services.
 
 The verified provider base is `http://127.0.0.1:8801/v1`, with GET `/models`,
 GET `/models/{model-id}` and POST `/chat/completions`. This is contract evidence,
-not permission to call a URL or hardcode configuration. The host must use an
-approved route and an explicit authorized model. `emullm/default` is valid;
-**never omit `model`**, because omission routes through
+not permission to call a URL or hardcode configuration. The user's verified
+initial application-agent choice is **`gpt-5.6-sol`**. The future host must use
+that explicit authorized model through an approved route; **never omit `model`**,
+because omission routes through
 `worker-copilot-n/percent100`. Configuration names are `EMULLM_BASE_URL`,
 `EMULLM_MODEL` and proxy-side `SNET_API_KEY`; never request their secret values.
 Incoming requests are keyless and `Authorization` is ignored, not an agent grant.
+
+The model Refresh/picker and revisioned registered-agent configuration are
+**PLANNED**, not live. When implemented, use actual `/models` entries and
+persist the explicit user choice. If `gpt-5.6-sol` is unavailable, report the
+blocker; do not fall back to `emullm/default`, Gemma or another GPT model.
+`emullm/default` is only a previous verified catalog example, not the selection.
+This choice does not change the Copilot coding model and involved no LLM
+request or user-data transfer.
 
 Do not describe this provider as private/local-only. Durable JSONL
 requests/replies and worker logs retain payloads; stable workers reuse contexts;

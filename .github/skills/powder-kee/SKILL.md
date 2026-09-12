@@ -23,11 +23,20 @@ implementation from a planned requirement or a model-discovery response.
 The coordinator's read-only probe and emullm owner's inspection establish base
 `http://127.0.0.1:8801/v1`, GET `/models`, GET `/models/{model-id}` and
 POST `/chat/completions`. Always provide an explicit authorized `model`;
-`emullm/default` is valid. Omission routes through
+the user's verified initial application-agent selection is **`gpt-5.6-sol`**.
+`emullm/default` is only a previous catalog example, not the selected model.
+Omission routes through
 `worker-copilot-n/percent100`. Incoming requests are keyless and ignore
 `Authorization`; this is not host authentication or agent permission.
 Configuration names only: `EMULLM_BASE_URL`, `EMULLM_MODEL`, proxy-side
 `SNET_API_KEY`. Do not obtain or store secret values here.
+
+The model Refresh/picker and persisted revisioned registered-agent configuration
+remain **PLANNED**, not live. When implemented, populate choices from actual
+`/models` data and persist explicit user selection. If `gpt-5.6-sol` is
+unavailable, stop rather than substitute `emullm/default`, Gemma or another GPT
+model. This does not change the Copilot coding model. No LLM request or user-data
+transfer was made for this choice.
 
 The provider is **not private/local-only**: durable JSONL requests/replies and
 worker logs retain payloads, stable worker contexts are reused, and external
