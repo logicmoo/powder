@@ -7,7 +7,7 @@
 request(Action,Body,Reply) :-
     atom_json_dict(JSON,Body,[]),atom_length(JSON,Length),
     setup_call_cleanup(open_string(JSON,Stream),
-      kb_server:action(Action,[method(post),input(Stream),
+      kb_server:action(Action,[method(post),peer(ip(127,0,0,1)),input(Stream),
         content_type('application/json'),content_length(Length)],Reply),close(Stream)).
 setup(F) :- plunit_native_annotations:fixture(F).
 cleanup(F) :- plunit_native_annotations:dispose(F).
@@ -47,6 +47,18 @@ test(unexpected_fields_do_not_become_an_editor,[setup(setup(F)),cleanup(cleanup(
     request(tva_summary,_{entities:["x_A"],context:null,options:_{},execute:"halt"},_).
 test(detail_revision_conflict_is_structured) :-
     kb_server:error_response(error(native_tva_record_revision_conflict(a,b),kb_native_annotations),409,native_record_changed).
+test(typed_assertion_and_pair_routes,[setup(setup(F)),cleanup(cleanup(F))]) :-
+    plunit_native_annotations:source_fixture([],[]),
+    request(tva_assertion,_{entity:"a123",context:null},S),
+    request(tva_assertion_save,_{entity:"a123",context:null,patch:_{direction:":FORWARD"},
+      revision:S.revision,generation:S.generation,identity:S.identity},Saved),
+    assertion(Saved.effective.direction.origin==atom),
+    request(tva_pairs_save,_{context:null,family:"nars",pair:_{frequency:0,confidence:0.9},
+      revision:Saved.revision,replace:false},Pair),
+    assertion(Pair.families.nars.effective.summary.frequency==0).
+test(typed_writes_reject_nonlocal_peer,
+     [throws(error(permission_error(write,native_annotations,remote_peer),_))]) :-
+    kb_server:action(tva_pairs_save,[peer(ip(10,0,0,2))],_).
 test(reload_gate_keeps_the_reload_module_context) :-
     kb_reload:remember_loaded_code,
     request(reload_application,_{},R),

@@ -289,10 +289,11 @@ native_settings(Context, Reply).
 save_native_settings(Context, Patch, ExpectedRevision, Reply).
 ```
 
-For these two APIs only, `null` or `default` selects global settings; otherwise
+For Settings APIs, `null` or `default` selects global settings; otherwise
 the explicit context selects per-MT overrides. Allowed Patch keys are `utility`,
 `monotonic_strength`, `default_strength`, `direction`, `asserted_positive_truth`,
-`asserted_monotonic_confidence`, `asserted_default_confidence`. Numeric values
+`asserted_monotonic_confidence`, `asserted_default_confidence`, and the global-only
+`missing_assertion_strength` category (`:DEFAULT` or `:MONOTONIC`). Numeric values
 must be finite `[0,1]`; there is **no ordering constraint** between strengths
 or confidence settings.
 Directions are `:FORWARD` or `:BACKWARD` (atoms in storage; JSON strings accepted
@@ -300,8 +301,8 @@ by Settings save). A Patch value `null` clears that exact override instead of
 copying the global value. Clearing a global value removes the global setting.
 
 Reply: `{revision,context,contextExpression,global,effective,overrides}`.
-`global` and `effective` each contain the seven property keys with an
-`effective`-shaped object. `overrides` contains seven boolean presence flags
+`global` and `effective` each contain the eight property keys with an
+`effective`-shaped object. `overrides` contains eight boolean presence flags
 at the selected exact key.
 Settings origins are `mt` or `default`, including their own exact key. Existing
 bad direct-REPL values return `status:"invalid",reason:"invalid_setting_value"`,
@@ -343,22 +344,24 @@ views for a compact list after Settings changes, without an N+1 disk-read
 pattern. The singular API and native-family lookup behavior remain unchanged.
 
 Reply is `{revision,generation,entity,context,entityExpression,contextExpression,
-source,monotonicity,direction,mappedStrength,assertionPrior}`. Source is
+source,monotonicity,effectiveMonotonicity,strengthCategory,direction,mappedStrength,assertionPrior}`. Source is
 `{assertionId,file,line}` or null. Monotonicity is the unchanged list of
 original source label atoms.
 
-* One valid explicit source direction overrides MT/global defaults.
-* A native exact-assertion direction agreeing with source corroborates it;
-  the source remains the supplier. A disagreeing/ambiguous/invalid native
-  exact-assertion direction produces `source_native_direction_conflict`.
-* Duplicate source directions, even identical, are explicit conflicts.
-* An unsupported source direction is invalid, not silently inherited.
-* With no source direction, native direction follows Atom → supplied MT →
-  default; absence is genuinely uninitialized.
-* `:MONOTONIC` selects `monotonic_strength`; `:DEFAULT` selects
+* Explicit native exact-assertion **Atom overrides win source metadata**,
+  including an intentional replacement of invalid/conflicting recorded metadata.
+  Invalid or duplicate Atom overrides remain invalid/conflicting until replaced
+  or cleared; they never silently fall through.
+* Without an Atom override, recorded source direction and strength win supplied
+  MT/global values. Duplicate recorded values (even identical) are conflicts;
+  unsupported values are invalid. Source arrays remain visible and unchanged.
+* With neither Atom override nor recorded source value, the same property
+  (`direction` or `monotonicity`) resolves supplied MT → global. Missing category
+  then uses the separate global `missing_assertion_strength` policy.
+* Effective `:MONOTONIC` selects `monotonic_strength`; `:DEFAULT` selects
   `default_strength`. Each numerical setting resolves supplied MT → global
-  independently, with origin/supplier. Unknown labels are `unsupported`;
-  multiple labels are `conflict`; absent labels are `uninitialized`.
+  independently, with origin/supplier. Missing settings are uninitialized;
+  non-assertion entities have unsupported source-strength interpretation.
 
 These mappings are **display interpretation only**. Source monotonicity remains
 unchanged; numerical strength is not native TVA, utility, confidence, a rewrite
@@ -428,6 +431,147 @@ derived rule-usefulness metric**. Its observed application counts and DTO must
 not be stored in `oc_tva/2`, overwritten with defaults, or confused with
 propositional truth. This module neither calls nor changes that telemetry store.
 
+## Typed persistent editors
+
+These editors write only the existing native sidecar. They never modify source
+bytes, formulas, CNF, IDs, clause handles, execution policy or KB selection.
+The application routes below are relative to its configured URL base.
+
+### Assertion Strength and Direction
+
+```prolog
+assertion_annotation_settings(AssertionId, Context, Reply).
+save_assertion_annotations(AssertionId, Context, Patch, Expected, Reply).
+```
+
+`AssertionId` must identify exactly one **currently loaded assertion**.
+`Context` is the explicit browser MT or `null`, not its source MT.
+Read reply:
+
+```text
+{
+  revision, generation, identity, entity, context,
+  recorded: {monotonicity:[original labels], direction:[original values]},
+  overrides: {monotonicity:Effective, direction:Effective},
+  effective: {monotonicity:Effective, direction:Effective},
+  layers: {
+    mt: null | {monotonicity:Effective, direction:Effective},
+    global: {monotonicity:Effective, direction:Effective,
+             missing_assertion_strength:Effective}
+  },
+  interpretation: InterpretationDTO
+}
+```
+
+`recorded.monotonicity` includes original `monotonicity` and `strength` properties.
+`overrides` and `layers` inspect exact keys, never inherited copies. Effective
+objects retain their actual status, origin, supplier, revision and safe summary;
+MT/global source layers remain inspectable even while an Atom override wins.
+
+Patch has only the edited keys:
+
+```json
+{"monotonicity":":DEFAULT","direction":":BACKWARD"}
+```
+
+Strength permits `:DEFAULT` / `:MONOTONIC`; direction permits `:FORWARD` /
+`:BACKWARD`. `null` independently removes that exact assertion override.
+Persistent facts use the unchanged ID with Cyc keys **`monotonicity`** and
+**`direction`**. A typed replacement resolves all duplicate records at only
+that exact key. Clearing reveals unchanged recorded source metadata—including
+invalid/conflicting metadata—before applicable MT/global fallback.
+
+`Expected` must be exactly `{revision,generation,identity}` from the read.
+Identity hashes the assertion ID, current source expression, properties and
+source location; only the hash is retained in the editor token, never a duplicate
+formula blob in native storage. The save checks generation and identity while
+holding the source-store mutex through the revision-safe native commit. A
+replaced/unloaded assertion or stale store cannot be edited accidentally.
+
+* `POST api/tva/assertion`: `{entity,context}` → read reply.
+* `POST api/tva/assertion/save`:
+  `{entity,context,patch,revision,generation,identity}` → refreshed read reply.
+* Revision, generation and identity conflicts are HTTP 409; nonexistent
+  assertions are 404; invalid typed fields are 400.
+
+The assertion-detail editor is visible independently of annotation visibility
+preferences. Each select offers **Use source / inherit** and an independent clear
+control. Conflicts preserve dirty selections. **Read latest (keep edits)** fetches
+new preconditions; review before explicitly saving again. Success invalidates
+shared annotation summaries, lazy native details, mapped strengths, priors and
+visible assertion balls without replacing unrelated editor DOM. Negative
+assertions remain red and receive no guessed positive prior.
+
+### Native NARS / OpenCog whole-pair Settings
+
+```prolog
+native_pair_settings(Context, Reply).
+save_native_pair(Context, Family, PairOrNull, ExpectedRevision, Replace, Reply).
+```
+
+As in scalar Settings, `null`/`default` chooses the global record, otherwise the
+explicit MT chooses its whole-record override. `Family` is `nars` or `opencog`.
+NARS accepts exactly `{frequency:F,confidence:C}`; OpenCog accepts exactly
+`{strength:S,confidence:C}`. Both fields are required, finite `[0,1]`, and explicit
+zero is valid. Writes create `nars_truth_value(F,C)` or `stv(S,C)`, not a merged
+record. `null` removes the scoped whole record (MT then inherits the global).
+
+```text
+{
+  revision, context, contextExpression,
+  families: {
+    nars: {family, exact:Effective, effective:Effective, editable,
+           replacementRequired, detail:{entity,context:null,family,
+                                        property:null,recordRevision}},
+    opencog: {same fields}
+  }
+}
+```
+
+Origins are `mt` or `default`; the UI labels the latter **Global record**.
+`detail` is an exact ready-to-send lazy-detail request, including inherited
+records. Summaries never include whole unknown native payloads.
+
+Unknown/vendor layouts, extra fields, non-JSON-exact rational pair components
+and conflicting exact records have
+`replacementRequired:true`. A save/clear then requires the explicit boolean
+`Replace=true`; otherwise HTTP 409 `native_pair_replacement_required` preserves
+everything. The UI keeps those records read-only with a safe lazy inspector
+until the user explicitly checks replacement consent and enters a complete
+canonical pair. Exact rational components remain losslessly inspectable, never
+silently rounded into editable decimal controls. A new MT pair does not replace an inherited vendor global
+record. Other families, Cyc settings, Atom overrides and other MTs are untouched.
+
+* `GET api/tva/pairs?context=...`: omit context for global.
+* `POST api/tva/pairs/save`: `{context,family,pair,revision,replace}`.
+* Both typed **write** routes require loopback peer and existing same-origin
+  validation, in addition to strict body allowlists. There is no generic native
+  term editor or arbitrary goal endpoint.
+
+Settings have separate native-pair and Cyc prior sections. Creating an MT override
+starts from the displayed complete pair but writes nothing until Save. Clearing
+removes the override rather than copying global values. The existing deliberate
+global reset remains separate; opening any editor never initializes/reseeds.
+Native values remain `.5/0` until an explicit authorized write changes them.
+
+### Frontend host callbacks
+
+`renderAssertionAnnotationEditor` receives `entity`, `initialContext`, `signal`,
+`readAssertion({entity,context},{signal})`,
+`saveAssertion({entity,context,patch,revision,generation,identity},{signal})`,
+and `onSaved(reply)`. It exposes `setContext`, `refresh`, `dispose`, and its
+`controller`. Optional `reference` renders canonical supplying keys.
+
+`renderTVASettings` additionally accepts
+`readPairs({context},{signal})`,
+`savePair({context,family,pair,revision,replace},{signal})` and existing
+`fetchDetail(request,{signal})`. It retains all scalar Settings/reset callbacks.
+The standalone `renderNativePairSettings` exposes `setContext`, `refresh`,
+`discard`, `dispose`, and per-family controllers. Context drafts are bounded;
+changing scope never autosaves. `createAssertionAnnotationController` and
+`createNativePairController` expose `get/load/save/edit/discard/setContext/
+subscribe/dispose` for focused host tests.
+
 ## Durability, conflicts, REPL, and saved states
 
 ### Missing assertion strength category
@@ -435,10 +579,12 @@ propositional truth. This module neither calls nor changes that telemetry store.
 The global-only Cyc property `missing_assertion_strength` is initially
 `:DEFAULT`, and may be changed to `:MONOTONIC` or explicitly cleared.
 It is a category, not numerical strength, confidence, utility or native TVA.
-Only absent source `monotonicity`/`strength` and absent exact-assertion native
-`monotonicity` use it. Invalid/conflicting explicit categories remain errors.
-An agreeing native category corroborates an explicit source label; a disagreeing
-one is a conflict. MT/default native `monotonicity` records are not this policy.
+It is used only after absent Atom override, absent recorded source category and
+absent supplied-MT/global native `monotonicity`. Invalid/conflicting explicit
+categories remain visible, not replaced by this policy. An explicit typed Atom
+override intentionally takes precedence over recorded metadata; clearing it
+restores the original source behavior. Native `monotonicity` and global
+`missing_assertion_strength` are separate Cyc properties.
 
 Interpretations retain `monotonicity` as recorded and return separate
 `effectiveMonotonicity` and `strengthCategory` with its supplier. The effective
@@ -535,19 +681,26 @@ From the repository root:
 
 ```powershell
 swipl -q -s prolog\ow_dr\tests\test_native_annotations.pl -g run_tests -t halt
+node --test prolog\ow_dr\tests\native-tva.test.mjs prolog\ow_dr\tests\native-tva.integration.test.mjs prolog\ow_dr\tests\native-tva.browser.test.mjs prolog\ow_dr\tests\native-tva-editors.browser.test.mjs
 ```
 
-All fixture state and child-process qsave files are confined to unique
-`tests\.native-tva-*` directories, then removed. The test suite never connects
+Fixture sidecars, child-process qsave files and isolated browser profiles are
+confined to unique paths inside `tests`, then removed. The test suite never connects
 to the published server, initializes live defaults, compiles a corpus, or
 changes existing application settings.
 
-Verified on Windows / SWI-Prolog 10.1.7: **69 tests passed**, including actual
+Verified on Windows / SWI-Prolog 10.1.7: **79 native backend tests plus eight
+focused HTTP-action tests passed**, including actual
 native KB load/query/source-byte isolation, restart, two qsave/restore paths,
 cross-process native locking and stale-writer conflicts. A 200-item interpretation
 batch is instrumented to prove one native synchronization and one disk read;
 a real competing source-writer thread verifies coherent source generation and
-metadata capture. An isolated eight-record
+metadata capture. **25 Node tests passed**, including actual SWI DTO integration
+and two isolated Chromium fixtures. Typed editor tests cover immutable recorded
+source, intentional overrides, independent clears, revision/identity/generation
+conflicts, unknown/rational record protection, native whole-pair persistence,
+negative-marker preservation and desktop/mobile layout. No live reload or
+production write was used. An earlier isolated eight-record
 default fixture measured 20 batches of 200 entities at 1.496 seconds total
 (0.0748 seconds per batch), including identity ASTs. This is a small annotation-store measurement, not a
 large-corpus or production-service performance claim.

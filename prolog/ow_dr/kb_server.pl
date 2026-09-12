@@ -50,6 +50,10 @@
 :- http_handler(openworld_dr(api/tva/detail), endpoint(tva_detail), [method(post)]).
 :- http_handler(openworld_dr(api/tva/settings), endpoint(tva_settings), [method(get)]).
 :- http_handler(openworld_dr(api/tva/settings/save), endpoint(tva_settings_save), [method(post)]).
+:- http_handler(openworld_dr(api/tva/pairs), endpoint(tva_pairs), [method(get)]).
+:- http_handler(openworld_dr(api/tva/pairs/save), endpoint(tva_pairs_save), [method(post)]).
+:- http_handler(openworld_dr(api/tva/assertion), endpoint(tva_assertion), [method(post)]).
+:- http_handler(openworld_dr(api/tva/assertion/save), endpoint(tva_assertion_save), [method(post)]).
 :- http_handler(openworld_dr(api/tva/initialize), endpoint(tva_initialize), [method(post)]).
 :- http_handler(openworld_dr(api/tva/reset), endpoint(tva_reset), [method(post)]).
 :- http_handler(openworld_dr(api/tva/interpretation), endpoint(tva_interpretation), [method(post)]).
@@ -166,6 +170,8 @@ error_response(error(native_tva_revision_conflict(_,_),_),409,native_revision_co
 error_response(error(native_tva_record_revision_conflict(_,_),_),409,native_record_changed) :- !.
 error_response(error(native_tva_persistence_conflict(_,_),_),409,native_persistence_conflict) :- !.
 error_response(error(native_tva_busy,_),503,native_store_busy) :- !.
+error_response(error(native_assertion_identity_conflict,_),409,assertion_identity_conflict) :- !.
+error_response(error(native_pair_replacement_required(_,_),_),409,native_pair_replacement_required) :- !.
 error_response(error(server_settings_conflict,_),409,settings_conflict) :- !.
 error_response(error(server_settings_busy,_),503,settings_busy) :- !.
 error_response(error(task_queue_full(_),_),429,queue_full) :- !.
@@ -210,6 +216,22 @@ action(tva_settings_save,Request,Reply) :-
     native_body(Request,[context,patch,revision],Body),
     kb_native_annotations:save_native_settings(Body.context,Body.patch,Body.revision,Result),
     native_generation(Result,Reply).
+action(tva_pairs,Request,Reply) :-
+    http_parameters(Request,[context(Context,[atom,optional(true)])]),
+    (var(Context)->Scope=null;Scope=Context),
+    kb_native_annotations:native_pair_settings(Scope,Result),native_generation(Result,Reply).
+action(tva_pairs_save,Request,Reply) :-
+    native_write_request(Request),native_body(Request,[context,family,pair,revision,replace],Body),
+    kb_native_annotations:save_native_pair(Body.context,Body.family,Body.pair,Body.revision,Body.replace,Result),
+    native_generation(Result,Reply).
+action(tva_assertion,Request,Reply) :-
+    native_body(Request,[entity,context],Body),
+    kb_native_annotations:assertion_annotation_settings(Body.entity,Body.context,Reply).
+action(tva_assertion_save,Request,Reply) :-
+    native_write_request(Request),
+    native_body(Request,[entity,context,patch,revision,generation,identity],Body),
+    Expected=_{revision:Body.revision,generation:Body.generation,identity:Body.identity},
+    kb_native_annotations:save_assertion_annotations(Body.entity,Body.context,Body.patch,Expected,Reply).
 action(tva_initialize,Request,Reply) :-
     native_body(Request,[revision],Body),
     kb_native_annotations:initialize_defaults(Body.revision,Result),native_generation(Result,Reply).
@@ -470,6 +492,10 @@ native_body(Request,Fields,Body) :-
 native_generation(Result,Reply) :-
     with_mutex(openworld_store,kb_store:generation(Generation)),
     Reply=Result.put(generation,Generation).
+native_write_request(Request) :-
+    valid_origin(Request),
+    (memberchk(peer(ip(127,0,0,1)),Request);memberchk(peer(ip(0,0,0,0,0,0,0,1)),Request)), !.
+native_write_request(_) :- throw(error(permission_error(write,native_annotations,remote_peer),_)).
 editor_exception(Error) :-
     kb_source_editor:editor_error(Error,Status,Reply),
     throw(error(source_editor_reply(Status,Reply),_)).

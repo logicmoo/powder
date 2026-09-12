@@ -187,7 +187,7 @@ test(batch_unsafe_sort,[setup(fixture(F)),cleanup(dispose(F)),
 test(initialize_authorized_defaults_preserves_others,[setup(fixture(F)),cleanup(dispose(F))]) :-
     put(nars,x_A,null,own),put(cyc,default,monotonic_strength,0),
     put(cyc,x_Mt,utility,0),revision(R),initialize_defaults(R,S),
-    assertion(S.recordCount==10),
+    assertion(S.recordCount==12),
     assertion(nars_tva(default,nars_truth_value(0.5,0.0))),
     assertion(oc_tva(default,stv(0.5,0.0))),assertion(cyc_bayes_value(default,utility,0.5)),
     assertion(cyc_bayes_value(default,monotonic_strength,0)),
@@ -195,7 +195,8 @@ test(initialize_authorized_defaults_preserves_others,[setup(fixture(F)),cleanup(
     assertion(cyc_bayes_value(default,asserted_positive_truth,1.0)),
     assertion(cyc_bayes_value(default,asserted_monotonic_confidence,0.97)),
     assertion(cyc_bayes_value(default,asserted_default_confidence,0.66)),
-    assertion(\+cyc_bayes_value(default,direction,_)),assertion(nars_tva(x_A,own)),
+    assertion(cyc_bayes_value(default,direction,':BACKWARD')),
+    assertion(cyc_bayes_value(default,missing_assertion_strength,':DEFAULT')),assertion(nars_tva(x_A,own)),
     initialize_defaults(S.revision,Same),assertion(S.revision==Same.revision).
 
 test(settings_independent_zero_clear_global_propagation,[setup(fixture(F)),cleanup(dispose(F))]) :-
@@ -229,18 +230,18 @@ test(source_explicit_direction_and_strength_display_only,[setup(fixture(F)),clea
     assertion(D.mappedStrength.summary.value==0.7),assertion(D.mappedStrength.interpretation==display_only),
     assertion(D.monotonicity==[':DEFAULT']),native_status(After),assertion(Before=@=After),
     assertion(\+cyc_bayes_value(a123,direction,_)),roundtrip_json(D).
-test(source_native_own_disagreement_flagged,[setup(fixture(F)),cleanup(dispose(F))]) :-
+test(source_native_own_override_wins,[setup(fixture(F)),cleanup(dispose(F))]) :-
     source_fixture([_{name:direction,value:':FORWARD'}],[]),
     put(cyc,a123,direction,':BACKWARD'),assertion_interpretation(a123,x_Mt,D),
-    assertion(D.direction.status==conflict),
-    assertion(D.direction.reason==source_native_direction_conflict).
+    assertion(D.direction.status==initialized),assertion(D.direction.origin==atom),
+    assertion(D.direction.summary.value==":BACKWARD").
 test(source_native_own_agreement,[setup(fixture(F)),cleanup(dispose(F))]) :-
     source_fixture([_{name:direction,value:':FORWARD'}],[]),
     put(cyc,a123,direction,':FORWARD'),assertion_interpretation(a123,null,D),
-    assertion(D.direction.status==initialized),assertion(D.direction.origin==source).
+    assertion(D.direction.status==initialized),assertion(D.direction.origin==atom).
 test(no_source_direction_missing_is_uninitialized,[setup(fixture(F)),cleanup(dispose(F))]) :-
     assertion_interpretation(a123,null,D),
-    assertion(D.direction.status==uninitialized),assertion(D.mappedStrength.status==uninitialized).
+    assertion(D.direction.status==uninitialized),assertion(D.mappedStrength.status==unsupported).
 
 test(repl_snapshot_detects_and_persists_changes,[setup(fixture(F)),cleanup(dispose(F))]) :-
     revision(R0),assertz(kb_native_annotations:cyc_bayes_value(x_A,utility,0)),
@@ -676,5 +677,141 @@ test(interpretation_batch_source_generation_coherent_against_writer,
        message_queue_destroy(Commands),message_queue_destroy(Events),
        with_mutex(openworld_store,
          (retractall(kb_store:generation(_)),assertz(kb_store:generation(Original)))))).
+
+editor_expected(S,_{revision:S.revision,generation:S.generation,identity:S.identity}).
+editor_save(S,Patch,Reply) :-
+    editor_expected(S,E),save_assertion_annotations(S.entity,S.context,Patch,E,Reply).
+
+test(typed_assertion_overrides_clear_to_unchanged_source,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    source_fixture([_{name:direction,value:':FORWARD'}],[_{name:monotonicity,value:':DEFAULT'}]),
+    kb_store:assertion(a123,Original),assertion_annotation_settings(a123,x_Mt,S),
+    editor_save(S,_{monotonicity:":MONOTONIC",direction:":BACKWARD"},Saved),
+    assertion(Saved.effective.monotonicity.origin==atom),
+    assertion(Saved.effective.monotonicity.summary.value==":MONOTONIC"),
+    assertion(Saved.effective.direction.origin==atom),assertion(Saved.effective.direction.summary.value==":BACKWARD"),
+    assertion(Saved.recorded.monotonicity==[':DEFAULT']),assertion(Saved.recorded.direction==[':FORWARD']),
+    editor_save(Saved,_{monotonicity:null},Partial),
+    assertion(Partial.effective.monotonicity.origin==source),assertion(Partial.effective.direction.origin==atom),
+    editor_save(Partial,_{direction:null},Cleared),
+    assertion(Cleared.effective.direction.origin==source),
+    assertion(\+cyc_bayes_value(a123,monotonicity,_)),assertion(\+cyc_bayes_value(a123,direction,_)),
+    kb_store:assertion(a123,After),assertion(Original=@=After),roundtrip_json(Cleared).
+
+test(typed_override_replaces_conflicting_or_invalid_recorded_metadata,
+     [setup(fixture(F)),cleanup(dispose(F))]) :-
+    source_fixture([_{name:direction,value:7}],
+      [_{name:monotonicity,value:':DEFAULT'},_{name:monotonicity,value:':MONOTONIC'}]),
+    assertion_annotation_settings(a123,null,S),
+    assertion(S.effective.direction.status==invalid),assertion(S.effective.monotonicity.status==conflict),
+    editor_save(S,_{direction:":FORWARD",monotonicity:":DEFAULT"},Fixed),
+    assertion(Fixed.effective.direction.status==initialized),assertion(Fixed.effective.monotonicity.status==initialized),
+    editor_save(Fixed,_{direction:null,monotonicity:null},Restored),
+    assertion(Restored.effective.direction.status==invalid),assertion(Restored.effective.monotonicity.status==conflict).
+
+test(typed_clear_inherits_mt_then_global_without_copies,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    source_fixture([],[]),revision(R),initialize_defaults(R,_),
+    put(cyc,x_Mt,monotonicity,':MONOTONIC'),put(cyc,x_Mt,direction,':FORWARD'),
+    assertion_annotation_settings(a123,x_Mt,S),assertion(S.effective.monotonicity.origin==mt),
+    assertion(S.layers.mt.monotonicity.summary.value==":MONOTONIC"),
+    assertion(S.layers.global.direction.summary.value==":BACKWARD"),
+    assertion(S.layers.global.missing_assertion_strength.summary.value==":DEFAULT"),
+    editor_save(S,_{monotonicity:":DEFAULT",direction:":BACKWARD"},Override),
+    editor_save(Override,_{monotonicity:null,direction:null},Cleared),
+    assertion(Cleared.effective.monotonicity.origin==mt),assertion(Cleared.effective.direction.origin==mt),
+    assertion_annotation_settings(a123,null,Global),assertion(Global.effective.monotonicity.reason==global_missing_strength),
+    assertion(Global.layers.mt==null),
+    assertion(Global.effective.direction.origin==default),assertion(\+cyc_bayes_value(a123,_,_)).
+
+test(typed_assertion_replaces_exact_duplicate_override_only,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    source_fixture([_{name:direction,value:':FORWARD'}],[_{name:strength,value:':DEFAULT'}]),
+    assertz(cyc_bayes_value(a123,direction,':FORWARD')),
+    assertz(cyc_bayes_value(a123,direction,':BACKWARD')),
+    put(cyc,x_Unrelated,utility,0),
+    assertion_annotation_settings(a123,null,S),
+    assertion(S.overrides.direction.status==conflict),assertion(S.effective.direction.status==conflict),
+    editor_save(S,_{direction:":BACKWARD"},Saved),
+    assertion(Saved.effective.direction.origin==atom),assertion(Saved.recorded.direction==[':FORWARD']),
+    findall(V,cyc_bayes_value(a123,direction,V),Values),assertion(Values==[':BACKWARD']),
+    assertion(cyc_bayes_value(x_Unrelated,utility,0)),assertion(Saved.recorded.monotonicity==[':DEFAULT']).
+
+test(exact_rational_pair_is_inspectable_not_implicitly_rounded,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    put(nars,default,null,nars_truth_value(1r3,0)),
+    native_pair_settings(null,S),assertion(S.families.nars.replacementRequired==true),
+    assertion(S.families.nars.effective.summary.renderer==native_data),
+    native_detail(default,null,nars,null,S.families.nars.detail.recordRevision,D),
+    D.records=[Record],Record.data.args=[Frequency,_],
+    assertion(Frequency.type==rational),assertion(Frequency.text=="1r3"),roundtrip_json(S),
+    catch(save_native_pair(null,nars,_{frequency:0.3,confidence:0},S.revision,false,_),
+      error(native_pair_replacement_required(nars,default),_),Blocked=true),
+    assertion(Blocked==true),assertion(nars_tva(default,nars_truth_value(1r3,0))).
+
+test(assertion_saves_check_revision_identity_generation_and_id,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    source_fixture([],[]),assertion_annotation_settings(a123,null,S),
+    editor_save(S,_{direction:":FORWARD"},_),
+    catch(editor_save(S,_{direction:":BACKWARD"},_),error(native_tva_revision_conflict(_,_),_),Stale=true),
+    assertion(Stale==true),assertion_annotation_settings(a123,null,Latest),editor_expected(Latest,E),
+    catch(save_assertion_annotations(a123,null,_{},E.put(identity,wrong),_),
+      error(native_assertion_identity_conflict,_),Identity=true),assertion(Identity==true),
+    Next is E.generation+1,
+    catch(save_assertion_annotations(a123,null,_{},E.put(generation,Next),_),
+      error(generation_conflict(_,_),_),Generation=true),assertion(Generation==true),
+    catch(save_assertion_annotations(x_A,null,_{},E,_),error(domain_error(assertion_id,x_A),_),Id=true),
+    assertion(Id==true),
+    retract(kb_store:assertion(a123,Row)),assertz(kb_store:assertion(a123,Row.put(expression,
+      _{type:application,head:_{type:symbol,value:x_other},args:[]}))),
+    catch(save_assertion_annotations(a123,null,_{direction:null},E,_),
+      error(native_assertion_identity_conflict,_),Changed=true),assertion(Changed==true),
+    assertion(cyc_bayes_value(a123,direction,':FORWARD')).
+
+test(assertion_editor_negative_remains_negative_and_only_annotations_change,
+     [setup(fixture(F)),cleanup(dispose(F))]) :-
+    source_fixture(x_not(x_known(x_A)),[],[_{name:monotonicity,value:':DEFAULT'}]),
+    kb_store:assertion(a123,Before),assertion_annotation_settings(a123,null,S),
+    editor_save(S,_{monotonicity:":MONOTONIC",direction:":FORWARD"},Saved),
+    assertion(Saved.interpretation.assertionPrior.polarity==negative),
+    assertion(Saved.interpretation.assertionPrior.status==unsupported),
+    kb_store:assertion(a123,After),assertion(Before=@=After),
+    catch(editor_save(Saved,_{execute:"halt"},_),error(domain_error(assertion_annotation_property,execute),_),Rejected=true),
+    assertion(Rejected==true).
+
+test(typed_native_pairs_zero_scope_whole_record_and_persistence,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    revision(R),initialize_defaults(R,_),put(nars,x_A,null,vendor(keep)),put(cyc,x_A,other,false),
+    native_pair_settings(null,S),
+    save_native_pair(null,nars,_{frequency:0,confidence:0.9},S.revision,false,N),
+    save_native_pair(x_Mt,opencog,_{strength:0,confidence:0},N.revision,false,MT),
+    assertion(MT.families.opencog.exact.origin==mt),assertion(MT.families.opencog.effective.summary.strength==0),
+    save_native_pair(x_Mt,opencog,null,MT.revision,false,Cleared),
+    assertion(Cleared.families.opencog.effective.origin==default),
+    assertion(Cleared.families.opencog.effective.summary.strength==0.5),
+    assertion(nars_tva(x_A,vendor(keep))),assertion(cyc_bayes_value(x_A,other,false)),
+    assertion(cyc_bayes_value(default,asserted_monotonic_confidence,0.97)),
+    clear_memory,native_pair_settings(null,Restart),
+    assertion(Restart.families.nars.effective.summary.frequency==0),
+    assertion(Restart.families.nars.effective.summary.confidence==0.9),roundtrip_json(Restart).
+
+test(vendor_pairs_and_duplicates_require_explicit_replacement,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    Vendor=vendor_record(0.5,0,extras([keep,false])),put(opencog,default,null,Vendor),
+    native_pair_settings(null,S),assertion(S.families.opencog.replacementRequired==true),
+    assertion(S.families.opencog.editable==false),
+    catch(save_native_pair(null,opencog,_{strength:0.2,confidence:0},S.revision,false,_),
+      error(native_pair_replacement_required(opencog,default),_),Blocked=true),assertion(Blocked==true),
+    assertion(oc_tva(default,Vendor)),
+    save_native_pair(null,opencog,_{strength:0.2,confidence:0},S.revision,true,Replaced),
+    assertion(Replaced.families.opencog.replacementRequired==false),
+    assertz(kb_native_annotations:oc_tva(default,stv(0.3,0))),
+    native_pair_settings(null,Dup),assertion(Dup.families.opencog.exact.status==conflict),
+    save_native_pair(null,opencog,_{strength:0.4,confidence:0.1},Dup.revision,true,Unique),
+    assertion(Unique.families.opencog.exact.recordCount==1).
+
+test(pair_typed_errors_and_stale_save_preserve_records,[setup(fixture(F)),cleanup(dispose(F))]) :-
+    native_pair_settings(null,S),
+    save_native_pair(null,nars,_{frequency:0,confidence:0},S.revision,false,After),
+    catch(save_native_pair(null,nars,_{frequency:1,confidence:0},S.revision,false,_),
+      error(native_tva_revision_conflict(_,_),_),Stale=true),assertion(Stale==true),
+    catch(save_native_pair(null,nars,_{frequency:0.4},After.revision,false,_),
+      error(domain_error(native_pair_fields,_),_),Missing=true),assertion(Missing==true),
+    catch(save_native_pair(null,nars,_{frequency:false,confidence:0},After.revision,false,_),
+      error(domain_error(unit_interval,false),_),Bad=true),assertion(Bad==true),
+    assertion(nars_tva(default,nars_truth_value(0,0))).
 
 :- end_tests(native_annotations).
