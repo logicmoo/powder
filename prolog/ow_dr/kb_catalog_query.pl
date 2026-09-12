@@ -1,6 +1,7 @@
 :- module(kb_catalog_query,
     [build_query_catalog/1,build_query_catalog/2,catalog_query_status/1,catalog_query_search/2,
-     catalog_query_term/2,catalog_query_assertion/4,source_pack_snapshot/1,catalog_query_files/2]).
+     catalog_query_term/2,catalog_query_assertion/4,source_pack_snapshot/1,catalog_query_files/2,
+     maintain_query_catalog/3]).
 :- use_module(kb_catalog_index,[]).
 :- use_module(kb_catalog_schema).
 :- use_module(kb_catalog_providers,[source_provider_extensions/4]).
@@ -35,6 +36,11 @@ query_progress(File) :-
     query_file(Query),file_directory_name(Query,Dir),
     directory_file_path(Dir,'query-progress.data',File).
 build_query_catalog(Report) :- build_query_catalog(true,Report).
+maintain_query_catalog(Selection,Providers,Report) :-
+    must_be(boolean,Providers),
+    kb_catalog_index:refresh_catalog(Selection,SourceReport),
+    build_query_catalog(Providers,QueryReport),
+    Report=json{sources:SourceReport,query:QueryReport}.
 build_query_catalog(Providers,Report) :-
     must_be(boolean,Providers),
     query_file(File),atom_concat(File,'.lock',LockPath),kb_cache:try_lock(LockPath,Lock),

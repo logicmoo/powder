@@ -25,6 +25,17 @@ test(changed_query_projection_invalidates_directory,
     kb_catalog_directory:paths(Query,_),
     setup_call_cleanup(open(Query,append,Out),nl(Out),close(Out)),
     lookup_term(x_p,_,_).
+test(legacy_summary_keeps_existing_complete_directory_usable,
+     [setup(plunit_catalog_query:fixture(S)),cleanup(plunit_catalog_query:cleanup(S))]) :-
+    plunit_catalog_query:compiled('a.krf',"(arity p 1)\n",_),
+    plunit_catalog_query:build,
+    kb_catalog_index:catalog_paths(Catalog,_),atom_concat(Catalog,'.summary',Path),
+    kb_catalog_index:read_data(Path,catalog_summary(Current)),
+    del_dict(revision,Current,_,Legacy),
+    kb_catalog_index:atomic_data(Path,catalog_summary(Legacy)),
+    kb_catalog_index:catalog_revision(Revision),assertion(Revision==legacy),
+    catalog_query_term(json{term:x_p},Reply),assertion(Reply.total==1),
+    directory_status(Status),assertion(Status.state==ready).
 test(pending_provider_gate_does_not_parse_large_model,
      [setup(plunit_catalog_query:fixture(S)),cleanup(plunit_catalog_query:cleanup(S))]) :-
     plunit_catalog_query:compiled('a.krf',"(arity p 1)\n",_),

@@ -41,6 +41,19 @@ Rebuilding the shared taxonomy retracts claims from failed, stale or removed fil
 including categories of terms mentioned in other files. Native load/unload changes
 only the optional loaded filter, not this disk membership or type evidence.
 
+For a controlled end-to-end update after the selected compiler companions are
+current, use the same maintenance and publication pipeline:
+
+```powershell
+swipl --stack-limit=8g prolog\ow_dr\index_catalog.pl -- --update --defer-providers KBs\changed.krf
+```
+
+Omit `--defer-providers` to include provider enrichment. With no file arguments,
+`--update` only reconciles inventory before rebuilding the query projection.
+This does not compile originals or load/unload anything. It retains other source
+memberships, then rebuilds taxonomy/query access from the maintained catalog;
+failure remains explicit rather than advertising the previous projection as fresh.
+
 ## Persistent data
 
 `tmp\KBs\<relative-source>.catalog.data` contains one validated source snapshot.

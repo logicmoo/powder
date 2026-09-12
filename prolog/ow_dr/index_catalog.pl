@@ -2,6 +2,14 @@
 :- use_module(kb_catalog_query).
 :- use_module(kb_catalog_directory).
 :- initialization(main,main).
+main(['--'|Args]) :- !,main(Args).
+main(['--update'|Args]) :- !,
+    (Args=['--defer-providers'|Paths]->Providers=false;Providers=true,Paths=Args),
+    catch((maintain_query_catalog(Paths,Providers,Report)->true;
+             throw(error(catalog_maintenance_failed,_))),
+      Error,(print_message(error,Error),halt(1))),
+    write_term(Report,[quoted(true)]),nl,
+    (Report.query.coverage.complete==true->halt;halt(1)).
 main(Args) :-
     (Args=['--directory'];Args=['--','--directory']),!,
     catch((build_catalog_directory(Report)->true;throw(error(catalog_directory_failed,_))),
@@ -34,4 +42,4 @@ main(Args) :-
       Error,(print_message(error,Error),halt(1))),
     write_term(Report,[quoted(true)]),nl,
     (Report.complete==true->halt;halt(1)).
-main(_) :- format(user_error,'Usage: swipl index_catalog.pl -- --all | --query [--defer-providers] | --summary | --directory~n',[]),halt(2).
+main(_) :- format(user_error,'Usage: swipl index_catalog.pl -- --all | --query [--defer-providers] | --update [--defer-providers] [FILES...] | --summary | --directory~n',[]),halt(2).

@@ -190,6 +190,17 @@ test(changed_defining_file_invalidates_cached_types_then_retracts_cross_file_cat
     current_taxonomy(Schema),
     get_assoc(x_entity,Schema.types,[type(x_OtherKind,e('KBs/types.krf',Id,_,_,_))]),
     assertion(Id==Definition.id).
+test(shared_maintenance_workflow_publishes_selected_file_changes_and_retained_memberships,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(p before)\n",_),compiled('b.krf',"(p retained)\n",_),build,
+    compiled('a.krf',"(p after)\n",_),
+    maintain_query_catalog(['KBs/a.krf'],false,Report),
+    assertion(Report.sources.freshFiles==2),assertion(Report.query.coverage.complete==true),
+    assertion(Report.query.providerCoverage==pending),
+    catalog_query_term(json{term:x_before,facet:semantic},Old),assertion(Old.total==0),
+    catalog_query_term(json{term:x_after,facet:semantic},New),assertion(New.total==1),
+    catalog_query_term(json{term:x_retained,facet:semantic},Kept),assertion(Kept.total==1),
+    kb_catalog_directory:directory_status(Directory),assertion(Directory.state==ready).
 test(stale_type_source_cannot_leave_other_file_classifications_fresh,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('mentions.krf',"(mentions entity)\n",_),
