@@ -191,6 +191,7 @@ error_response(error(compile_incomplete(S),_),422,compile_failed) :- S.failures>
 error_response(error(compile_incomplete(_),_),503,busy) :- !.
 error_response(error(permission_error(_,_,_),_),403,forbidden) :- !.
 error_response(error(forbidden_origin,_),403,forbidden) :- !.
+error_response(error(existence_error(procedure,_),_),500,internal_error) :- !.
 error_response(error(existence_error(_,_),_),404,not_found) :- !.
 error_response(time_limit_exceeded,408,query_timeout) :- !.
 error_response(error(type_error(_,_),_),400,invalid_input) :- !.
