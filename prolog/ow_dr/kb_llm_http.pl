@@ -5,6 +5,7 @@
 :- use_module(kb_llm_transport).
 :- use_module(kb_llm_agent).
 :- use_module(kb_llm_kee).
+:- use_module(kb_kee_schema,[json_text/2]).
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_json)).
 :- use_module(library(http/http_parameters)).
@@ -66,7 +67,10 @@ action(conversation,R,Reply) :-
 action(chat,R,Reply) :- body(R,B),start_chat(B,Reply).
 action(interrupt,R,Reply) :- body(R,B),strict_keys(B,[id]),interrupt_chat(B.id,Reply).
 action(stop,R,Reply) :- body(R,B),strict_keys(B,[id]),stop_conversation(B.id,Reply).
-respond(Status,Reply) :- format('Cache-Control: no-store~n'),reply_json_dict(Reply,[status(Status)]).
+respond(Status,Reply) :-
+    json_text(Reply,Text),
+    format('Status: ~d~nCache-Control: no-store~nContent-Type: application/json; charset=UTF-8~n~n~s',
+           [Status,Text]).
 llm_error(Error) :-
     (Error=error(llm_forbidden,_)->Status=403;
      Error=error(agent_conversation_conflict,_)->Status=409;

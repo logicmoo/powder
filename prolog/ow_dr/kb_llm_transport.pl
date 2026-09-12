@@ -1,5 +1,6 @@
 :- module(kb_llm_transport,[discover_models/1,chat_completion/4,provider_json/5]).
 :- use_module(kb_agent_settings).
+:- use_module(kb_llm_files,[json_bytes/2]).
 :- use_module(library(http/http_open)).
 :- use_module(library(http/http_json)).
 :- use_module(library(http/json)).
@@ -37,7 +38,7 @@ provider_json(Method,Base,Route,Payload,Reply) :-
     (memberchk(Method-Route,[get-"models",post-"chat/completions"])->true;
      permission_error(connect,llm_route,unsupported)),
     atomic_list_concat([Base,'/',Route],URL),
-    (Method==post->Extra=[post(json(Payload))];Extra=[]),
+    (Method==post->json_bytes(Payload,RequestBytes),Extra=[post(bytes('application/json',RequestBytes))];Extra=[]),
     append([method(Method),bypass_proxy(true),redirect(false),timeout(120),
             status_code(Status),request_header('Accept'='application/json'),
             connection(close)],Extra,Options),

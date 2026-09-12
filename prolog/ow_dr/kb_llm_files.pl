@@ -1,8 +1,9 @@
 :- module(kb_llm_files,
           [agent_state_dir/1, existing_agent_state_dir/1, safe_owned_path/1, read_bytes/3, bytes_text/2,
-           bytes_hash/2, atomic_bytes/2, read_json/2, atomic_json/2, locked_file/2]).
+           bytes_hash/2, json_bytes/2, atomic_bytes/2, read_json/2, atomic_json/2, locked_file/2]).
 :- use_module(kb_paths,[app_dir/1,repo_root/1]).
 :- use_module(kb_cache,[try_lock/2,release_lock/1,stage_path/2,install_stage/2,remove_if_exists/1]).
+:- use_module(kb_kee_schema,[json_text/2]).
 :- use_module(library(crypto)).
 :- use_module(library(error)).
 :- use_module(library(filesex)).
@@ -64,6 +65,8 @@ read_bytes(File,Limit,Bytes) :-
 bytes_text(Bytes,Text) :-
     (phrase(utf8_codes(Codes),Bytes)->string_codes(Text,Codes);domain_error(utf8,agent_file)).
 bytes_hash(Bytes,Hash) :- crypto_data_hash(Bytes,Hash,[algorithm(sha256),encoding(octet)]).
+json_bytes(Value,Bytes) :-
+    json_text(Value,Text),string_codes(Text,Codes),phrase(utf8_codes(Codes),Bytes).
 read_json(File,JSON) :-
     owned_name(File,_),
     crypto_file_hash(File,Current,[algorithm(sha256)]),
@@ -71,8 +74,7 @@ read_json(File,JSON) :-
      read_bytes(File,1048576,Bytes),bytes_text(Bytes,Text),atom_json_dict(Text,JSON,[]),
      bytes_hash(Bytes,Hash),cache_json(File,Hash,JSON)).
 atomic_json(File,JSON) :-
-    atom_json_dict(Text,JSON,[as(string),width(0)]),string_codes(Text,Codes),
-    phrase(utf8_codes(Codes),Bytes),atomic_bytes(File,Bytes),
+    json_bytes(JSON,Bytes),atomic_bytes(File,Bytes),bytes_text(Bytes,Text),
     bytes_hash(Bytes,Hash),atom_json_dict(Text,Normalized,[]),cache_json(File,Hash,Normalized).
 cache_json(File,Hash,JSON) :-
     with_mutex(powder_llm_json_cache,

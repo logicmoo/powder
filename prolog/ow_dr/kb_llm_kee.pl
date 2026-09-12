@@ -6,6 +6,7 @@
 :- use_module(library(error)).
 :- use_module(library(http/json)).
 :- use_module(kb_kee,[]).
+:- use_module(kb_kee_schema,[json_text/2]).
 :- use_module(kb_llm_files,[]).
 :- use_module(kb_activity,[]).
 :- use_module(library(uuid),[]).
@@ -183,8 +184,7 @@ preview_entry(Token,Request,Entry) :-
 entry_result(Request,Result,Entry) :-
     project(Result,Material),identity_evidence(Result,Evidence),
     digest_json(_{material:Material,evidence:Evidence},Hash),
-    atom_json_dict(Text,Material,[as(string),width(0)]),string_codes(Text,Codes),
-    phrase(utf8:utf8_codes(Codes),Bytes),length(Bytes,N),
+    kb_llm_files:json_bytes(Material,Bytes),length(Bytes,N),
     (N=<16384->true;resource_error(llm_preview_limit)),
     Entry=_{request:Request,hash:Hash,material:Material,evidence:Evidence}.
 identity_evidence(Value,Pairs) :-
@@ -198,8 +198,7 @@ evidence_field(D,Key,Value) :-
 evidence_field(List,Key,Value) :-
     is_list(List),member(D,List),evidence_field(D,Key,Value).
 digest_json(Value,Hash) :-
-    atom_json_dict(Text,Value,[as(string),width(0)]),
-    crypto:crypto_data_hash(Text,Atom,[algorithm(sha256),encoding(utf8)]),atom_string(Atom,Hash).
+    kb_llm_files:json_bytes(Value,Bytes),kb_llm_files:bytes_hash(Bytes,Atom),atom_string(Atom,Hash).
 local_context(Scope,Conversation,Token) :-
     get_time(Now),Expires is Now+120,
     json_normalize(_{authenticated:true,actor:"local-user",kind:"user",agent:"llm-preview",
@@ -282,4 +281,4 @@ export_key(Key) :-
       definition,roles,role,key,arity,resource,resources,data,title,description,status,
       priority,dependencies,evidence,reference,note,acceptance,given,when,then,links,
       conversation,agent,changesets,deleted,sequence]).
-json_normalize(In,Out) :- atom_json_dict(Text,In,[]),atom_json_dict(Text,Out,[]).
+json_normalize(In,Out) :- json_text(In,Text),atom_json_dict(Text,Out,[]).

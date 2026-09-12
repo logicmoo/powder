@@ -149,6 +149,12 @@ deadline are bounded. `tokens` is the requested **per-response** output-token
 ceiling; provider behavior cannot be guaranteed, so independent byte limits
 remain enforced locally. There is no automatic retry.
 
+JSON persistence, hashes, byte budgets, outbound request bodies and local HTTP
+replies use scalar Unicode text from `kb_kee_schema:json_text/2`, re-encoded as
+real UTF-8 rather than Windows surrogate/CESU-8 bytes. Supplementary characters
+therefore use four UTF-8 bytes; existing ASCII canonical hashes are unchanged.
+This serialization fix grants no grounding disclosure or tool access.
+
 The worker holds application admission, checks interruption around network and
 tool boundaries, and best-effort aborts its own pending HTTP request. Stop does
 not promise provider cancellation, erasure or rollback. Received late tool

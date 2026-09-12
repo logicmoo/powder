@@ -9,26 +9,41 @@
 :- use_module(library(http/thread_httpd)).
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_json)).
+:- use_module(library(http/http_open)).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
 :- use_module(library(utf8)).
 :- dynamic fixture_request/2,fixture_mode/1.
 :- http_handler(root('v1/models'),fixture_models,[]).
 :- http_handler(root('v1/chat/completions'),fixture_chat,[]).
+:- http_handler(root('llm-unicode-reply'),fixture_unicode_reply,[]).
 fixture_models(_Request) :-
     assertz(fixture_request(models,none)),
     (fixture_mode(redirect)->
        format('Status: 302 Found~nLocation: http://127.0.0.1:1/forbidden~nContent-Type: application/json~n~n{}');
      reply_json_dict(_{data:[_{id:"gpt-5.6-sol"},_{id:"fixture-other"}]})).
 fixture_chat(Request) :-
-    http_read_json_dict(Request,Body),assertz(fixture_request(chat,Body)),
+    fixture_chat_body(Request,Body),assertz(fixture_request(chat,Body)),
     (fixture_mode(slow)->sleep(8);true),
-    (fixture_mode(managed)->fixture_managed_message(Body.messages,Message);
+    (fixture_mode(unicode)->unicode_fixture(Text),Message=_{role:"assistant",content:Text};
+     fixture_mode(managed)->fixture_managed_message(Body.messages,Message);
      fixture_mode(tools),\+ (member(M,Body.messages),M.role=="tool")->
        Message=_{role:"assistant",content:null,tool_calls:[
          _{id:"fixture-call-1",type:"function",function:_{name:"not_registered",arguments:"{\"x\":1}"}}]}
     ;Message=_{role:"assistant",content:"Synthetic fixture response."}),
-    reply_json_dict(_{choices:[_{message:Message}]}).
+    Reply=_{choices:[_{message:Message}]},
+    (fixture_mode(unicode)->kb_llm_http:respond(200,Reply);reply_json_dict(Reply)).
+fixture_chat_body(Request,Body) :-
+    fixture_mode(unicode),!,
+    memberchk(input(In),Request),memberchk(content_length(Size),Request),
+    stream_property(In,encoding(Encoding)),
+    setup_call_cleanup(set_stream(In,encoding(octet)),
+      read_string(In,Size,Raw),set_stream(In,encoding(Encoding))),
+    string_codes(Raw,Bytes),assertz(fixture_request(chat_bytes,Bytes)),
+    bytes_text(Bytes,Text),atom_json_dict(Text,Body,[]).
+fixture_chat_body(Request,Body) :- http_read_json_dict(Request,Body).
+unicode_fixture(Text) :- string_codes(Text,[128512]).
+fixture_unicode_reply(_) :- unicode_fixture(Text),kb_llm_http:respond(200,_{value:Text}).
 fixture_managed_message(Messages,Message) :-
     (member(M,Messages),get_dict(tool_call_id,M,"managed-create")->
        Message=_{role:"assistant",content:"Synthetic managed TODO was created."};
@@ -114,6 +129,60 @@ test(prompt_edit_conflict_preserves_bytes) :-
     kb_llm_prompt:save_prompt_file(F,[66],Expected),
     read_bytes(F,64,After),assertion(After==[66]).
 :- end_tests(llm_settings).
+
+:- begin_tests(llm_unicode,[setup(fixture_setup(State)),cleanup(fixture_cleanup(State))]).
+test(atomic_json_persists_scalar_utf8_and_reloads) :-
+    unicode_fixture(Text),agent_state_dir(Dir),directory_file_path(Dir,'unicode.json',File),
+    atomic_json(File,_{value:Text}),read_bytes(File,100,Bytes),
+    assertion(Bytes==[123,34,118,97,108,117,101,34,58,34,240,159,152,128,34,125]),
+    retractall(kb_llm_files:json_cache(File,_,_)),read_json(File,Again),
+    assertion(Again.value==Text).
+test(canonical_hash_uses_scalar_utf8_not_cesu8) :-
+    unicode_fixture(Text),kb_llm_kee:digest_json(_{value:Text},Hash),
+    bytes_hash([123,34,118,97,108,117,101,34,58,34,240,159,152,128,34,125],Expected),
+    atom_string(Expected,Hash).
+test(byte_budget_counts_four_byte_scalar_and_escapes) :-
+    unicode_fixture(Text),Value=_{value:Text},
+    kb_llm_agent:bounded_json(Value,16),
+    catch(kb_llm_agent:bounded_json(Value,15),error(resource_error(llm_payload_budget),_),Rejected=true),
+    assertion(Rejected==true),
+    kb_llm_agent:bounded_json(_{value:"\n"},14).
+test(normalization_preserves_supplementary_keys_and_values) :-
+    unicode_fixture(Text),atom_string(Key,Text),dict_create(Value,json,[Key-Text]),
+    kb_llm_kee:json_normalize(Value,Again),get_dict(Key,Again,Actual),assertion(Actual==Text).
+test(ascii_canonical_hash_is_unchanged) :-
+    Value=_{a:"ASCII\nquoted \" text",b:[1,true,null]},
+    atom_json_dict(Original,Value,[as(string),width(0)]),string_codes(Original,Codes),
+    phrase(utf8_codes(Codes),Bytes),bytes_hash(Bytes,Expected),
+    kb_llm_kee:digest_json(Value,Hash),atom_string(Expected,Hash).
+test(provider_wire_uses_real_utf8_only,
+     [setup(asserta(user:fixture_mode(unicode))),cleanup(retractall(user:fixture_mode(_)))]) :-
+    unicode_fixture(Text),agent_settings(Config),
+    chat_completion(Config,[_{role:"user",content:Text}],[],Reply),
+    Reply.choices=[Choice],assertion(Choice.message.content==Text),
+    fixture_request(chat_bytes,Bytes),
+    assertion(append(_,[240,159,152,128|_],Bytes)),
+    assertion(\+append(_,[237,160,189,237,184,128|_],Bytes)),
+    fixture_request(chat,Request),assertion(member(_{role:"user",content:Text},Request.messages)).
+test(local_http_response_has_scalar_utf8_and_headers) :-
+    host_provider(Base),string_concat(Root,"/v1",Base),
+    string_concat(Root,"/llm-unicode-reply",URL),
+    setup_call_cleanup(http_open(URL,In,[timeout(5),bypass_proxy(true),redirect(false),
+        status_code(Status),header(content_type,Type),header(cache_control,Cache)]),
+      (set_stream(In,encoding(octet)),read_string(In,100,Raw)),close(In)),
+    string_codes(Raw,Bytes),
+    assertion(Status==200),assertion(sub_atom(Type,0,_,_,'application/json')),
+    assertion(Cache=='no-store'),
+    assertion(Bytes==[123,34,118,97,108,117,101,34,58,34,240,159,152,128,34,125]).
+test(text_only_chat_roundtrip_with_supplementary_text,
+     [setup(asserta(user:fixture_mode(unicode))),cleanup(retractall(user:fixture_mode(_)))]) :-
+    unicode_fixture(Text),start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    start_chat(_{id:C.id,revision:C.revision,text:Text,approvedNonsensitive:true},_),
+    wait_chat(C.id,After),assertion(After.status=="ready"),
+    assertion(member(_{role:"user",content:Text},After.messages)),
+    assertion(member(_{role:"assistant",content:Text},After.messages)),
+    assertion(\+ (member(M,After.messages),get_dict(role,M,"tool"))).
+:- end_tests(llm_unicode).
 
 wait_chat(Id,Reply) :-
     call_with_time_limit(90,wait_chat_loop(Id,Reply)).
