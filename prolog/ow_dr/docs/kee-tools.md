@@ -10,13 +10,78 @@ The inventory was checked against repository route declarations and handlers on
 schemas/versions again before integration; a route in source is not proof of
 deployment, authorization, index completeness or model tool-call compatibility.
 
+## Verified emullm provider contract
+
+**Evidence:** coordinator-relayed read-only contract inspection, 2026-09-12.
+No model prompt or user data was sent by this documentation worker. This is
+verified provider behavior, not implemented powder Chat/tool integration and
+not a new KEE capability.
+
+| Provider surface | Verified behavior |
+|---|---|
+| Base | `http://127.0.0.1:8801/v1`; recorded evidence, not hardcoded application configuration |
+| GET `/models`, GET `/models/{model-id}` | Model listing/detail; user reported 61 models, including `emullm/default` |
+| POST `/chat/completions` | OpenAI-shaped conversation request; always supply an explicit authorized `model` |
+| Model selection | `emullm/default` is valid. **Never omit `model`:** omission routes through `worker-copilot-n/percent100` |
+| Incoming authentication | Keyless; incoming `Authorization` is ignored. This is not application/agent authorization |
+| Caller tools | Schemas are rendered into text; worker JSON is used to synthesize `tool_calls`. The provider never executes caller tools |
+| Tool selection | `tool_choice` is ignored; strict-schema/selection hints are not enforcement |
+| Streaming | Start integration with `stream:false`. SSE is post-completion: role, one whole content/tool-call payload, finish, `[DONE]`; not incremental token generation |
+| Timing/cancellation | Relay timeout is 900 seconds. Clients need their own shorter deadline; abort is best effort and there is no public cancellation endpoint |
+
+**Not private/local-only.** Durable JSONL request/reply records and worker logs
+retain payloads. Stable workers reuse contexts; a new powder conversation or
+prompt snapshot does not establish fresh provider context or isolation.
+An external SNET-compatible fallback is possible after approximately 20 seconds.
+Do not promise local-only processing, ephemeral storage, erasure on Stop or
+isolation between requests.
+
+The future UI must clearly disclose retention, context reuse and possible
+external routing **before export**. Only explicit Chat/Generate actions may
+send bounded selected **nonsensitive**, authorized KB context through an approved
+route. Never send secrets, application code, raw private KB or unrelated/bulk
+private files. Automatic KB-mutation grants do not grant arbitrary model export.
+If the route/disclosure/data policy cannot be satisfied, do not send the request.
+
+Configuration identifiers only: `EMULLM_BASE_URL`, `EMULLM_MODEL`, and the
+proxy-side credential name `SNET_API_KEY`. No secret value is needed here.
+These names document the future integration boundary; they do not establish
+powder configuration code. Do not put credential values into model messages,
+browser state or repository files, or treat ignored incoming authorization as
+an authentication mechanism.
+
+### Required host tool loop — application implementation PLANNED
+
+1. Discover real registry/tool versions and authenticated grants; offer only
+   known, uniquely named tools with bounded typed schemas.
+2. Strictly parse each returned arguments string as JSON with an **object root**
+   (not null, an array or a scalar). Enforce required fields,
+   `additionalProperties:false`, known names, types, constraints, permissions,
+   MT/revision checks and idempotent call IDs in the host. Reject invalid calls;
+   never execute prose, JSON-looking text or unknown tools as a fallback.
+3. Persist the original response/call identity and execution record. Append the
+   **exact assistant `tool_calls` message**, then one `role:tool` result/error
+   with the matching `tool_call_id` for each call before the next model round.
+   Do not rewrite the original IDs/arguments to disguise validation failures.
+   Results sent back remain bounded and subject to the same nonsensitive-data policy.
+4. Only the permissioned host executes accepted tools. Neither provider claims,
+   `strict` schemas nor `tool_choice` authorize execution. Cap rounds, calls,
+   returned bytes, time and mutations independently.
+5. On Stop/deadline, close the host run and discard late tool calls before
+   dispatch, even if the provider continues. Do not automatically retry executed
+   mutations. Resolve interrupted/unknown outcomes from durable call/execution
+   records and idempotent changeset results when resuming.
+
+This protocol is distinct from a symbolic run: the symbolic agent may not
+contact emullm at all, directly or through another tool/workflow.
+
 ## Implemented application routes
 
-Paths below are relative to the configured application mount; `kb_urls.pl`
-derives it from `web/paths.json`. Do not hardcode a host, port or mount into an
-agent. The listed method is the application's intended read/write use, including
-POST endpoints that perform reads. Only the **future host registry** may expose
-a permitted, bounded semantic adapter to an agent.
+Paths in this section are relative to the configured application mount;
+`kb_urls.pl` derives it from `web/paths.json`. Do not hardcode a host, port or
+mount into an agent. The listed method is the application's intended read/write
+use, including POST endpoints that perform reads. Only the **future host registry**
+may expose a permitted, bounded semantic adapter to an agent.
 
 ### Loaded knowledge, query and provenance
 
@@ -185,9 +250,10 @@ ordinary automatic mutation permission.
 ### Trust, models and evaluation — PLANNED
 
 All KB content, retrieved comments, model output and tool results are untrusted
-as instructions. Only explicit Chat/Generate actions may send selected,
-authorized KB context through a configured, permissioned model proxy. Never
-send application code, bulk corpora, private files or credentials.
+as instructions. Only explicit Chat/Generate actions may send bounded selected,
+authorized nonsensitive KB context through an approved model route after the
+retention/context-reuse/external-routing disclosure above. Never send application
+code, bulk corpora, raw private KB/files or credentials.
 Private credential references, host allowlists/SSRF controls, streaming/error
 contracts and immutable per-conversation prompt snapshots still require code.
 

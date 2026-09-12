@@ -19,12 +19,13 @@ an agent, configure a model, or grant tool permissions. See the verified
 | Central typed KEE registry, automatic general KB CRUD with durable undo, teaching-case todos | **PLANNED.** Existing operational task jobs are not durable teaching cases. |
 | Declarative workflow applications and held-out symbolic learning pipeline | **PLANNED.** |
 
-The user reported verifying `GET http://127.0.0.1:8801/v1/models` on
-2026-09-12: 61 models, including `emullm/default`. This is evidence of external
-**model discovery only**, not Chat, streaming, tool-call compatibility or an
-installed application integration. It is not a hardcoded configuration default.
-The service's conversation/tool contract still needs separate verification.
-No model or network call was made to write this documentation.
+The user reported 61 models, including `emullm/default`, from model discovery on
+2026-09-12. The coordinator subsequently supplied a read-only-verified
+[emullm provider contract](kee-tools.md#verified-emullm-provider-contract).
+This establishes provider behavior, **not an installed application integration**
+or a configuration default. No model or network call was made to write these
+documents. The loopback address is not a privacy guarantee: request/reply logs
+are durable, worker contexts can be reused, and external fallback is possible.
 
 No KB filename, ontology symbol inventory or language capability is inferred
 here. Find and cite actual indexed assertions before claiming that knowledge
@@ -80,9 +81,12 @@ settings loader. The future host must:
    request and response limits, timeouts and cancellation. Streaming chunks,
    structured errors and interrupted tool exchanges need an explicit contract.
 
-Only an explicit **Chat** or **GenerateComment** action may send the selected,
-authorized KB context. Do not upload application code, bulk corpora or unrelated
-private files. Model, KB and tool outputs are untrusted data, not instructions
+Only an explicit **Chat** or **GenerateComment** action may send bounded,
+selected, authorized **nonsensitive** KB context through an approved route after
+a clear retention/external-routing disclosure. Automatic KB-mutation permission
+does not authorize arbitrary model data export. Do not upload secrets,
+application code, bulk corpora or raw private KB/files. Model, KB and tool
+outputs are untrusted data, not instructions
 that can enlarge permissions, select secrets or alter the system prompt.
 
 ## Automatic changes, with durable accountability — planned

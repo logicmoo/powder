@@ -18,6 +18,41 @@ operating guidance: it does **not** implement a registry, tool adapter or agent.
 Preserve existing user content and current application behavior. Do not infer
 implementation from a planned requirement or a model-discovery response.
 
+## Verified emullm boundary; powder integration remains planned
+
+Coordinator-provided read-only evidence establishes base
+`http://127.0.0.1:8801/v1`, GET `/models`, GET `/models/{model-id}` and
+POST `/chat/completions`. Always provide an explicit authorized `model`;
+`emullm/default` is valid. Omission routes through
+`worker-copilot-n/percent100`. Incoming requests are keyless and ignore
+`Authorization`; this is not host authentication or agent permission.
+Configuration names only: `EMULLM_BASE_URL`, `EMULLM_MODEL`, proxy-side
+`SNET_API_KEY`. Do not obtain or store secret values here.
+
+The provider is **not private/local-only**: durable JSONL requests/replies and
+worker logs retain payloads, stable worker contexts are reused, and external
+SNET-compatible fallback can occur after roughly 20 seconds. Require clear
+disclosure and an approved route before explicit Chat/Generate exports of
+bounded selected authorized **nonsensitive** KB context. Never export secrets,
+app code, raw private KB or unrelated/bulk private files. Automatic mutation
+permission does not grant arbitrary model data export.
+
+OpenAI-shaped schemas are text-rendered and `tool_calls` synthesized from worker
+JSON. `tool_choice` is ignored; the provider never executes caller tools.
+Host validation must require a JSON object root, required fields,
+`additionalProperties:false`, unique known names, types/constraints,
+permissions, revisions and idempotence. Neither `strict` nor `tool_choice`
+is authorization. Preserve the exact assistant `tool_calls` message followed
+by matching-ID `role:tool` results/errors in the next round; enforce round,
+call, output, time and mutation budgets.
+
+Start with `stream:false`: SSE is post-completion (role, whole content/tool-call
+payload, finish, `[DONE]`), not incremental generation. The relay timeout is
+900 seconds; clients need shorter deadlines and best-effort abort, with no
+public cancel endpoint. Stop discards late tool calls before dispatch. Never
+retry executed mutations; resume from durable call/execution records and
+idempotent outcomes. A symbolic run must never contact this provider.
+
 ## Discover before acting
 
 1. Determine the actual host/app version and available registry discovery
@@ -71,8 +106,9 @@ speech-act ontology is allowed.
 
 Never use debug/Telnet, arbitrary Prolog/shell, administrative/reset/checkpoint
 operations, secrets or unrestricted filesystem/network tools as KEE.
-Only explicit Chat/Generate may send selected authorized KB context, never
-application code or bulk/private files.
+Only explicit Chat/Generate may send bounded selected authorized nonsensitive
+KB context under the approved-route/disclosure policy above, never application
+code, raw private KB or bulk/private files.
 
 ## Teach, evaluate, and report honestly
 
