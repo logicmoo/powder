@@ -10,6 +10,9 @@ import { createClassicLayout } from './classic-layout.js';
 import { createAssertionView } from './assertion-view.js';
 import { filterContextItems, pageTermNavigation, termContextModel } from './term-context.js';
 import { colorAssertionBalls } from './assertion-markers.js';
+import { createAnnotationHost } from './annotation-host.js';
+import { renderTVASettings } from './native-tva.js';
+import { loadedMTTree } from './mt-inheritance.js';
 
 const $ = selector => document.querySelector(selector);
 const content = $('#content');
@@ -23,11 +26,70 @@ const state = {
   settings: { ...DEFAULT_SETTINGS },
   query: { query: '', mt: '', limit: DEFAULT_SETTINGS.queryLimit, timeout: 3 },
   fileMetadata: new FileMetadata(), fileViews: new Map(),
+  startupPending: new Set(), collapsedGroups: new Set(),
 };
 let fileInformationTimer, fileInformationBusy = false;
 const presentation = createPresentationStore({ onError: error => showNotice(`Display preferences could not be saved: ${error.message}`, true) });
 const classicLayout = createClassicLayout({ content, presentation, header: $('.workspace-header'), status: $('.workspace-footer'), mtLink });
 const assertionView = createAssertionView({ sourceLink, propertyList, diagnosticsPanel, mtLink, mappingLink });
+const annotations = createAnnotationHost({ api, presentation, reference: nativeReference, sourceLink,
+  getGeneration: () => state.status?.generation });
+let annotationRevision = null;
+let sourceEditor, sourceOpenCount = 0, acceptedRoute = location.hash, pendingInterfaceReload = false;
+const pendingJobs = new Set();
+
+function nativeReference({ key, expression, kind }) {
+  if (key === null) return element('span', { className: 'muted' }, kind === 'context' ? 'No current MT (MT fallback skipped)' : 'Supplier unavailable');
+  if (key === 'default') return link('default', 'ui-settings');
+  if (kind === 'context') return mtLink(key, expression);
+  if (/^a[0-9a-f]+$/u.test(key)) return link(key, 'assertion', { id: key });
+  return expression ? element('span', {}, renderExpression(expression, { inline: true, pretty: false }),
+    link('Inspect', 'term', { term: key }, 'text-button')) : link(symbolLabel(key), 'term', { term: key });
+}
+
+function annotationContext(route = parseRoute(location.hash)) {
+  if (route.params.has('annotationMt')) return route.params.get('annotationMt') || null;
+  return route.params.get('mt') || null;
+}
+
+function annotateCards(container, items, { detail = false, context = annotationContext() } = {}) {
+  const data = new Map(items.map(item => [String(item.id), item]));
+  for (const card of container.querySelectorAll('.assertion-view')) {
+    const item = data.get(card.dataset.assertionId);
+    if (!item) continue;
+    const ball = card.querySelector('.assertion-ball');
+    if (ball && context) ball.href = routeHref('assertion', { id: item.id, mt: context });
+    annotations.attach(card, item.id, { context, assertion: true, detail, signal: state.routeController?.signal });
+  }
+  return container;
+}
+
+function annotationContextControl(route, signal) {
+  const selected = annotationContext(route);
+  const select = element('select', { name: 'annotation-context', 'aria-label': 'Current MT for native annotations',
+    onchange: () => {
+      const value = select.value || null;
+      const params = Object.fromEntries(parseRoute(location.hash).params);
+      params.annotationMt = value ?? '';
+      const query = new URLSearchParams(params);
+      history.pushState(null, '', `#/${route.name}?${query}`);
+      annotations.setContext(value);
+    } }, element('option', { value: '', selected: selected === null }, 'No current MT — use Atom then Default'));
+  if (selected) select.append(element('option', { value: selected, selected: true }, contextLabel(selected, state.contexts.get(selected))));
+  const feedback = element('span', { className: 'muted' });
+  api('microtheories', {}, { signal }).then(data => {
+    if (signal.aborted) return;
+    const keys = new Set([...select.options].map(option => option.value));
+    for (const mt of data.items) {
+      rememberContext(mt.mt, mt.mtExpression);
+      if (!keys.has(mt.mt)) select.append(element('option', { value: mt.mt }, contextLabel(mt.mt, mt.mtExpression)));
+    }
+  }).catch(error => { if (error.name !== 'AbortError') feedback.textContent = `MT choices unavailable: ${error.message}`; });
+  return element('details', { className: 'annotation-context-control' },
+    element('summary', {}, 'Annotation context'),
+    element('label', { className: 'field' }, 'Current MT for native annotations and source interpretation', select),
+    element('p', { className: 'muted' }, 'Changing this context does not select or load KB sources, run inference, or change the selected term.'), feedback);
+}
 
 function updateClassicContext(panel, route) {
   const context = panel.contextualData;
@@ -67,9 +129,7 @@ function addLiteralQueryActions(model) {
       const query = expressionText(spec.expression, { pretty: false });
       const run = button('+', event => {
         event.preventDefault(); event.stopPropagation();
-        state.literalQuery = { query, mt: spec.mt, limit: spec.limit, timeout: spec.timeout };
-        const target = routeHref('query', state.literalQuery);
-        if (location.hash === target) renderRoute(); else location.hash = target;
+        runLiteralQuery(spec);
       }, 'literal-query-button');
       run.title = `Run ${query}${spec.mt ? ` in ${contextLabel(spec.mt, state.contexts.get(spec.mt))}` : ' independently in each microtheory'}. Includes asserted and derivable answers; likelihood of additional answers is unknown.`;
       run.setAttribute('aria-label', `Run bounded query ${query}`);
@@ -203,7 +263,8 @@ function propertyList(properties, { context } = {}) {
       const rows = splitMappingRows(Array.isArray(property.value) ? property.value : []);
       value = element('span', {}, `${number(rows.ids.length)} mapping IDs · ${number(rows.markers.length)} diagnostic markers${rows.other.length ? ` · ${number(rows.other.length)} other annotations` : ''}`);
     } else if (property.name === 'microtheory' && context) value = mtLink(context.mt, context.mtExpression);
-    else if (property.name === 'source_file' && typeof property.value === 'string') value = sourceLink(property.value, context?.line);
+    else if (['source_file', 'source', 'originalSource', 'file'].includes(property.name) && typeof property.value === 'string'
+      && /\.(?:kif|krf|meld|metta)$/iu.test(property.value)) value = sourceLink(property.value, context?.line);
     else value = propertyValue(property.value);
     list.append(element('dt', {}, property.name),
       element('dd', {}, value));
@@ -229,12 +290,28 @@ function sourceFileDisplay(path, label, options = {}) {
     changed: scheduleFileInformation,
     properties: sourceFileProperties,
     renderMT: mtLink,
+    enableStartup, startupPending: file => state.startupPending.has(file),
     retry: file => { state.fileMetadata.retry(file); scheduleFileInformation(); } });
   state.fileViews.set(view.node, { ...view, path });
   scheduleFileInformation();
   return view.node;
 }
 
+async function enableStartup(path) {
+  if (state.startupPending.has(path)) return;
+  state.startupPending.add(path); refreshFileDisplays();
+  try {
+    const current = await api('kb/startup');
+    const result = await api('kb/startup/add', {}, { method: 'POST', body: { path, revision: current.revision } });
+    state.fileMetadata.rememberStartup(result.startup);
+    if (state.status) state.status = { ...state.status, startup: result.startup };
+    showNotice(`${path} will load at next startup. The current KB is unchanged.`);
+  } catch (error) {
+    showNotice(`Startup selection was not changed: ${error.message}`, true);
+  } finally {
+    state.startupPending.delete(path); refreshFileDisplays();
+  }
+}
 function sourceFileProperties(path, target, refresh) {
   if (!path) {
     target.append(element('p', { className: 'muted' },
@@ -355,7 +432,7 @@ function scheduleFileInformation() {
 
 function refreshFileDisplays() {
   for (const [node, view] of state.fileViews) {
-    if (!node.isConnected) state.fileViews.delete(node);
+    if (!node.isConnected && !sourceEditor?.element.contains(node)) state.fileViews.delete(node);
     else view.refresh();
   }
   if (state.selection) {
@@ -367,12 +444,18 @@ function refreshFileDisplays() {
   }
 }
 
+function runLiteralQuery(spec) {
+  state.literalQuery = { query: expressionText(spec.expression, { pretty: false }), mt: spec.mt || '', limit: spec.limit || 20, timeout: spec.timeout || 3 };
+  const target = routeHref('query', state.literalQuery);
+  if (location.hash === target) renderRoute(); else location.hash = target;
+}
+
 async function hydrateFileInformation() {
   fileInformationTimer = null;
   if (fileInformationBusy) return;
   const pending = new Set();
   for (const [node, view] of state.fileViews) {
-    if (!node.isConnected) { state.fileViews.delete(node); continue; }
+    if (!node.isConnected) { if (!sourceEditor?.element.contains(node)) state.fileViews.delete(node); continue; }
     if (!view.path || !/\.(?:kif|krf|meld|metta)$/i.test(view.path) ||
       !state.fileMetadata.needsInformation(view.path) ||
       (!view.requested() && state.knownSources.has(view.path)) || !node.getClientRects().length) continue;
@@ -459,7 +542,19 @@ function diagnosticsPanel(record, { status = false, entries: supplied, showOrigi
 }
 
 function assertionGroups(items, options = {}) {
-  return colorAssertionBalls(assertionView.groups(items, options), items);
+  return annotateCards(colorAssertionBalls(assertionView.groups(items, options), items), items, options);
+}
+
+async function annotateAssertions(items, signal, generation) {
+  if (!items.length || items.every(item => typeof item.available === 'boolean')) return items;
+  const reply = await api('assertions/annotations', {}, { method: 'POST', body: { ids: items.map(item => item.id) }, signal });
+  if (Number.isSafeInteger(generation) && reply.generation !== generation) throw new APIError('The loaded generation changed while term links were indexed. Refresh this view.', 'generation_changed');
+  const byId = new Map(reply.items.map(item => [item.id, item]));
+  return items.map(item => {
+    const annotated = byId.get(item.id);
+    if (!annotated?.available) return item;
+    return { ...item, expression: annotated.expression, mtExpression: annotated.mtExpression };
+  });
 }
 
 function updateRoute(values = {}, { replace = false } = {}) {
@@ -507,8 +602,10 @@ function searchForm(routeName, q = '', placeholder = 'Name, symbol, or fragment'
 
 function setStatus(status) {
   if (state.status && status.generation < state.status.generation) return;
-  if (state.status && status.generation !== state.status.generation) state.contexts.clear();
+  const changed = !state.status || status.generation !== state.status.generation;
+  if (changed) state.contexts.clear();
   state.status = status;
+  if (changed) annotations.invalidate({ generation: status.generation });
   state.fileMetadata.status(status);
   for (const file of status.files ?? []) {
     const path = canonicalPath(file.path);
@@ -616,6 +713,10 @@ async function overview(_route, signal) {
 
 async function searchPage(route, signal) {
   const isPredicates = route.name === 'predicates';
+  if (!isPredicates) {
+    const { renderTermCategories } = await import('./term-categories.js');
+    return renderTermCategories({ api, element, heading, link, presentation, propertyList }, route, signal);
+  }
   const q = route.params.get('q') ?? '';
   const data = await api(isPredicates ? 'predicates' : 'search', { q, offset: route.offset, limit: route.limit }, { signal });
   const panel = element('div', {},
@@ -633,14 +734,23 @@ async function searchPage(route, signal) {
   } else panel.append(empty('No matching results', q ? 'Try a shorter name or clear the search.' : 'Load a source to populate the semantic indexes.',
     q ? link('Clear search', route.name, {}, 'button secondary') : link('Choose KB Sources', 'sources', {}, 'button')));
   panel.append(pagination(data, route));
+  if (!isPredicates) panel.append(element('section', { className: 'nat-search-entry' },
+    element('h2', {}, 'Non-atomic terms'),
+    element('p', { className: 'muted' }, 'Browse complete NART/NAUT candidates by constructor, actual type evidence and reification status. Unknown status is retained.'),
+    link('Browse non-atomic terms by category', 'nats', { q }, 'button secondary')));
   return panel;
+}
+
+async function natsPage(route, signal) {
+  const { renderNatBrowser } = await import('./nat-browser.js');
+  return renderNatBrowser({ api, element, heading, link, button, pagination }, route, signal);
 }
 
 async function termPage(route, signal) {
   const isMT = route.name === 'microtheory';
-  const value = route.params.get(isMT ? 'mt' : 'term');
+  let value = route.params.get(isMT ? 'mt' : 'term');
   if (!value) throw new APIError(`Choose a ${isMT ? 'microtheory' : 'term'} to browse.`, 'missing_parameter');
-  const filters = isMT ? {} : Object.fromEntries(['section', 'arg', 'predicate', 'mt'].map(key => [key, route.params.get(key)]));
+  const filters = isMT ? {} : Object.fromEntries(['section', 'arg', 'predicate', 'mt', 'source'].map(key => [key, route.params.get(key)]));
   const [data] = await Promise.all([
     api(isMT ? 'microtheory' : 'term', { [isMT ? 'mt' : 'term']: value, offset: route.offset, limit: route.limit, ...filters }, { signal }),
     ensureMappingIds(signal).catch(error => { if (error.name === 'AbortError') throw error; }),
@@ -653,18 +763,31 @@ async function termPage(route, signal) {
     panel.resolvedRoute = resolved;
     return panel;
   }
+  if (!isMT && typeof data.term === 'string' && data.term.startsWith('nat:')) {
+    value = data.term;
+    route.params.set('term', value);
+    history.replaceState(null, '', routeHref(route.name, Object.fromEntries(route.params)));
+  }
   const contextKey = isMT ? data.mt ?? value : null;
   if (isMT) {
     rememberContext(contextKey, data.mtExpression);
     route.params.set('mt', contextKey);
   }
-  const title = isMT ? mtName(contextKey, data.mtExpression) : symbolLabel(value);
+  const title = isMT ? mtName(contextKey, data.mtExpression)
+    : data.expression ? renderExpression(data.expression, { inline: true, pretty: false }) : symbolLabel(value);
   const panel = element('div', {},
     heading(title, isMT ? 'Assertions in this microtheory, in source order.' : 'Assertions containing this semantic term. Follow a symbol to continue exploring.',
       isMT ? link('Query this context', 'query', { mt: contextKey }, 'button secondary') : null));
+  panel.append(annotationContextControl(route, signal));
+  const termAnnotations = element('div', { className: 'term-native-annotations' });
+  panel.append(termAnnotations);
+  annotations.attach(termAnnotations, isMT ? contextKey : value, { context: annotationContext(route), signal });
   panel.contextualData = { route, data, term: isMT ? null : value, mt: contextKey };
-  if (data.expression) panel.append(renderExpression(data.expression));
-  let items = data.items ?? [];
+  if (!isMT && data.navigation?.occurrences) panel.append(termOccurrencesPanel(value, data.navigation.occurrences));
+  if (data.known === false) panel.append(element('p', { className: 'term-evidence-note', role: 'status' }, data.message));
+  if (data.termInfo) panel.append(natTypeInformation(data.termInfo), termEvidencePanel(data.termInfo, value));
+  const itemsWithLinks = await annotateAssertions(data.items ?? [], signal, data.generation);
+  let items = itemsWithLinks;
   let displayedData = data;
   if (!isMT) {
     if (!data.navigation) {
@@ -672,6 +795,8 @@ async function termPage(route, signal) {
       if ((data.offset ?? 0) === 0 && data.total === data.items.length) displayedData = { ...data, total: items.length };
     }
     if (route.params.get('viewpoint') === '1') panel.append(viewpointControls(route, data, value));
+    if (route.params.get('section') === 'definition') panel.append(element('p', { className: 'muted definition-help' },
+      'Definitional Info is where this term is used as an argument of schema relations, such as argIsa or arity, not where it is applied as a predicate. These are stored assertions, not inferred definitions.'));
     const role = route.params.get('role') ?? 'all';
     const roleFilter = selectField('Role on this page', 'role', role,
       [['all', 'All roles'], ['predicate', 'Top-level predicate'], ['argument', 'Argument'], ['nested', 'Nested predicate / function head']],
@@ -689,7 +814,96 @@ async function termPage(route, signal) {
     ? assertionGroups(items, { offset: route.offset, term: isMT ? undefined : value })
     : empty('No assertions on this page', isMT ? 'This microtheory has no assertions at the current offset.' : 'Try another role or page, or load a source containing this term.'),
   pagination(displayedData, route));
+  if (isMT || (!data.termInfo && data.total > 0)) {
+    const evidence = element('div', { className: 'term-evidence-host', 'aria-busy': 'true' }, element('p', { className: 'muted' }, 'Reading loaded term evidence...'));
+    panel.append(evidence);
+    api('term/info', { term: isMT ? contextKey : value }, { signal }).then(info => {
+      if (signal.aborted) return;
+      if (isMT && info.nat?.expression) {
+        rememberContext(contextKey, info.nat.expression);
+        panel.querySelector('h1').replaceChildren(renderExpression(info.nat.expression, { inline: true, pretty: false }));
+      }
+      evidence.replaceChildren(...[
+        natTypeInformation(info), termEvidencePanel(info, isMT ? info.term.identity : value),
+        isMT ? termOccurrencesPanel(info.term.identity, info.occurrences) : null,
+      ].filter(Boolean));
+    }).catch(error => {
+      if (error.name !== 'AbortError') evidence.replaceChildren(element('p', { className: 'statistics-error', role: 'status' }, `Term evidence unavailable: ${error.message}`));
+    }).finally(() => evidence.setAttribute('aria-busy', 'false'));
+  }
   return panel;
+}
+
+function natTypeInformation(info) {
+  const nat = info.nat;
+  if (!nat) return null;
+  const vocabulary = new Map((info.representationVocabulary ?? []).map(item => [item.term, item.available]));
+  const representationLink = name => vocabulary.get(name) ? link(symbolLabel(name), 'term', { term: name }) : element('span', {}, symbolLabel(name));
+  const kinds = nat.representation?.kinds ?? [];
+  const representation = nat.representation?.status === 'unknown' ? 'Unknown: no recognized reification export'
+    : kinds.map(kind => kind === 'nart' ? 'Reified (NART) export' : 'Unreified (NAUT) export').join(' / ');
+  const panel = element('section', { className: 'nat-type-information' },
+    element('h2', {}, 'Inferred isa / type evidence'),
+    element('p', { className: 'muted' }, 'No additional isa inference was run to build this index. Representation, asserted types and constructor constraints are distinguished below; none is a rule-utility score.'),
+    element('p', {}, 'Term representation: ', representationLink('x_CycLNonAtomicTerm'),
+      ' (indexed denoting application, not an isa assertion about the denoted object).'),
+    element('p', {}, 'Reification: ', representation,
+      kinds.includes('nart') && element('span', {}, ' · ', representationLink('x_CycLNonAtomicReifiedTerm'))),
+    element('ul', { className: 'nat-type-evidence' }, (nat.typeConstraints ?? []).map(type => {
+      const relations = (type.predicates ?? []).map(predicate => ({
+        x_isa: 'asserted isa', x_resultIsa: 'constructor resultIsa', x_resultGenl: 'constructor resultGenl (not isa)',
+      })[predicate] ?? symbolLabel(predicate));
+      return element('li', {},
+        type.available ? link(type.label, 'term', { term: type.identity }) : element('span', {}, type.label),
+        element('span', { className: 'muted' }, ` · ${relations.join(', ')}`),
+        element('details', {}, element('summary', {}, `${type.evidenceCount} evidence records`),
+          element('ul', {}, (type.evidence ?? []).map(evidence => element('li', {},
+            link(evidence.assertionId, 'assertion', { id: evidence.assertionId }), ' ',
+            sourceLink(evidence.source, evidence.line, evidence.source), ' ', mtLink(evidence.mt))))));
+    })));
+  if (!nat.typeConstraints?.length) panel.append(element('p', { className: 'muted' }, 'No positive whole-term isa or constructor type constraint is recorded.'));
+  panel.append(link('Explore categories and full type facets', 'nats', { q: nat.identity, match: 'exact' }),
+    button('Ask for isa types', () => runLiteralQuery({
+      expression: { type: 'application', head: { type: 'symbol', value: 'x_isa' }, args: [nat.expression, { type: 'variable', value: '?TYPE' }] },
+      mt: '', limit: 20, timeout: 3,
+    }), 'button secondary'));
+  return panel;
+}
+
+function termEvidencePanel(info, term) {
+  const detail = element('details', { className: 'term-occurrences' },
+    element('summary', {}, 'Term evidence and context roles'),
+    element('p', { className: 'muted' }, 'Observed loaded-data positions, not a claim of inferred truth or a locally implemented method. Reification is unknown unless supported by explicit evidence.'),
+    element('p', {}, `Semantic mentions: ${number(info.totals?.semantic)}; assertions using this exact term as their context: ${number(info.totals?.context)}.`),
+    element('p', {}, 'Recorded roles: ', (info.term?.roles ?? []).join(', ')),
+    element('ul', {}, (info.evidence ?? []).map(evidence => element('li', {},
+      link(evidence.assertionId, 'assertion', { id: evidence.assertionId }), ' ',
+      sourceLink(evidence.source, evidence.line, evidence.source), ' ',
+      element('span', { className: 'muted' }, evidence.role)))));
+  const keys = info.term?.contextKeys ?? [];
+  if (keys.length) detail.append(element('p', {}, 'Observed microtheory positions: ',
+    keys.map(key => mtLink(key, info.term?.expression))));
+  if (info.term?.roles?.includes('constructor_symbol')) detail.append(link('Browse complete terms with this constructor', 'nats', { constructor: info.term.identity }));
+  detail.dataset.term = term;
+  return detail;
+}
+
+function termOccurrencesPanel(term, occurrences) {
+  const contexts = occurrences.microtheories ?? [];
+  const files = occurrences.sources ?? [];
+  return element('details', { className: 'term-occurrences' },
+    element('summary', {}, `Occurs in ${number(contexts.length)} microtheories and ${number(files.length)} source files`),
+    element('p', { className: 'muted' }, `${number(occurrences.assertions)} distinct assertions mentioning this exact term in the loaded KB, before page and viewpoint filters. Context-only membership and unloaded corpus inventory are not included.`),
+    element('h2', {}, 'Microtheories'),
+    element('ul', {}, contexts.map(context => element('li', {},
+      mtLink(context.mt, context.mtExpression), ' ',
+      link(`${number(context.count)} assertions mentioning this term`, 'term', { term, mt: context.mt, view: 'references' })))),
+    element('h2', {}, 'Original source files'),
+    element('ul', {}, files.map(file => element('li', {},
+      sourceLink(file.source, file.firstLine || 1, file.source), ' ',
+      link(`${number(file.count)} assertions`, 'term', { term, source: file.source, view: 'references' }),
+      element('span', { className: 'occurrence-evidence' }, ' Evidence: ',
+        (file.evidence ?? []).flatMap((entry, index) => [index ? ', ' : '', link(entry.id, 'assertion', { id: entry.id })]))))));
 }
 
 function viewpointControls(route, data, term) {
@@ -722,7 +936,7 @@ function contextForm() {
 
 function contextSuggestions() {
   return element('datalist', { id: 'context-names' },
-    [...state.contexts.keys()].filter(mt => !mt.startsWith('mt:')).sort().map(mt => element('option', { value: symbolLabel(mt) })));
+    [...state.contexts.keys()].sort().map(mt => element('option', { value: contextInputText(mt, state.contexts.get(mt)) })));
 }
 
 async function microtheoryDirectory(route, signal) {
@@ -742,7 +956,7 @@ async function microtheoryDirectory(route, signal) {
         const selected = item.mt === route.params.get('mt');
         if (selected) reference.querySelector('.mt-link').setAttribute('aria-current', 'page');
         return element('li', { className: selected ? 'selected-context' : '', 'data-mt': item.mt }, reference,
-          element('span', { className: 'context-count' }, `${number(item.count)} assertions`));
+          element('span', { className: 'context-count' }, `${number(item.count)} context assertions${item.referencedOnly ? ' · referenced/declared only' : ''}`));
       })) : empty('No microtheories loaded', 'Load KB Sources to populate the context list.',
         link('Choose KB Sources', 'sources', {}, 'button secondary')));
   } catch (error) {
@@ -755,7 +969,7 @@ async function microtheoryDirectory(route, signal) {
 async function microtheoriesPage(route, signal) {
   const directory = await microtheoryDirectory(route, signal);
   return element('div', {}, heading('Microtheories', 'Choose any indexed context below. No context inheritance is assumed.'),
-    contextForm(), directory);
+    contextForm(), loadedMTTree({ api, element, link, mtLink, sourceLink }, signal), directory);
 }
 
 function recordedMicrotheoryPanel(key, signal) {
@@ -924,20 +1138,24 @@ async function microtheoryPage(route, signal) {
   detail.insertBefore(contextForm(), before);
   detail.insertBefore(directory, before);
   detail.insertBefore(recordedMicrotheoryPanel(route.params.get('mt'), signal), directory);
+  detail.insertBefore(loadedMTTree({ api, element, link, mtLink, sourceLink }, signal, route.params.get('mt')), directory);
   return detail;
 }
 
 async function assertionPage(route, signal) {
   const id = route.params.get('id');
   if (!id) throw new APIError('An assertion ID is required.', 'missing_parameter');
-  const [assertion] = await Promise.all([
+  const [original] = await Promise.all([
     api('assertion', { id }, { signal }),
     ensureMappingIds(signal).catch(error => { if (error.name === 'AbortError') throw error; }),
   ]);
+  const [assertion] = await annotateAssertions([original], signal);
   const mapping = splitMappingRows(mappingRowsOf(assertion));
   return element('div', {},
     heading('Assertion detail', id, copyButton('Copy expression', expressionText(assertion.expression))),
+    annotationContextControl(route, signal),
     assertionGroups([assertion], { detail: true }),
+    compiledClausePanel(assertion.id, original.generation, signal),
     element('section', { className: 'provenance-section' }, element('h2', {}, 'Source provenance'),
       propertyList([
         { name: 'Assertion ID', value: assertion.id },
@@ -949,28 +1167,50 @@ async function assertionPage(route, signal) {
       mapping.markers.length > 0 && element('p', { className: 'muted' }, `${number(mapping.markers.length)} mapping diagnostic markers are shown with the assertion diagnostics above; they are not mapping-table IDs.`)));
 }
 
+function compiledClausePanel(id, generation, signal) {
+  const body = element('div', { 'aria-busy': 'true' }, element('p', { className: 'muted' }, 'Reading the active native clause...'));
+  const section = element('section', { className: 'compiled-prolog-section' }, element('h2', {}, 'Compiled Prolog'), body);
+  api('assertion/compiled', { id, generation }, { signal }).then(data => {
+    if (signal.aborted) return;
+    body.replaceChildren(
+      element('p', { className: 'muted' }, 'Current native clause, including its module-qualified x_cid guard. Computed on demand; not an original import payload or retained metadata copy.'),
+      element('pre', { className: 'compiled-prolog' }, element('code', {}, data.clause)),
+      copyButton('Copy compiled Prolog', data.clause));
+  }).catch(error => {
+    if (error.name !== 'AbortError') body.replaceChildren(element('p', { className: 'statistics-error', role: 'status' }, `Compiled clause unavailable: ${error.message}`));
+  }).finally(() => body.setAttribute('aria-busy', 'false'));
+  return section;
+}
+
 async function sourcePage(route, signal) {
   const path = canonicalPath(route.params.get('path'));
-  if (!path || !state.knownSources.has(path)) throw new APIError('This path is not in the authorized KB source catalog.', 'source_not_authorized');
+  if (!path) throw new APIError('This path is not in the authorized KB source catalog.', 'source_not_authorized');
   const line = positiveInteger(route.params.get('line'), 1, Number.MAX_SAFE_INTEGER, 1);
-  const data = await api('source', { path, line }, { signal });
-  const start = positiveInteger(data.start, 1, Number.MAX_SAFE_INTEGER, 1);
-  const target = positiveInteger(data.line, line, Number.MAX_SAFE_INTEGER, 1);
-  const column = positiveInteger(route.params.get('column'), undefined, Number.MAX_SAFE_INTEGER, 1);
-  const lines = element('ol', { className: 'source-lines', start });
-  (data.lines ?? []).forEach((text, index) => {
-    const current = start + index;
-    lines.append(element('li', { className: current === target ? 'highlighted-line' : '', 'aria-current': current === target ? 'location' : null },
-      link(String(current), 'source', { path, line: current }, 'line-number'),
-      element('code', {}, text || ' ')));
-  });
-  return element('div', {}, heading(path, `Read-only source excerpt · line ${target}${column ? `, column ${column}` : ''}`),
-    sourceLink(path, target, 'Original source', column, { compact: false }),
-    element('p', { className: 'muted' }, 'Source files cannot be edited from the browser. Use the offline compiler’s explicit editor repair mode.'),
-    lines,
-    element('nav', { className: 'pagination', 'aria-label': 'Source excerpt navigation' },
-      link('Earlier lines', 'source', { path, line: Math.max(1, start - 10) }, 'button secondary'),
-      link('Later lines', 'source', { path, line: start + (data.lines?.length || 1) }, 'button secondary')));
+  if (!sourceEditor) {
+    const { createSourceEditorWorkspace } = await import('./source-editor.js');
+    sourceEditor = createSourceEditorWorkspace({
+      read: path => api('source/editor', { path }),
+      save: body => api('source/editor', {}, { method: 'POST', body }),
+      renderFileRef: (path, label) => { state.knownSources.add(path); return sourceLink(path, 1, label); },
+      onOpen: opened => {
+        if (!sourceOpenCount && parseRoute(location.hash).name === 'source') {
+          history.replaceState(null, '', routeHref('source', { path: opened }));
+          acceptedRoute = location.hash;
+        }
+      },
+      onSaved: (saved, result) => {
+        state.fileMetadata.records.delete(saved);
+        refreshFileDisplays(); scheduleFileInformation();
+        showNotice(result.unchanged ? 'Source unchanged.' : 'Source saved. Loaded KB and generation are unchanged; reload separately.');
+      },
+    });
+  }
+  const host = element('div', { className: 'source-workspace-host' });
+  const page = element('div', {}, heading('Source workspace', 'CodeMirror · Common Lisp colorization · Save writes only this file; loading is a separate action.'), host);
+  sourceEditor.mount(host);
+  sourceOpenCount++;
+  try { await sourceEditor.open(path, { line }); } finally { sourceOpenCount--; }
+  return page;
 }
 
 function setMutation(value) {
@@ -1183,6 +1423,7 @@ async function sourcesPage(_route, signal) {
   const model = state.selection;
   const fileStates = sourceFileStates(model, state.status.files.map(file => file.path), state.fileMetadata);
   const checkboxes = new Map();
+  const groupChecks = new Map(), groupCounts = new Map();
   const counts = new Map();
   const statisticsRows = new Map(), snapshots = new Map();
   const directoryRows = new Map(), directorySnapshots = new Map();
@@ -1219,7 +1460,7 @@ async function sourcesPage(_route, signal) {
     directoryBusy = true;
     try {
       while (!signal.aborted) {
-        const unfinished = visibleSourceDirectories(model, state.expanded).filter(candidate => !directorySnapshots.get(candidate)?.done);
+        const unfinished = visibleSourceDirectories(model, state.expanded, state.collapsedGroups).filter(candidate => !directorySnapshots.get(candidate)?.done && directoryRows.has(candidate));
         const active = unfinished.filter(candidate => directorySnapshots.get(candidate)?.token);
         const waiting = unfinished.find(candidate => !directorySnapshots.get(candidate)?.token);
         const candidates = active.length < 3 && waiting ? [...active, waiting] : active;
@@ -1259,7 +1500,7 @@ async function sourcesPage(_route, signal) {
     statisticsBusy = true;
     try {
       while (!signal.aborted) {
-        const paths = visibleSourceFiles(model, state.expanded).filter(path => !snapshots.has(path)).slice(0, 16);
+        const paths = visibleSourceFiles(model, state.expanded, state.collapsedGroups).filter(path => !snapshots.has(path)).slice(0, 16);
         if (!paths.length) break;
         for (const path of paths) statisticsRows.get(path).textContent = 'Reading statistics…';
         try {
@@ -1278,9 +1519,30 @@ async function sourcesPage(_route, signal) {
   }
   const draftCount = element('span', { className: 'draft-count', 'aria-live': 'polite' });
   const statusNote = element('p', { className: 'muted draft-note' });
+  const selectedTotals = element('div', { className: 'selected-statistics', 'aria-live': 'polite' });
+  let selectedTimer, selectedSequence = 0;
+  async function aggregateSet(paths, scope, target, current = () => true) {
+    let token = '';
+    try {
+      do {
+        const data = await api('kb/statistics/selected', {}, { method: 'POST', body: { paths, scope, token }, signal });
+        if (!current() || signal.aborted) return;
+        target.replaceChildren(element('strong', {}, scope === 'selected-files' ? 'Selected files: ' : 'Group totals: '),
+          document.createTextNode(directoryStatisticsText(data)),
+          element('span', { className: 'muted' }, ` · ${data.coverage.processedFiles}/${data.coverage.totalFiles} files · ${data.done ? data.state : 'collecting'}`));
+        token = data.token;
+        if (data.done) break;
+      } while (true);
+    } catch (error) {
+      if (current() && error.name !== 'AbortError') target.textContent = `Statistics unavailable: ${error.message}`;
+    }
+  }
   const updateDraft = () => {
     draftCount.textContent = `${number(model.selected.size)} of ${number(model.files.length)} files selected${model.dirty ? ' · unsaved selection' : ''}`;
     statusNote.textContent = `Selection generation ${model.generation}. ${model.dirty ? 'Load applies this exact file list; unselected descendants stay excluded.' : 'Select files to replace the active source set. Loading zero files is allowed.'}`;
+    clearTimeout(selectedTimer);
+    const current = ++selectedSequence;
+    selectedTimer = setTimeout(() => aggregateSet(model.selectedFiles(), 'selected-files', selectedTotals, () => current === selectedSequence), 200);
   };
   const updateControls = paths => {
     for (const path of paths) {
@@ -1294,9 +1556,38 @@ async function sourcesPage(_route, signal) {
       }
       if (counts.has(path)) counts.get(path).textContent = `${number(value.selected)}/${number(value.total)}`;
     }
+    for (const [key, checkbox] of groupChecks) {
+      const value = model.groupState(key);
+      checkbox.checked = value.checked; checkbox.indeterminate = value.indeterminate;
+      checkbox.disabled = state.mutation || value.disabled;
+      checkbox.setAttribute('aria-checked', value.indeterminate ? 'mixed' : String(value.checked));
+      groupCounts.get(key).textContent = `${value.selected}/${value.total}`;
+    }
     updateDraft();
   };
   let nextID = 0;
+  const buildGroup = group => {
+    const id = `source-group-${nextID++}`;
+    const count = element('span', { className: 'directory-count' });
+    const checkbox = element('input', { type: 'checkbox', id, 'data-mutation': '', 'aria-label': `Select ${group.label} in ${group.directory}`,
+      onchange: () => updateControls(model.setGroupSelected(group.key)) });
+    groupChecks.set(group.key, checkbox); groupCounts.set(group.key, count);
+    const children = element('ul', { hidden: state.collapsedGroups.has(group.key), id: `${id}-children` }, group.children.map(buildNode));
+    const expand = button(children.hidden ? '+' : '−', () => {
+      children.hidden = !children.hidden;
+      if (children.hidden) state.collapsedGroups.add(group.key); else state.collapsedGroups.delete(group.key);
+      expand.textContent = children.hidden ? '+' : '−'; expand.setAttribute('aria-expanded', String(!children.hidden));
+      fetchVisibleStatistics(); fetchVisibleDirectoryStatistics(); scheduleFileInformation();
+    }, 'expand-button');
+    expand.setAttribute('aria-label', `Expand or collapse ${group.label} in ${group.directory}`);
+    expand.setAttribute('aria-expanded', String(!children.hidden));
+    expand.setAttribute('aria-controls', children.id);
+    const totals = element('div', { className: 'source-statistics' });
+    return element('li', { className: 'source-node virtual-group', 'data-source-group': group.key },
+      element('div', { className: 'source-row' }, expand, checkbox, element('label', { htmlFor: id }, group.label), count,
+        button('Group totals', () => aggregateSet(model.groupFiles(group.key), group.key, totals), 'text-button')),
+      totals, children);
+  };
   const buildNode = path => {
     const record = model.records.get(path);
     const id = `source-node-${nextID++}`;
@@ -1310,8 +1601,9 @@ async function sourcesPage(_route, signal) {
     const row = element('div', { className: 'source-row' });
     if (record.type === 'directory') {
       const expanded = state.expanded.has(path);
+      const groups = model.groupsFor(path);
       const children = element('ul', { id: `${id}-children`, hidden: !expanded },
-        record.children.map(buildNode));
+        groups.length ? groups.map(buildGroup) : record.children.map(buildNode));
       const expand = button(expanded ? '−' : '+', () => {
         const open = children.hidden;
         children.hidden = !open;
@@ -1343,7 +1635,8 @@ async function sourcesPage(_route, signal) {
     }
     return item;
   };
-  const tree = element('ul', { className: 'source-tree', 'aria-label': 'Supported original sources under KBs' }, model.roots.map(buildNode));
+  const rootGroups = model.implicitRoot ? model.groupsFor('KBs') : [];
+  const tree = element('ul', { className: 'source-tree', 'aria-label': 'Supported original sources under KBs' }, rootGroups.length ? rootGroups.map(buildGroup) : model.roots.map(buildNode));
   queueMicrotask(fetchVisibleStatistics);
   queueMicrotask(fetchVisibleDirectoryStatistics);
   updateControls(model.records.keys());
@@ -1356,6 +1649,22 @@ async function sourcesPage(_route, signal) {
   });
   load.dataset.mutation = '';
   load.disabled = state.mutation;
+  const queue = button('Queue Selected for Loading', async () => {
+    if (state.mutation) return;
+    setMutation(true);
+    try {
+      const job = await api('kb/queue', {}, { method: 'POST', body: { files: model.selectedFiles(), generation: model.generation } });
+      pendingJobs.add(job.jobId);
+      showNotice(element('span', {}, 'Loading queued. You can leave this page. ', link('View task', 'task', { id: job.jobId })));
+    } catch (error) { showNotice(requestErrorDetails(error, { preserveSelection: true }), true); }
+    finally { setMutation(false); }
+  });
+  const index = button('Queue selected for indexing', async () => {
+    try {
+      const job = await api('kb/index', {}, { method: 'POST', body: { files: model.selectedFiles() } });
+      pendingJobs.add(job.jobId); showNotice(element('span', {}, 'Indexing queued. ', link('View task', 'task', { id: job.jobId })));
+    } catch (error) { showNotice(error.message, true); }
+  }, 'button secondary');
   const reset = button('Reset selection', () => {
     model.reset((state.status.files ?? []).map(file => file.path), state.status.generation);
     updateControls(model.records.keys());
@@ -1375,11 +1684,11 @@ async function sourcesPage(_route, signal) {
     heading('KB Sources', 'Choose original sources from the repository’s KBs directory. Loading and unloading never deletes files.',
       link('Source Packs', 'packs', {}, 'button secondary')),
     element('section', { className: 'source-selection' }, element('h2', {}, 'Source selection'),
-      element('div', { className: 'source-actions' }, load, reset, refreshStates, draftCount), statusNote,
+      element('div', { className: 'source-actions' }, queue, load, index, reset, refreshStates, draftCount), statusNote, selectedTotals,
       element('p', { className: 'muted file-state-explanation' },
         `Each badge is independent. Cached and Indexed show artifact presence only—not freshness or validity. Load at startup follows the server’s reported startup selection; Loaded now follows the active manifest, not checkbox selection. Warnings and Errors count recorded entries only; missing coverage stays unknown. Size describes the original source, not its caches. Statistics snapshot staleness is separate.${observation}${probeNote}`),
       element('p', { className: 'muted statistics-explanation' },
-        'Saved inventory statistics, not live counts. Directory totals include every supported descendant once, regardless of checkbox selection; MTs and predicate/function symbols are deduplicated unions. All arities of a symbol count together. Referenced MTs cover recorded relation endpoints only.'),
+        'All-files directory totals and Selected-files totals are separate. These are recorded inventory snapshots, not live counts. MTs and predicate/function symbols are deduplicated unions, not sums of per-file distinct counts.'),
       model.files.length ? tree : empty('No supported sources found', 'Place the original KIF, KRF, or MeTTa corpus under KBs. Generated companions are intentionally hidden.')),
     element('section', { className: 'loaded-section' }, element('h2', {}, 'Currently loaded'),
       loadedFiles(state.status.files, { fileStates })));
@@ -1413,7 +1722,7 @@ function queryResults(data) {
     const proof = solution.proof ?? [];
     body.append(element('details', { className: 'proof', open: presentation.get().fields.proof },
       element('summary', {}, `${proof.length} successful proof ${proof.length === 1 ? 'step' : 'steps'}`),
-      colorAssertionBalls(assertionView.proof(proof), proof)));
+      annotateCards(colorAssertionBalls(assertionView.proof(proof), proof), proof, { context: solution.mt })));
     results.append(body);
   });
   return results;
@@ -1638,7 +1947,22 @@ function settingsPage() {
       element('button', { type: 'submit', className: 'button' }, 'Save settings'),
       button('Restore defaults', () => apply(DEFAULT_SETTINGS), 'button secondary')), feedback),
     element('p', { className: 'muted' }, 'Page size applies to terms, predicates, assertions and mappings. Explicit URL limits still override defaults. Query timeouts remain unchanged. All microtheories are always listed, without a cap.'),
+    element('section', { className: 'settings-section' }, element('h2', {}, 'Task pools'),
+      link('Worker profiles and task contents', 'tasks', {}, 'button secondary')),
+    element('section', { className: 'settings-section' }, element('h2', {}, 'SUMO → CycL mappings'),
+      element('p', { className: 'muted' }, 'Read the existing Markdown-backed mapping policy. Opening it changes no mappings or knowledge.'),
+      link('Browse SUMO → CycL mappings', 'mappings', {}, 'button secondary')),
     applicationReloadControls());
+}
+
+async function tasksPage(route, signal) {
+  const { renderTaskPools } = await import('./task-pools.js');
+  return renderTaskPools({ api, element, button, link, heading, sourceLink, propertyList, pagination,
+    refreshStatus: async () => setStatus(await api('status', {}, { signal })) }, route, signal);
+}
+async function taskPage(route, signal) {
+  const { renderTaskDetail } = await import('./task-pools.js');
+  return renderTaskDetail({ api, element, button, link, heading, sourceLink, propertyList, pagination, reload: renderRoute }, route, signal);
 }
 
 function applicationReloadControls() {
@@ -1669,14 +1993,39 @@ function applicationReloadControls() {
 }
 
 const pages = {
-  overview, search: searchPage, predicates: searchPage, term: termPage,
+  overview, search: searchPage, predicates: searchPage, term: termPage, nats: natsPage,
   microtheory: microtheoryPage, microtheories: microtheoriesPage,
   assertion: assertionPage, source: sourcePage, sources: sourcesPage, packs: sourcePacksPage,
   query: queryPage, mappings: mappingsPage, settings: settingsPage,
-  'ui-settings': (_route, signal) => renderUISettings(presentation, { signal }),
+  tasks: tasksPage, task: taskPage,
+  'ui-settings': uiSettingsPage,
 };
 
+function uiSettingsPage(_route, signal) {
+  const page = renderUISettings(presentation, { signal });
+  let contexts;
+  page.append(renderTVASettings({
+    signal, reference: nativeReference, sourceLink,
+    readSettings: ({ context }, options) => api('tva/settings', { context }, options),
+    saveSettings: (body, options) => api('tva/settings/save', {}, { ...options, method: 'POST', body }),
+    listMicrotheories: async ({ offset, limit }, options) => {
+      contexts ??= await api('microtheories', {}, options);
+      return { items: contexts.items.slice(offset, offset + limit).map(item => ({ key: item.mt, expression: item.mtExpression })), total: contexts.total };
+    },
+    onSaved: reply => {
+      annotationRevision = reply.revision;
+      annotations.invalidate({ revision: reply.revision, generation: state.status?.generation });
+    },
+  }));
+  return page;
+}
+
 async function renderRoute() {
+  const requestedRoute = location.hash;
+  if (sourceEditor?.hasDirty() && parseRoute(acceptedRoute).name === 'source' && parseRoute(requestedRoute).name !== 'source') {
+    if (!await sourceEditor.guardNavigation()) { history.replaceState(null, '', acceptedRoute); return; }
+  }
+  acceptedRoute = requestedRoute;
   const view = ++state.view;
   state.routeController?.abort();
   state.queryController?.abort();
@@ -1684,7 +2033,7 @@ async function renderRoute() {
   const controller = new AbortController();
   state.routeController = controller;
   const route = parseRoute(location.hash, state.settings);
-  const navRoute = { term: 'search', assertion: 'search', source: 'sources', microtheory: 'microtheories' }[route.name] ?? route.name;
+  const navRoute = { term: 'search', nats: 'search', assertion: 'search', source: 'sources', microtheory: 'microtheories', task: 'tasks', mappings: 'settings' }[route.name] ?? route.name;
   for (const anchor of document.querySelectorAll('#navigation a')) {
     if (anchor.dataset.route === navRoute) anchor.setAttribute('aria-current', 'page');
     else anchor.removeAttribute('aria-current');
@@ -1748,8 +2097,28 @@ function startLiveReload() {
     try {
       const result = await api('version', {}, { signal: requestController.signal });
       if (tracker.observe(result.version)) {
-        location.reload();
-        return;
+        pendingInterfaceReload = true;
+      }
+      if (pendingInterfaceReload) {
+        if (!sourceEditor?.hasDirty()) { location.reload(); return; }
+        target.textContent = 'Interface update waiting for source edits to be saved or discarded.';
+      }
+      if (annotations.active()) {
+        const native = await api('tva/status', {}, { signal: requestController.signal });
+        if (native.revision !== annotationRevision) {
+          annotationRevision = native.revision;
+          annotations.invalidate({ revision: native.revision, generation: state.status?.generation });
+        }
+        if (pendingJobs.size) {
+          for (const id of [...pendingJobs].slice(0, 10)) {
+            const job = await api('tasks/result', { id }, { signal: requestController.signal });
+            if (['succeeded', 'failed', 'cancelled'].includes(job.state)) {
+              pendingJobs.delete(id);
+              if (job.state !== 'succeeded') showNotice(`Task ${id}: ${job.error?.message ?? job.state}`, true);
+            }
+          }
+          setStatus(await api('status', {}, { signal: requestController.signal }));
+        }
       }
       if (['microtheory', 'microtheories'].includes(parseRoute(location.hash).name)) {
         const status = await api('status', {}, { signal: requestController.signal });
@@ -1758,7 +2127,7 @@ function startLiveReload() {
           await renderRoute();
         }
       }
-      target.textContent = 'Interface live refresh enabled';
+      if (!pendingInterfaceReload) target.textContent = 'Interface live refresh enabled';
       target.title = 'Web assets and mappings refresh automatically. Use Settings to reload changed Prolog application code.';
     } catch (error) {
       if (!document.hidden) target.textContent = 'Live refresh reconnecting…';

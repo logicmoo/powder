@@ -52,10 +52,33 @@ test('literal queries use observed direct slots, fresh other variables and expli
   assert.equal(literalQuerySpec('x_ActionModelMtFn', 'x_genlMt', 2, nested), null);
 });
 test('ball colors describe actual metadata rather than implying formula execution or utility', () => {
-  assert.equal(assertionMarker({ kind: 'fact', properties: [{ name: 'direction', value: ':FORWARD' }] }).kind, 'default');
-  assert.equal(assertionMarker({ kind: 'rule' }).kind, 'backward-rule');
+  assert.equal(assertionMarker({ kind: 'fact', properties: [{ name: 'direction', value: ':FORWARD' }] }).kind, 'unknown');
+  assert.equal(assertionMarker({ kind: 'rule' }).rule, true);
   assert.equal(assertionMarker({ properties: [{ name: 'monotonicity', value: ':MONOTONIC' }] }).kind, 'monotonic');
   assert.equal(assertionMarker({ properties: [{ name: 'truth', value: ':FALSE' }] }).kind, 'false');
-  assert.equal(assertionMarker({ properties: [{ name: 'truth', value: ':FALSE' }, { name: 'truth', value: ':TRUE' }] }).kind, 'default');
-  assert.equal(assertionMarker({ expression: application('not', symbol('A')) }).kind, 'default');
+  assert.equal(assertionMarker({ properties: [{ name: 'truth', value: ':FALSE' }, { name: 'truth', value: ':TRUE' }] }).kind, 'unknown');
+  assert.equal(assertionMarker({ expression: application('not', symbol('A')) }).kind, 'false');
+  assert.equal(assertionMarker({ expression: application('implies', application('not', symbol('A')), symbol('B')) }).kind, 'unknown');
+  assert.equal(assertionMarker({ source: 'KBs/data.metta', expression: application('not', symbol('A')) }).kind, 'unknown');
+  const negative = assertionMarker({ expression: application('not', symbol('A')), properties: [
+    { name: 'monotonicity', value: ':DEFAULT' }, { name: 'cyc::original-tv', value: ':FALSE-DEF' },
+  ] });
+  assert.equal(negative.kind, 'false');
+  assert.match(negative.description, /Declared strength: DEFAULT/);
+  const rule = assertionMarker({ kind: 'rule', properties: [{ name: 'monotonicity', value: ':MONOTONIC' }] });
+  assert.equal(rule.kind, 'monotonic');
+  assert.equal(rule.rule, true);
+});
+test('definition navigation follows the selected schema argument, not uses or nested mentions', () => {
+  const rows = [
+    application('arity', symbol('P'), { type: 'number', value: 2 }),
+    application('argIsa', symbol('P'), { type: 'number', value: 1 }, symbol('Dog')),
+    application('arg2Isa', symbol('P'), symbol('Dog')),
+    application('P', symbol('Fido'), symbol('Rover')),
+    application('argIsa', symbol('Other'), { type: 'number', value: 1 }, symbol('P')),
+    application('genlMt', application('MtFn', symbol('P')), symbol('BaseKB')),
+  ].map((expression, id) => ({ expression, id, mt: 'x_BaseKB' }));
+  assert.equal(pageTermNavigation('x_P', rows).sections.find(section => section.key === 'definition').count, 3);
+  assert.deepEqual(filterContextItems(rows, 'x_P', new URLSearchParams('section=definition')).map(row => row.id), [0, 1, 2]);
+  assert.deepEqual(filterContextItems(rows, 'x_argIsa', new URLSearchParams('section=definition')), []);
 });

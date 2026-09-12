@@ -2,9 +2,10 @@
           [native_load/2, native_load/3, import_cache/2, native_unload/1, valid_guarded_clause/2, install_guard/2,
            xc_src/2, xc_clause_handle/2, xc_plvars/2, xc_indexed_constant/2,
            xc_notices/2, xc_warnings/2, xc_errors/2,
-           metadata/3, module_metadata/4, query/5, query_modules/6,
+           metadata/3, module_metadata/4, query/5, query_modules/6, query_modules_report/8,
            fact_guard/3, rule_guard/5, dispatch/2, module_assertion/4,
-           native_modules/1, register_native/2, cache_warnings/1]).
+           native_modules/1, register_native/2, cache_warnings/1,
+           module_metadata_terms/3, prune_module_metadata/2,native_retention_context/1]).
 :- use_module(library(error)).
 :- use_module(library(lists)).
 :- use_module(library(time)).
@@ -15,6 +16,8 @@
 :- use_module(kb_cache, [historical_semantic_shape_warning/1]).
 :- use_module(kb_symbols).
 :- use_module(kb_limits).
+:- use_module(kb_rule_utility, []).
+:- use_module(kb_metadata_policy, []).
 :- dynamic native_file/2.
 :- dynamic native_handle/4.
 :- dynamic native_signature/4.
@@ -63,6 +66,7 @@ import_cache(File,Module) :-
 native_load(File, Module, Options) :-
     must_be(atom, Module),
     must_be(list,Options),
+    validate_native_cache(File),
     flag(ow_native_load,Key,Key+1),
     setup_call_cleanup(
       (asserta(capturing_load(Key),Capture),asserta(native_load_options(Key,Options),OptionRef)),
@@ -74,6 +78,19 @@ native_load(File, Module, Options) :-
       (erase(Capture),erase(OptionRef),retractall(native_load_error(Key,_)))),
     absolute_file_name(File,Absolute),
     (native_file(Absolute,Module)->true;register_native(File,Module)).
+
+validate_native_cache(File) :-
+    setup_call_cleanup(open(File,read,S,[encoding(utf8)]),
+      (read_line_to_string(S,_),read_line_to_string(S,Second)),close(S)),
+    (string(Second),normalize_space(string(Line),Second),
+     sub_string(Line,0,_,_,"kb_cache_header(")->
+      kb_cache:read_cache(File,_,_)
+    ;true).
+
+native_retention_context(Context) :-
+    capturing_load(Key),native_load_options(Key,Options),
+    option(metadata_context(Context),Options),
+    kb_metadata_policy:origin_context(Context,_).
 
 cache_warnings(Header) :-
     (is_dict(Header),get_dict(warnings,Header,Warnings)->true;Warnings=[]),
@@ -153,6 +170,31 @@ module_metadata(Module, Property, Id, Value) :-
     current_predicate(Module:Predicate/2),
     Goal =.. [Predicate, Id, Value], call(Module:Goal).
 
+module_metadata_terms(Module,Id,Terms) :-
+    findall(Term,
+      (current_predicate(Module:Name/2),atom_concat(xc_,_,Name),
+       functor(Probe,Name,2),\+predicate_property(Module:Probe,imported_from(_)),
+       Term=..[Name,Id,_],clause(Module:Term,true)),Terms).
+
+% Trusted host mutation only: callers coordinate source/query snapshot locks.
+% Erase the native metadata itself; hiding it in metadata/3 would retain memory.
+prune_module_metadata(Module,Context) :-
+    kb_metadata_policy:origin_context(Context,Origin),
+    (Origin==sumo->true;
+      forall((current_predicate(Module:Name/2),
+              atom_concat(xc_,_,Name),kb_metadata_policy:redundant_property(Name),
+              functor(Probe,Name,2),\+predicate_property(Module:Probe,imported_from(_))),
+        (functor(Term,Name,2),forall(clause(Module:Term,true,Ref),
+          prune_metadata_clause(Module,Name,Term,Ref,Origin))))).
+
+prune_metadata_clause(Module,Name,Term,Ref,Origin) :-
+    functor(Term,Name,2),!,
+    kb_metadata_policy:filter_metadata(Origin,[Term],Compact),
+    erase(Ref),
+    forall(member(Fact,Compact),
+      (functor(Fact,Predicate,2),dynamic(Module:Predicate/2),
+       (clause(Module:Fact,true)->true;assertz(Module:Fact)))).
+
 metadata(Id, Property, Value) :-
     native_modules(Modules), member(M, Modules),
     module_metadata(M, Property, Id, Value).
@@ -207,9 +249,13 @@ query(Goal, MT, Limit, Seconds, Solutions) :-
     query_modules(Modules, Goal, MT, Limit, Seconds, Solutions).
 
 query_modules(Modules, Goal, MT, Limit, Seconds, Solutions) :-
+    query_modules_report(Modules,Goal,MT,Limit,Seconds,[],Solutions,_).
+
+query_modules_report(Modules, Goal, MT, Limit, Seconds, Options, Solutions, Report) :-
     validate_result_limit(queryLimit,Limit),
     must_be(number, Seconds), Seconds > 0, Seconds =< 30,
     must_be(list, Modules), maplist(must_be(atom), Modules),
+    must_be(list,Options),
     term_variables(Goal, Variables),
     findall(Context, (member(M, Modules), module_metadata(M, microtheory, _, Context)), MTs0),
     sort(MTs0, MTs),
@@ -217,17 +263,27 @@ query_modules(Modules, Goal, MT, Limit, Seconds, Solutions) :-
     ; must_be(ground, MT), Contexts = [MT]
     ),
     capture_context(Previous),
-    setup_call_cleanup(
-        true,
-        call_with_time_limit(Seconds,
-          findnsols(Limit, solution(Context, Variables, Proof),
+    setup_call_catcher_cleanup(
+        kb_rule_utility:begin_query(Modules,Options,Session),
+        (call_with_time_limit(Seconds,
+          once((findnsols(Limit, captured(Context, Variables, Proof, Applications),
             ( member(Context, Contexts),
               nb_setval(logos_query, context(Modules, Context, [], [])),
+              kb_rule_utility:reset_provenance,
               dispatch(Modules, Goal),
               nb_getval(logos_query, State), arg(3, State, Reversed),
-              reverse(Reversed, Proof)
-            ), Solutions)),
-        restore_context(Previous)), !.
+              reverse(Reversed, Proof),
+              kb_rule_utility:answer_applications(Applications)
+            ), Captured),
+            maplist(captured_solution,Captured,Solutions,Witnesses)))),
+         kb_rule_utility:returned_applications(Session,Witnesses),
+         length(Solutions,Count),(Count>=Limit->Completion=limit;Completion=exhausted)),
+        Catcher,
+        (restore_context(Previous),
+         kb_rule_utility:finish_query(Session,Catcher,Completion,Solutions,Report))), !.
+
+captured_solution(captured(Context,Variables,Proof,Applications),
+                  solution(Context,Variables,Proof),Applications).
 
 capture_context(value(State)) :- nb_current(logos_query, State), !.
 capture_context(none).
@@ -241,6 +297,17 @@ fact_guard(Module, Id, Slots) :-
 
 rule_guard(Module, Id, Body, Inputs, Locals) :-
     checked_context(Module, Id, State),
+    (kb_rule_utility:telemetry_enabled->
+      setup_call_catcher_cleanup(
+        kb_rule_utility:rule_enter(Module,Id,Attempt),
+        (call_cleanup(rule_guard_body(Id,Body,Inputs,Locals,State),Deterministic=true),
+         kb_rule_utility:rule_result(Attempt),
+         (Deterministic==true->true;(true;kb_rule_utility:rule_resume(Attempt),fail))),
+        Catcher,
+        kb_rule_utility:rule_leave(Attempt,Catcher))
+    ;rule_guard_body(Id,Body,Inputs,Locals,State)).
+
+rule_guard_body(Id, Body, Inputs, Locals, State) :-
     Inputs =.. [vs|HeadSlots], Locals =.. [vs|LocalSlots],
     append(HeadSlots, LocalSlots, Slots),
     bound_count(Slots, Before),

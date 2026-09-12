@@ -1,6 +1,7 @@
-:- module(kb_term_navigation,[term_navigation/3,filter_term_assertions/4]).
+:- module(kb_term_navigation,[term_navigation/3,filter_term_assertions/4,occurrence_summary/2]).
 :- use_module(library(lists)).
 :- use_module(library(error)).
+:- use_module(kb_inventory,[declaration_target/4]).
 
 % These are browsing categories of asserted syntax, not new inference rules.
 section(all,'All Asserted Knowledge').
@@ -13,12 +14,12 @@ section(relations,'Applicable Relations').
 
 term_navigation(Term,Items,Navigation) :-
     findall(_{key:Key,label:Label,count:Count},
-      (section(Key,Label),include(in_section(Key),Items,Found),length(Found,Count)),Sections),
+      (section(Key,Label),include(in_section(Key,Term),Items,Found),length(Found,Count)),Sections),
     findall(Position,(member(Item,Items),argument_position(Term,Item,Position)),Positions0),
     sort(Positions0,Positions),maplist(argument_group(Term,Items),Positions,Arguments),
-    predicate_groups(Items,Predicates),length(Items,Total),
+    predicate_groups(Items,Predicates),length(Items,Total),occurrence_summary(Items,Occurrences),
     Navigation=_{total:Total,coverage:loaded_term_assertions,sections:Sections,
-      arguments:Arguments,predicates:Predicates,
+      arguments:Arguments,predicates:Predicates,occurrences:Occurrences,
       description:"Counts cover all loaded assertions containing this term. Argument groups include nested occurrences in that argument. Browsing categories classify asserted syntax, not inferred definitions or applicability."}.
 
 filter_term_assertions(Term,Items,Filters,Matches) :-
@@ -29,35 +30,56 @@ filter_term_assertions(Term,Items,Filters,Matches) :-
     include(matches(Term,Filters),Items,Matches).
 
 matches(Term,F,Item) :-
-    in_section(F.section,Item),
+    in_section(F.section,Term,Item),
     (F.arg=:=0->true;argument_position(Term,Item,F.arg)),
     (F.predicate==''->true;predicate_name(Item,F.predicate)),
-    (F.mt==''->true;Item.mt==F.mt).
+    (F.mt==''->true;Item.mt==F.mt),
+    (get_dict(source,F,Source),Source\==''->get_dict(source,Item,Source);true).
 
-in_section(all,_).
-in_section(assertions,_).
-in_section(gafs,Item) :- expression_head(Item.expression,Name),
+occurrence_summary(Items,Summary) :-
+    findall(Id-Item,(member(Item,Items),Id=Item.id),Pairs),
+    sort(1,@<,Pairs,UniquePairs),findall(Item,member(_-Item,UniquePairs),Unique),
+    length(Unique,Total),
+    findall(Mt,(member(Item,Unique),Mt=Item.mt),Mts0),sort(Mts0,Mts),
+    maplist(context_group(Unique),Mts,Contexts),
+    findall(Source,(member(Item,Unique),get_dict(source,Item,Source)),Sources0),sort(Sources0,Sources),
+    maplist(source_group(Unique),Sources,Files),
+    Summary=_{coverage:loaded_semantic_occurrences,assertions:Total,microtheories:Contexts,sources:Files}.
+source_group(Items,Source,Group) :-
+    include(from_source(Source),Items,Found),length(Found,Count),
+    findall(Line,(member(Item,Found),get_dict(line,Item,Line),integer(Line),Line>0),Lines),
+    (Lines=[]->First=null;min_list(Lines,First)),
+    once(findnsols(8,Sample,(member(Item,Found),Sample=_{id:Item.id,line:Item.line}),Evidence)),
+    Group=_{source:Source,count:Count,firstLine:First,evidence:Evidence}.
+from_source(Source,Item) :- get_dict(source,Item,Source).
+
+in_section(all,_,_).
+in_section(assertions,_,_).
+in_section(gafs,_,Item) :- expression_head(Item.expression,Name),
     \+logical_head(Name),\+has_variable(Item.expression).
-in_section(documentation,Item) :- predicate_name(Item,Name),documentation(Name).
-in_section(definition,Item) :- predicate_name(Item,Name),definition(Name).
-in_section(lexical,Item) :- predicate_name(Item,Name),lexical(Name).
-in_section(relations,Item) :- predicate_name(Item,Name),
+in_section(documentation,Term,Item) :- predicate_name(Item,Name),documentation(Name),exact_argument(Term,Item,1).
+in_section(definition,Term,Item) :- definition_argument(Item,Position),exact_argument(Term,Item,Position).
+in_section(lexical,Term,Item) :- predicate_name(Item,Name),lexical(Name),exact_argument(Term,Item,1).
+in_section(relations,_,Item) :- predicate_name(Item,Name),
     \+documentation(Name),\+lexical(Name),\+logical_head(Name).
 
 documentation(x_comment).
 documentation(x_documentation).
 documentation(x_genGloss).
-definition(x_isa).
-definition(x_instance).
-definition(x_genls).
-definition(x_subclass).
-definition(x_genlPreds).
-definition(x_arity).
-definition(x_argIsa).
-definition(x_argGenl).
-definition(x_resultIsa).
-definition(x_resultGenl).
-definition(x_genlMt).
+definition_argument(Item,1) :-
+    predicate_name(Item,Name),Item.expression.args=[_|Rest],
+    maplist(schema_argument,Rest,Values),Fact=..[Name,x_definition_subject|Values],
+    declaration_target(Fact,x_definition_subject,_,_), !.
+definition_argument(Item,1) :-
+    predicate_name(Item,Name),
+    memberchk(Name,[x_isa,x_instance,x_genls,x_subclass,x_genlPreds,x_genlMt,
+      x_defnIff,x_defnNecessary,x_defnSufficient]),Item.expression.args=[_,_].
+schema_argument(AST,Value) :-
+    (get_dict(type,AST,number)->Value=AST.value;Value=x_schema_value).
+exact_argument(Term,Item,Position) :-
+    nth1(Position,Item.expression.args,Argument),
+    (get_dict(type,Argument,symbol)->Argument.value==Term;
+     get_dict(denotesNat,Argument,true),get_dict(natKey,Argument,Term)).
 lexical(x_genPhrase).
 lexical(x_genTemplate).
 lexical(x_termStrings).
@@ -96,6 +118,8 @@ argument_position(Term,Item,Position) :-
     nth1(Position,Item.expression.args,Argument),contains_symbol(Argument,Term).
 contains_symbol(AST,Term) :-
     is_dict(AST),get_dict(type,AST,symbol),AST.value==Term, !.
+contains_symbol(AST,Term) :-
+    is_dict(AST),get_dict(denotesNat,AST,true),get_dict(natKey,AST,Term), !.
 contains_symbol(AST,Term) :- is_dict(AST),dict_pairs(AST,_,Pairs),
     member(_-Value,Pairs),contains_symbol(Value,Term), !.
 contains_symbol(Values,Term) :- is_list(Values),
@@ -126,8 +150,7 @@ query_predicate(Term,Position,Items,Base,Group) :-
        findall(Mt,(member(Item,Direct),Mt=Item.mt),Mts),sort(Mts,Contexts)),Shapes),
     Group=Base.put(queryShapes,Shapes).
 direct_argument(Term,Position,Arity,Item) :-
-    length(Item.expression.args,Arity),nth1(Position,Item.expression.args,Argument),
-    is_dict(Argument),get_dict(type,Argument,symbol),Argument.value==Term.
+    length(Item.expression.args,Arity),exact_argument(Term,Item,Position).
 has_predicate(Name,Item) :- predicate_name(Item,Name).
 context_group(Items,Mt,Group) :-
     include(in_context(Mt),Items,Found),length(Found,Count),

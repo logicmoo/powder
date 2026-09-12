@@ -1,3 +1,7 @@
 *.lock
 *.tmp
 /tmp/
+/prolog/ow_dr/kb_lifecycle_windows.dll
+/.tools/
+/prolog/ow_dr/*_windows.dll
+/prolog/ow_dr/.logos-state/native-tva.pl

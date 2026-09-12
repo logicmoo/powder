@@ -5,11 +5,27 @@ const values = (item, names) => (item.properties ?? [])
 
 export function assertionMarker(item) {
   const truth = new Set(values(item, ['truth', 'truth_value', 'truthValue']));
-  if (truth.has('FALSE') && !truth.has('TRUE')) return { kind: 'false', description: 'Stored assertion truth: FALSE.' };
-  if (item.kind === 'rule') return { kind: 'backward-rule', description: 'Executable back-chaining rule (<===). Stored direction metadata does not enable forward execution.' };
   const strength = new Set(values(item, ['monotonicity', 'strength']));
-  if (strength.has('MONOTONIC') && !strength.has('DEFAULT')) return { kind: 'monotonic', description: 'Stored strength: MONOTONIC.' };
-  return { kind: 'default', description: 'Assertion properties. Color does not estimate truth, confidence, rule utility or additional answers.' };
+  const category = strength.has('MONOTONIC') && !strength.has('DEFAULT') ? 'MONOTONIC'
+    : strength.has('DEFAULT') && !strength.has('MONOTONIC') ? 'DEFAULT' : 'unknown or conflicting';
+  const originalTruth = new Set(values(item, ['cyc::original-tv', 'original-tv', 'original_tv']));
+  const metta = item.dialect === 'metta' || /\.metta$/iu.test(item.source ?? '');
+  const expression = item.expression;
+  const negative = !metta && expression?.type === 'application'
+    && expression.head?.type === 'symbol' && expression.head.value === 'x_not' && expression.args?.length === 1;
+  const falseRecord = originalTruth.has('FALSE-DEF') && !originalTruth.has('TRUE-DEF');
+  const storedFalse = truth.has('FALSE') && !truth.has('TRUE');
+  const direction = values(item, ['direction']).join(' / ');
+  const rule = item.kind === 'rule';
+  const description = [
+    negative ? 'Canonical negative assertion.' : falseRecord ? 'Original truth status: FALSE-DEF.' : storedFalse ? 'Stored assertion truth: FALSE.' : '',
+    falseRecord && negative ? 'Original truth status: FALSE-DEF.' : '',
+    `Declared strength: ${category}.`,
+    direction ? `Stored direction: ${direction}.` : '',
+    rule ? 'Executable back-chaining rule (<===); direction metadata does not enable forward execution.' : '',
+    'Color does not encode numeric strength, confidence, utility or TVA fallback origin.',
+  ].filter(Boolean).join(' ');
+  return { kind: negative || falseRecord || storedFalse ? 'false' : category === 'MONOTONIC' ? 'monotonic' : category === 'DEFAULT' ? 'default' : 'unknown', rule, description };
 }
 
 export function colorAssertionBalls(container, items) {
@@ -22,7 +38,10 @@ export function colorAssertionBalls(container, items) {
     if (!item || !ball) continue;
     const marker = assertionMarker(item);
     ball.dataset.marker = marker.kind;
-    ball.title = `${ball.getAttribute('aria-label')}. ${marker.description}`;
+    ball.dataset.rule = String(marker.rule);
+    const label = `Properties and full details for assertion ${item.id}. ${marker.description}`;
+    ball.setAttribute('aria-label', label);
+    ball.title = label;
   }
   return container;
 }

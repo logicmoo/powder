@@ -25,9 +25,10 @@ ID uniqueness, physical line boundaries and the complete footer before returning
 :- use_module(library(lists)).
 :- use_module(library(uuid)).
 :- use_module(kb_symbols).
+:- use_module(kb_metadata_policy, []).
 
-cache_schema(logos_cache_v1).
-converter_version(logos_compiler_v2).
+cache_schema(logos_cache_v2).
+converter_version(logos_compiler_v3).
 
 file_digest(File, Digest) :-
     crypto_file_hash(File, Digest, [algorithm(sha256)]).
@@ -128,15 +129,19 @@ identical_member(Vars, V) :- member(X, Vars), X == V, !.
 compound_group(Name, [], Name) :- !.
 compound_group(Name, Vars, Group) :- Group =.. [Name|Vars].
 
-write_cache(Path, Header0, Records, Header) :-
-    must_be(list, Records), maplist(validate_record, Records),
+write_cache(Path, Header0, Records0, Header) :-
+    must_be(list, Records0), maplist(validate_record, Records0),
+    kb_metadata_policy:origin_context(Header0,SourceOrigin),
+    kb_metadata_policy:filter_records(SourceOrigin,Records0,Records),
     crypto_context_new(Start,[algorithm(sha256),encoding(utf8)]),
     foldl(hash_record,Records,Start,End),crypto_context_hash(End,Digest),
     length(Records, Count),
     cache_schema(Schema),
+    converter_version(Converter),kb_metadata_policy:retention_policy(Policy),
     (get_dict(normalizedFile,Header0,Origin0)->true;Origin0=Path),
     (is_absolute_file_name(Origin0)->Origin=Origin0;absolute_file_name(Origin0,Origin,[access(none)])),
-    Header = Header0.put(_{schema:Schema,count:Count,normalizedDigest:Digest,normalizedFile:Origin}),
+    Header = Header0.put(_{schema:Schema,converter:Converter,retentionPolicy:Policy,
+      sourceOrigin:SourceOrigin,count:Count,normalizedDigest:Digest,normalizedFile:Origin}),
     validate_header(Header),
     terms_digest([Header], HeaderDigest),
     Footer = footer{count:Count,digest:Digest,headerDigest:HeaderDigest},
@@ -190,11 +195,14 @@ read_cache_stream(Stream, Header, Records) :-
     Digest == Header.normalizedDigest,
     terms_digest([Header], HeaderDigest),
     Footer == footer{count:Header.count,digest:Digest,headerDigest:HeaderDigest},
-    parse_records(Terms, Records),
-    length(Records, Header.count),
-    maplist(validate_record, Records),
-    findall(Id,member(record(Id,_,_),Records), Ids),
-    sort(Ids, Unique), length(Ids, N), length(Unique, N).
+    parse_records(Terms, RawRecords),
+    length(RawRecords, Header.count),
+    maplist(validate_record, RawRecords),
+    findall(Id,member(record(Id,_,_),RawRecords), Ids),
+    sort(Ids, Unique), length(Ids, N), length(Unique, N),
+    % Verify the original serialized header, payload and footer before filtering.
+    % Returned headers still identify those exact on-disk bytes, not the view.
+    kb_metadata_policy:filter_records(Header,RawRecords,Records).
 
 trusted_header((:- use_module(Helper),kb_tail_loader:load_remaining)) :-
     atom(Helper), helper_path(Expected), Helper == Expected.
@@ -232,8 +240,7 @@ read_payload(Stream, Terms, Before, After, Footer) :-
 
 validate_header(Header) :-
     is_dict(Header,cache), ground(Header),
-    cache_schema(Header.schema),
-    converter_version(Header.converter),
+    supported_cache_header(Header),
     Header.mtPolicy == filename_v1,
     atom(Header.source), sha256_atom(Header.sourceHash),
     (get_dict(normalizedFile,Header,Origin)->atom(Origin),is_absolute_file_name(Origin);true),
@@ -246,6 +253,14 @@ validate_header(Header) :-
     integer(Header.sizeBytes), Header.sizeBytes >= 0,
     is_list(Header.warnings),maplist(valid_warning,Header.warnings),
     sha256_atom(Header.normalizedDigest).
+
+supported_cache_header(Header) :-
+    Header.schema==logos_cache_v1,Header.converter==logos_compiler_v2,
+    \+get_dict(retentionPolicy,Header,_), !.
+supported_cache_header(Header) :-
+    cache_schema(Header.schema),converter_version(Header.converter),
+    kb_metadata_policy:retention_policy(Header.retentionPolicy),
+    memberchk(Header.sourceOrigin,[sumo,non_sumo,unknown]).
 
 sha256_atom(Hash) :-
     atom(Hash),atom_length(Hash,64),atom_codes(Hash,Codes),

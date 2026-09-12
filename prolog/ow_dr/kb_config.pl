@@ -1,6 +1,8 @@
-:- module(kb_config, [server_settings/1, save_server_settings/3, startup_selection/3, settings_file/1]).
+:- module(kb_config, [server_settings/1, save_server_settings/3, startup_selection/3,
+                       settings_file/1,pool_profile/3]).
 :- use_module(kb_limits).
 :- use_module(kb_paths).
+:- use_module(kb_activity,[with_application/1]).
 :- use_module(kb_cache, [file_digest/2,try_lock/2,release_lock/1,stage_path/2,install_stage/2,remove_if_exists/1]).
 :- use_module(library(http/json)).
 :- use_module(library(filesex)).
@@ -14,14 +16,23 @@ settings_file(File) :-
 server_settings(Settings) :-
     settings_file(File),
     (exists_file(File)->
-      setup_call_cleanup(open(File,read,S,[encoding(utf8)]),json_read_dict(S,Saved),close(S)),
-      validate_settings(Saved,Config),file_digest(File,Revision)
+      read_settings_consistent(File,3,Config,Revision)
     ;server_defaults(Config),Revision=none),
     findall(_{path:Path,message:"Source is missing; startup will report a failed load."},
       (member(Path,Config.startupFiles),\+exists_file(Path)),Issues),
     Settings=Config.put(_{revision:Revision,issues:Issues}).
 
+read_settings_consistent(_,0,_,_) :- !,throw(error(server_settings_changing,_)).
+read_settings_consistent(File,Attempts,Config,Revision) :-
+    file_digest(File,Before),
+    setup_call_cleanup(open(File,read,S,[encoding(utf8)]),json_read_dict(S,Saved),close(S)),
+    file_digest(File,After),
+    (Before==After->validate_settings(Saved,Config),Revision=After;
+     Left is Attempts-1,read_settings_consistent(File,Left,Config,Revision)).
+
 save_server_settings(Input,Expected,Settings) :-
+    with_application(save_settings_guarded(Input,Expected,Settings)).
+save_settings_guarded(Input,Expected,Settings) :-
     validate_settings(Input,Config),settings_file(File),
     file_directory_name(File,Directory),make_directory_path(Directory),
     atom_concat(File,'.lock',LockFile),try_lock(LockFile,Lock),
@@ -51,7 +62,8 @@ canonical_source(Input,Source) :-
     atom_string(Path,Input),repo_root(Root),
     absolute_file_name(Path,Source,[relative_to(Root),access(none)]),
     file_name_extension(_,Ext,Source),downcase_atom(Ext,Lower),
-    (memberchk(Lower,[kif,krf,meld,metta]),\+exists_directory(Source)->true;
+    (exists_directory(Source)->true;
+     memberchk(Lower,[kif,krf,meld,metta])->true;
       domain_error(startup_source_file,Input)).
 unique_order([],_,[]).
 unique_order([Path|Paths],Seen,Unique) :-
@@ -59,11 +71,20 @@ unique_order([Path|Paths],Seen,Unique) :-
     ;Unique=[Path|Rest],unique_order(Paths,[Path|Seen],Rest)).
 
 pool_setting(Pools,Name,Name-Profile) :-
-    get_dict(Name,Pools,P),
+    get_dict(Name,Pools,P),pool_profile(Name,P,Profile).
+pool_profile(Name,P,Profile) :-
+    (memberchk(Name,[loader,inference,http])->true;domain_error(pool_name,Name)),
+    must_be(dict,P),
     maplist(must_be(integer),[P.start,P.max,P.spare]),
     (between(1,128,P.start),between(1,128,P.max),P.start=<P.max,
      P.spare>=0,P.spare=<P.max->true;domain_error(pool_profile(Name),P)),
-    Profile=profile{start:P.start,max:P.max,spare:P.spare}.
+    Base=profile{start:P.start,max:P.max,spare:P.spare},
+    (get_dict(queueCapacity,P,Capacity)->
+      (Name==http->domain_error(http_queue_capacity,Capacity);true),
+      must_be(integer,Capacity),
+      (between(1,1000,Capacity)->true;domain_error(pool_queue_capacity,Capacity)),
+      Profile=Base.put(queueCapacity,Capacity)
+    ;Profile=Base).
 
 startup_selection(Explicit,Settings,Sources) :-
     (Explicit\=[]->Sources=Explicit

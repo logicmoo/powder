@@ -26,7 +26,9 @@ test('presentation is Classic and dense by default with only expression/ball, no
   assert.equal(DEFAULT_PRESENTATION.classic, true);
   assert.equal(DEFAULT_PRESENTATION.density, 'dense');
   assert.equal(DEFAULT_PRESENTATION.split, 30);
-  assert.equal(Object.keys(ASSERTION_FIELDS).length, 9);
+  assert.equal(Object.keys(ASSERTION_FIELDS).length, 10);
+  assert.equal(DEFAULT_PRESENTATION.tvaFamilies.opencog, false);
+  assert.equal(DEFAULT_PRESENTATION.termGroups.external_symbols, false);
   assert(Object.values(DEFAULT_PRESENTATION.fields).every(value => value === false));
   const host = root();
   applyPresentation(host, DEFAULT_PRESENTATION);

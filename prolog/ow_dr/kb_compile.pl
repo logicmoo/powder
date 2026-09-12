@@ -1,7 +1,8 @@
 :- module(kb_compile,
           [ compile_source/3,compile_sources/3,discover_sources/2,recover_sources/3,
             cache_identity/3,source_artifacts/2,implementation_hash/1,reader_progress/3,
-            reader_diagnostic/1,warning_observer/2
+            reader_diagnostic/1,warning_observer/2,with_progress_callback/2,
+            with_prepared_source/3
           ]).
 
 /** <module> Shared offline/runtime source compilation.
@@ -30,20 +31,40 @@ on-disk hashes. Durable occurrence ledgers are independent of this fingerprint.
 :- use_module(kb_index).
 :- use_module(kb_editor).
 :- use_module(kb_reader).
+:- use_module(kb_metadata_policy, []).
 :- use_module(kb_paths, [repo_root/1,app_dir/1,cache_paths/3,
                         cache_source_base/2,cache_original_source/2]).
 
 :- thread_local batch_state/1.
 :- thread_local path_cache_active/0, source_name_cache/2.
 :- thread_local implementation_identity_cache/1.
+:- thread_local file_progress_callback/1.
+:- thread_local prepared_source_path/2,prepared_source_identity/1.
 :- dynamic loaded_implementation_identity/1.
 :- meta_predicate with_path_cache(0).
+:- meta_predicate with_progress_callback(1,0).
+:- meta_predicate with_prepared_source(+,+,0).
+
+with_progress_callback(Callback,Goal) :-
+    setup_call_cleanup(asserta(file_progress_callback(Callback),Ref),Goal,erase(Ref)).
+
+with_prepared_source(File,Hash,Goal) :-
+    must_be(atom,File),must_be(atom,Hash),
+    (loaded_implementation_identity(Hash)->true;
+     throw(error(implementation_changed_restart_required,_))),
+    absolute_file_name(File,Canonical,[access(none)]),
+    setup_call_cleanup(
+      (asserta(prepared_source_path(Canonical,File),PathRef),
+       asserta(prepared_source_identity(Hash),HashRef)),
+      Goal,(erase(PathRef),erase(HashRef))).
 
 implementation_files(['kb_compile.pl','kb_reader.pl','kb_mappings.pl',
-                      'kb_cache.pl','kb_index.pl','kb_ids.pl','kb_paths.pl','kb_symbols.pl']).
+                      'kb_cache.pl','kb_index.pl','kb_ids.pl','kb_paths.pl','kb_symbols.pl',
+                      'kb_metadata_policy.pl']).
 
 implementation_hash(Hash) :-
-    (implementation_identity_cache(Hash)->true
+    (prepared_source_identity(Hash),loaded_implementation_identity(Hash)->true
+    ;implementation_identity_cache(Hash)->true
     ;compute_implementation_identity(Current),
      (loaded_implementation_identity(Expected),Current==Expected
      ->Hash=Current,
@@ -71,7 +92,8 @@ supported_source(Path) :-
 
 source_absolute(Input,File) :-
     absolute_file_name(Input,Canonical,[access(none),file_errors(error)]),
-    (current_prolog_flag(windows,true),
+    (prepared_source_path(Canonical,Exact)->File=Exact
+    ;current_prolog_flag(windows,true),
      (exists_directory(Canonical);exists_file(Canonical))
     ->preserve_source_case(Canonical,File)
     ;File=Canonical).
@@ -214,16 +236,15 @@ compile_source_cached(Input,Options,Result) :-
     cache_paths(File,Normal,Index),
     file_directory_name(Normal,CacheDirectory),make_directory_path(CacheDirectory),
     atom_concat(Normal,'.lock',LockPath),
-    ( mutex_trylock(LockPath)
-    -> setup_call_cleanup(true,
-         (try_lock(LockPath,Lock),
-          (Lock==busy -> busy_result(File,Normal,Index,Start,Options,Result)
-          ; setup_call_cleanup(true,
-                compile_owned(File,Normal,Index,Options,Start,Result),
-                release_lock(Lock)))),
-         mutex_unlock(LockPath))
-    ; busy_result(File,Normal,Index,Start,Options,Result)
-    ),!.
+    setup_call_cleanup(
+      (mutex_trylock(LockPath)->Owned=true;Owned=false),
+      (Owned==true->
+        setup_call_cleanup(try_lock(LockPath,Lock),
+          (Lock==busy->busy_result(File,Normal,Index,Start,Options,Result)
+          ;compile_owned(File,Normal,Index,Options,Start,Result)),
+          (Lock==busy->true;release_lock(Lock)))
+      ;busy_result(File,Normal,Index,Start,Options,Result)),
+      (Owned==true->mutex_unlock(LockPath);true)),!.
 
 busy_result(File,Normal,Index,Start,Options,Result) :-
     diagnostic(Options,'BUSY: skipping file ~w~n',[File]),
@@ -235,8 +256,7 @@ busy_result(File,Normal,Index,Start,Options,Result) :-
 compile_owned(File,Normal,Index,Options,Start,Result) :-
     atom_concat(Normal,'.tmp',Marker),
     source_artifacts(File,Abandoned),
-    write_claim(Marker,File),
-    setup_call_cleanup(true,
+    setup_call_cleanup(write_claim(Marker,File),
        owned_repair(File,Normal,Index,Options,Start,Abandoned,Result),
        remove_if_exists(Marker)).
 
@@ -251,6 +271,7 @@ owned_repair(File,Normal,Index,Options,Start,Abandoned,Result) :-
           Error,
           repair_or_throw(File,Normal,Index,Options,Start,Abandoned,Error,Result)).
 
+repair_or_throw(_,_,_,_,_,_,job_cancelled(Id),_) :- !,throw(job_cancelled(Id)).
 repair_or_throw(File,Normal,Index,Options,Start,Abandoned,Error,Result) :-
     print_diagnostic(File,Error),
     (option(edit(true),Options),\+prompts_suppressed,
@@ -303,7 +324,7 @@ owned_compile(File,Normal,Index,Options,Start,Abandoned,Result) :-
       source_unchanged(File,Identity.sourceHash),
       assign_ids(File,Assertions,Options,Ids),
       memory_checkpoint(ids,File,Options),
-      maplist(assertion_record(File,Options),Assertions,Ids,Records),
+      maplist(assertion_record(File,[source_origin(Info.sourceOrigin)|Options]),Assertions,Ids,Records),
       memory_checkpoint(records,File,Options),
       captured_warnings(Options,AllWarnings),
       reader_header(Identity,Info.put(warnings,AllWarnings),Header0),
@@ -342,10 +363,12 @@ cache_identity(Input,Options,Identity) :-
     (Dialect==metta->Encoding=utf8;option(encoding(Encoding),Options,iso_latin_1)),
     mapping_identity(Dialect,MappingHash),
     converter_version(Converter),
+    kb_metadata_policy:retention_policy(RetentionPolicy),
     implementation_hash(ImplementationHash),
     cache_paths(File,NormalizedFile,_),
     Identity=cache{source:File,sourceHash:Hash,sizeBytes:Size,dialect:Dialect,
           normalizedFile:NormalizedFile,
+          retentionPolicy:RetentionPolicy,
          mappingHash:MappingHash,converter:Converter,mtPolicy:filename_v1,
          implementationHash:ImplementationHash,
          options:[encoding(Encoding),features(Features),strict_mappings(Strict),
@@ -365,7 +388,9 @@ reader_header(Identity,Info,Header) :-
     (Info.mappingHash==Identity.mappingHash
     ->true
     ;throw(error(mapping_identity_changed(Identity.mappingHash,Info.mappingHash),_))),
-    Base=Identity.put(_{warnings:Info.warnings,lineCount:Info.lineCount}),
+    (get_dict(sourceOrigin,Info,Origin)->true;
+     kb_metadata_policy:origin_context(Identity,Origin)),
+    Base=Identity.put(_{warnings:Info.warnings,lineCount:Info.lineCount,sourceOrigin:Origin}),
     (get_dict(comments,Info,Comments)
     ->must_be(list,Comments),must_be(ground,Comments),Header=Base.put(sourceComments,Comments)
     ;Header=Base).
@@ -402,8 +427,11 @@ assertion_record(File,assertion(Semantic,Names,Mt,Line,Props,_),Id,
                  Record) :-
     assertion_record(File,[],assertion(Semantic,Names,Mt,Line,Props,unused),Id,Record).
 
-assertion_record(File,_Options,assertion(Semantic,Names,Mt,Line,Props,_),Id,
+assertion_record(File,Options,assertion(Semantic,Names,Mt,Line,Props0,_),Id,
                  record(Id,Semantic,Metadata)) :-
+    (option(source_origin(Origin),Options)->true;
+     kb_metadata_policy:source_origin(File,Options,Origin)),
+    kb_metadata_policy:filter_properties(Origin,Props0,Props),
     Base=[xc_microtheory(Id,Mt),xc_source_file(Id,File),
           xc_source_line(Id,Line),xc_kb_names(Id,Names)],
     maplist(property_terms(Id),Props,Lists),append(Lists,Extra),
@@ -506,6 +534,7 @@ batch_loop([File|Files],Options,[Result|Results]) :-
     ->maplist(deferred_result,Files,Results)
     ;batch_loop(Files,Options,Results)).
 
+failure_result(_,_,job_cancelled(Id),_) :- !,throw(job_cancelled(Id)).
 failure_result(File,Options,Error,Result) :-
     (Error=error(reported_source_error(_,Cause,Warnings),_)->true
     ;Error=error(reported_source_error(_,Cause),_)->Warnings=[]
@@ -581,6 +610,8 @@ add_pause(Seconds) :-
     (retract(batch_state(S))->P is S.paused+Seconds,assertz(batch_state(S.put(paused,P)));true).
 
 progress_phase(Phase,File,Fraction) :-
+    forall(file_progress_callback(Callback),
+           call(Callback,_{phase:Phase,source:File,fraction:Fraction})),
     (batch_state(S),\+option(progress(none),S.options),
      monotonic_seconds(Now),
      (Fraction=:=0;Fraction=:=1;Now-S.lastProgress>=0.2)

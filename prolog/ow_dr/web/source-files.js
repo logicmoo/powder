@@ -51,19 +51,23 @@ export function fileBadgeDescriptions(record) {
   return badges;
 }
 
-export function renderFileBadges(path, record, element) {
+export function renderFileBadges(path, record, element, { enableStartup, startupPending = false } = {}) {
   const group = element('span', { className: 'source-state-badges', role: 'group',
     'aria-label': `Independent file states for ${path}`,
     [record.type === 'directory' ? 'data-directory-states-path' : 'data-file-states-path']: path });
   for (const badge of fileBadgeDescriptions(record)) {
-    group.append(element('span', { className: 'badge source-state-badge', 'data-kind': badge.key,
-      'data-presence': badge.presence, title: badge.title }, badge.text));
+    const actionable = record.type !== 'directory' && badge.key === 'startup' && badge.presence === 'absent' && enableStartup;
+    group.append(element(actionable ? 'button' : 'span', { className: 'badge source-state-badge', 'data-kind': badge.key,
+      'data-presence': badge.presence, title: actionable ? `${badge.title} Add only this file to the saved next-startup selection; do not load it now.` : badge.title,
+      ...(actionable ? { type: 'button', disabled: startupPending, 'aria-label': `Load ${path} at next startup`,
+        onclick: event => { event.preventDefault(); event.stopPropagation(); enableStartup(); } } : {}) },
+    actionable && startupPending ? 'Saving startup…' : badge.text));
   }
   return group;
 }
 
 export function renderSourceFile(path, label, metadata, {
-  element, compact = false, retry, changed, properties, renderMT, displayPath = path ?? 'Unresolved source',
+  element, compact = false, retry, changed, properties, renderMT, enableStartup, startupPending, displayPath = path ?? 'Unresolved source',
 } = {}) {
   const name = element('span', { className: 'source-file-name' });
   const body = element('span', { className: 'source-file-metadata' });
@@ -98,7 +102,10 @@ export function renderSourceFile(path, label, metadata, {
     const rendered = value instanceof Node ? value : document.createTextNode(String(value ?? ''));
     if (!name.firstChild?.isEqualNode(rendered)) name.replaceChildren(rendered);
     const restoreFocus = body.contains(document.activeElement);
-    body.replaceChildren(renderFileBadges(displayPath, record, element),
+    body.replaceChildren(renderFileBadges(displayPath, record, element, {
+      enableStartup: path && enableStartup ? () => enableStartup(path) : undefined,
+      startupPending: startupPending?.(path) ?? false,
+    }),
       ...(Number.isSafeInteger(record.lineCount) && record.lineCount >= 0
         ? [element('span', { className: 'file-measure' }, `${number(record.lineCount)} lines`)] : []));
     const implied = recordedFileMT(record);

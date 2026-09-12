@@ -1,10 +1,38 @@
-:- module(kb_questions, [stored_questions/1, question_prolog/3]).
+:- module(kb_questions, [stored_questions/1, question_prolog/3,
+                         run_question/4,run_question_direct/4]).
+:- use_module(kb_activity).
 :- use_module(kb_store, []).
 :- use_module(kb_runtime, []).
 :- use_module(kb_cache, []).
 :- use_module(kb_console, []).
 :- use_module(kb_terms).
 :- use_module(library(pairs)).
+:- use_module(library(error)).
+
+run_question(Id,Limit,Seconds,Result) :-
+    current_predicate(kb_jobs:inference_pool_started/0),
+    kb_jobs:inference_pool_started,\+kb_jobs:in_inference,\+kb_store:owns_store_mutex,!,
+    kb_jobs:queue_question(Id,Limit,Seconds,Job),kb_jobs:await_result(Job.jobId,Result).
+run_question(Id,Limit,Seconds,Result) :-
+    run_question_direct(Id,Limit,Seconds,Result).
+
+run_question_direct(Input,Limit,Seconds,Result) :-
+    (string(Input)->atom_string(Id,Input);must_be(atom,Input),Id=Input),
+    with_application(
+      setup_call_cleanup(kb_store:acquire_query_snapshot(Snapshot),
+        (stored_question_formula(Snapshot.modules,Id,Code,English,Formula,Mt,Names),
+         kb_store:query_in_snapshot(Snapshot,Formula,Names,Mt,Limit,Seconds,Answer),
+         Result=Answer.put(question,_{id:Id,identifier:Code,question:English})),
+        kb_store:release_query_snapshot(Snapshot))).
+
+stored_question_formula(Modules,Id,Code,English,Formula,Mt,Names) :-
+    member(Module,Modules),
+    kb_runtime:module_assertion(Module,Id,x_test_Qs(Code,English,Formula),_),
+    string(Code),string(English),!,
+    kb_runtime:module_metadata(Module,microtheory,Id,Mt),
+    kb_runtime:module_metadata(Module,kb_names,Id,Names).
+stored_question_formula(_,Id,_,_,_,_,_) :-
+    throw(error(existence_error(stored_test_question,Id),_)).
 
 stored_questions(Questions) :-
     kb_store:term_assertions(x_test_Qs,Candidates),

@@ -34,6 +34,25 @@
 .classic-mode .role-toolbar[data-viewpoint="false"] { display: none; }
 .viewpoint-controls { margin-bottom: 14px; }
 .viewpoint-controls > p { margin: 6px 0 12px; }
+.term-occurrences { margin-block: 8px 14px; font-size: .85rem; }
+.term-occurrences > summary { min-height: 28px; }
+.term-occurrences > p { margin: 8px 0; }
+.term-occurrences h2 { font-size: .95rem; }
+.term-occurrences ul { margin: 8px 0 14px; padding-left: 22px; }
+.term-occurrences li { margin-block: 7px; }
+.occurrence-evidence { display: block; font-size: .76rem; color: var(--muted); }
+.nat-results { list-style: none; padding: 0; }
+.nat-results > li { padding-block: 12px; border-bottom: 1px solid var(--line); }
+.nat-row-details, .nat-type-labels { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: .8rem; }
+.nat-categories, .nat-search-entry, .compiled-prolog-section { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.nat-categories > details { margin-block: 10px; }
+.nat-search-entry > p { margin: 8px 0 12px; }
+.compiled-prolog { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; padding-block: 12px; font-size: .85rem; }
+.nat-type-information { margin-block: 16px; padding-block: 12px; border-block: 1px solid var(--line); font-size: .85rem; }
+.nat-type-information > p { margin-top: 8px; }
+.nat-type-information > .button { margin-left: 14px; }
+.nat-type-evidence { padding-left: 22px; }
+.nat-type-evidence > li { margin-block: 10px; }
 .literal-query-button { margin-left: 5px; width: 24px; min-height: 24px; padding: 0; border: 1px solid var(--line); background: var(--surface); color: var(--link); font-weight: 700; }
 .literal-query-unavailable { margin-left: 6px; font-size: .72rem; color: var(--muted); }
 [data-field-mt="false"] [data-solution-field="mt"] { display: none; }
@@ -41,6 +60,9 @@
 .assertion-ball[data-marker="monotonic"] .assertion-ball-mark { background: #eee; border-color: #777; box-shadow: inset 2px 2px 0 #fff, inset -1px -1px 0 #999; }
 .assertion-ball[data-marker="backward-rule"] .assertion-ball-mark { background: #8c54b6; border-color: #67368a; box-shadow: inset 2px 2px 0 #d4a4f2, inset -1px -1px 0 #67368a; }
 .assertion-ball[data-marker="false"] .assertion-ball-mark { background: #c74643; border-color: #8d2323; box-shadow: inset 2px 2px 0 #f4aaa6, inset -1px -1px 0 #8d2323; }
+.assertion-ball[data-marker="unknown"] .assertion-ball-mark { background: #999; border-color: #555; box-shadow: inset 2px 2px 0 #ddd, inset -1px -1px 0 #666; }
+.assertion-ball[data-rule="true"] { position: relative; }
+.assertion-ball[data-rule="true"]::after { content: ""; position: absolute; right: 2px; top: 3px; width: 4px; height: 4px; border-radius: 50%; background: #a275c4; border: 1px solid #62367e; }
 
 [data-assertion-density="dense"] .assertion-view { padding: .18rem 0; border: 0; margin: 0; background: transparent; box-shadow: none; }
 [data-assertion-density="dense"] .assertion-view .expression { font-size: .87rem; line-height: 1.45; }
@@ -57,6 +79,7 @@
 [data-field-properties="false"] .assertion-view:not([data-detail="true"]) [data-field="properties"],
 [data-field-proof="false"] .assertion-view:not([data-detail="true"]) [data-field="proof"],
 [data-field-ruleutility="false"] .assertion-view:not([data-detail="true"]) [data-field="ruleUtility"],
+[data-field-assertionprior="false"] .assertion-view:not([data-detail="true"]) [data-field="assertionPrior"],
 [data-field-mt="false"] .shared-assertion-groups:not([data-detail="true"]) .assertion-group-heading { display: none; }
 [data-field-mt="true"] .assertion-group[data-collapsed="true"] > .assertion-group-items,
 .shared-assertion-groups[data-detail="true"] .assertion-group[data-collapsed="true"] > .assertion-group-items { display: none; }
@@ -65,3 +88,18 @@
   .assertion-ball { flex-basis: 30px; width: 30px; height: 30px; }
   .classic-toggle, .presentation-choice { min-height: 40px; }
 }
+.term-type-choices { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 10px 0 18px; padding: 12px; border: 1px solid var(--line); }
+.term-type-choices label { display: inline-flex; align-items: center; gap: 6px; }
+.term-category-section { margin-top: 22px; }
+.source-state-badge[type="button"] { cursor: pointer; border: 1px solid var(--line); }
+.pool-profile { display: flex; flex-wrap: wrap; gap: 12px; margin-block: 15px; padding: 14px; border: 1px solid var(--line); }
+.pool-profile .field { flex: 1 1 130px; max-width: 200px; }
+.pool-effective { flex-basis: 100%; font-size: .85rem; color: var(--muted); }
+.task-filters { display: flex; flex-wrap: wrap; gap: 15px; margin-block: 12px; }
+.settings-section { margin-block: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
+.settings-section > p { margin: 8px 0; }
+.selected-statistics { padding-block: 10px; font-size: .85rem; }
+.loaded-mt-tree { margin-block: 18px; padding: 12px; border: 1px solid var(--line); }
+.loaded-mt-tree li { margin-block: 8px; }
+.loaded-mt-tree select { max-width: 100%; margin-block: 12px; }
+.annotation-context-control { margin-bottom: 12px; font-size: .85rem; }

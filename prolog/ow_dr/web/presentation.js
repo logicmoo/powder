@@ -11,6 +11,7 @@ export const ASSERTION_FIELDS = Object.freeze({
   properties: 'Properties and provenance',
   proof: 'Proof information',
   ruleUtility: 'Observed rule utility',
+  assertionPrior: 'Configured assertion prior (not native TVA)',
 });
 export const DEFAULT_PRESENTATION = Object.freeze({
   version: PRESENTATION_VERSION,
@@ -18,6 +19,8 @@ export const DEFAULT_PRESENTATION = Object.freeze({
   classicExplicit: false,
   density: 'dense',
   split: 30,
+  tvaFamilies: DEFAULT_TVA_FAMILIES,
+  termGroups: DEFAULT_TERM_GROUPS,
   fields: Object.freeze(Object.fromEntries(Object.keys(ASSERTION_FIELDS).map(key => [key, false]))),
 });
 
@@ -35,6 +38,8 @@ export function normalizePresentation(value, previous = DEFAULT_PRESENTATION) {
     classicExplicit,
     density: ['dense', 'comfortable'].includes(input.density) ? input.density : base.density ?? 'dense',
     split: Number.isFinite(input.split) && input.split >= 20 && input.split <= 50 ? input.split : base.split ?? 30,
+    tvaFamilies: normalizeTVAFamilies(input.tvaFamilies, base.tvaFamilies),
+    termGroups: normalizeTermGroups(input.termGroups, base.termGroups),
     fields: Object.fromEntries(Object.keys(ASSERTION_FIELDS).map(key => [
       key, typeof fields[key] === 'boolean' ? fields[key] : base.fields?.[key] ?? false,
     ])),
@@ -212,6 +217,8 @@ export function renderUISettings(presentation, {
   fields.append(choices,
     node(doc, 'p', 'muted', 'Unavailable fields are not invented. Rule utility reflects recorded execution observations, not an ontology confidence score.'));
   page.append(fields);
+  const tvaControls = createTVAVisibilityControls(presentation, { document: doc, signal });
+  page.append(tvaControls);
   if (limitsSection) page.append(limitsSection);
   const feedback = node(doc, 'p', 'presentation-feedback');
   feedback.setAttribute('aria-live', 'polite');
@@ -230,6 +237,8 @@ export function renderUISettings(presentation, {
       ? 'Changes are saved for this browser.'
       : 'Browser storage is unavailable. Changes work in this tab but may not survive a reload.';
   }, { signal });
-  page.dispose = () => { unsubscribe(); classic.dispose(); };
+  page.dispose = () => { unsubscribe(); classic.dispose(); tvaControls.dispose(); };
   return page;
 }
+import { DEFAULT_TVA_FAMILIES, normalizeTVAFamilies, createTVAVisibilityControls } from './native-tva.js';
+import { DEFAULT_TERM_GROUPS, normalizeTermGroups } from './term-categories.js';

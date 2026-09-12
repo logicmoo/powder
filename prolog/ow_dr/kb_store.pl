@@ -2,15 +2,20 @@
                     unload_source/3, status/1, active_modules/1,
                     assertion/2, assertions/1, terms/1, predicates/1,
                     generation/1, source_info/2, query_text/5,
+                    query_text_direct/5,acquire_query_snapshot/1,release_query_snapshot/1,
+                    query_in_snapshot/7,owns_store_mutex/0,cleanup_retired_snapshots/1,
                     publish_staged_sources/4,publish_staged_addition/3,
                     prepare_source/2,prepare_cached_source/2,stage_source/2,cleanup_staged/1,
-                    term_assertions/2, mt_assertions/2, term_exists/1, microtheories/1]).
+                    term_assertions/2, mt_assertions/2, term_exists/1, microtheories/1,
+                    metadata_retention_stats/1,apply_metadata_retention_locked/1]).
 :- use_module(kb_paths).
+:- use_module(kb_activity).
 :- use_module(kb_runtime, []).
 :- use_module(kb_compile, []).
 :- use_module(kb_cache, []).
 :- use_module(kb_index, []).
 :- use_module(kb_reader, []).
+:- use_module(kb_metadata_policy, []).
 :- use_module(kb_terms).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
@@ -23,6 +28,7 @@
 :- dynamic generation_timing/1.
 :- dynamic microtheory_catalog/1.
 :- dynamic term_count/2, constant_locator/2, mt_locator/2, ordered_assertions/1, current_counts/1.
+:- dynamic query_snapshot/4,native_query_refs/2,retired_native/1.
 initialize_store :-
     forall(member(Fact,[generation(0),term_rank([]),predicate_rank([]),
       microtheory_catalog([]),generation_timing(_{loadSeconds:0}),ordered_assertions([]),
@@ -34,13 +40,16 @@ initialize_store :-
 
 cleanup_owned_runtime :-
     forall(source_module(_,_,Native),
+      catch(cleanup_native(Native),Error,print_message(error,Error))),
+    forall(retired_native(Native),
       catch(cleanup_native(Native),Error,print_message(error,Error))).
 
 load_sources(Paths, Expected, Status) :-
     file_pool_caller, !,
     kb_jobs:queue_load(Paths,Expected,Job),kb_jobs:await_result(Job.jobId,Status).
 load_sources(Paths, Expected, Status) :-
-    with_mutex(openworld_code_reload,load_sources_locked(Paths,Expected,Status)).
+    with_application(
+      with_mutex(openworld_code_reload,load_sources_locked(Paths,Expected,Status))).
 
 file_pool_caller :-
     current_predicate(kb_jobs:file_pool_started/0),
@@ -54,10 +63,10 @@ add_cached_sources(Snapshots,Expected,Status) :-
     file_pool_caller, !,
     kb_jobs:queue_cached_load(Snapshots,Expected,Job),kb_jobs:await_result(Job.jobId,Status).
 add_cached_sources(Snapshots,Expected,Status) :-
-    with_mutex(openworld_code_reload,
+    with_application(with_mutex(openworld_code_reload,
       (with_mutex(openworld_store,checked_generation(Expected,Current)),
        must_be(list,Snapshots),maplist(prepare_cached_source,Snapshots,Prepared),
-       with_mutex(openworld_store,install_addition(Prepared,Current,Status)))).
+       with_mutex(openworld_store,install_addition(Prepared,Current,Status))))).
 
 prepare_cached_source(Snapshot,Prepared) :-
     must_be(dict,Snapshot),must_be(atom,Snapshot.source),
@@ -69,16 +78,20 @@ prepare_cached_source(Snapshot,Prepared) :-
     kb_cache:file_digest(Cache,OutputHash),
     (OutputHash==Snapshot.outputHash->true;
      throw(error(source_pack_cache_changed(Source),_))),
-    (source_info(Source,Old),Old.outputHash==OutputHash,
-     get_dict(sourceHash,Old,VerifiedSourceHash),VerifiedSourceHash==SourceHash->
+    kb_cache:read_cache(Cache,Header,Records),kb_cache:file_digest(Cache,AfterHash),
+    (AfterHash==OutputHash->true;throw(error(source_pack_cache_changed(Source),_))),
+    (Header.sourceHash==SourceHash->true;throw(error(source_pack_stale_cache(Source),_))),
+    kb_metadata_policy:origin_context(Header,Origin),
+    kb_metadata_policy:retention_policy(Policy),
+    Info=result{source:Source,normalized:Cache,outputHash:OutputHash,sourceHash:SourceHash,
+      sourceOrigin:Origin,retentionPolicy:Policy,
+      status:cache_hit,count:Header.count,warnings:Header.warnings,
+      lineCount:Header.lineCount,sizeBytes:Header.sizeBytes,elapsed:0},
+    (source_info(Source,Old),source_module(Source,_,_),Old.outputHash==OutputHash,
+     get_dict(sourceHash,Old,VerifiedSourceHash),VerifiedSourceHash==SourceHash,
+     reusable_source_metadata(Old,Info)->
       Prepared=retained(Source)
-    ;kb_cache:read_cache(Cache,Header,Records),kb_cache:file_digest(Cache,AfterHash),
-     (AfterHash==OutputHash->true;throw(error(source_pack_cache_changed(Source),_))),
-     (Header.sourceHash==SourceHash->true;throw(error(source_pack_stale_cache(Source),_))),
-     Info=result{source:Source,normalized:Cache,outputHash:OutputHash,sourceHash:SourceHash,
-       status:cache_hit,count:Header.count,warnings:Header.warnings,
-       lineCount:Header.lineCount,sizeBytes:Header.sizeBytes,elapsed:0},
-     Prepared=prepared(Source,Info,Records)).
+    ;Prepared=prepared(Source,Info,Records)).
 
 checked_generation(Expected,Current) :-
     generation(Current),
@@ -152,7 +165,9 @@ prepare_source(Info, prepared(Source, WithHash, Records)) :-
     kb_cache:read_cache(Info.normalized, Header, Records),
     crypto_file_hash(Info.normalized,After,[algorithm(sha256)]),
     (Hash==After->true;throw(error(cache_changed_during_preparation(Source),_))),
+    kb_metadata_policy:origin_context(Header,Origin),kb_metadata_policy:retention_policy(Policy),
     WithHash=Info.put(_{outputHash:Hash,sourceHash:Header.sourceHash,count:Header.count,
+      sourceOrigin:Origin,retentionPolicy:Policy,
       lineCount:Header.lineCount,sizeBytes:Header.sizeBytes,warnings:Header.warnings}).
 
 publish_staged_sources(Staged,Expected,Started,Status) :-
@@ -217,7 +232,7 @@ stage_sources([P|Ps], Acc, Staged) :-
 
 stage_source(prepared(Source,Info,Records), entry(Source,Info,Module,Native,Records,Reuse)) :-
     ( source_info(Source,Old), source_module(Source,Module,Native),
-      Old.outputHash == Info.outputHash ->
+      Old.outputHash == Info.outputHash, reusable_source_metadata(Old,Info) ->
         Reuse = true
     ; Reuse = false,
       uuid(Uuid), atom_concat(ow_source_, Uuid, Module),
@@ -230,6 +245,13 @@ stage_source(prepared(Source,Info,Records), entry(Source,Info,Module,Native,Reco
              kb_runtime:native_load(Native,Module,[diagnostics(false),generation_snapshot(true)])),
             E, (cleanup_native(Native), throw(E)))
     ).
+
+reusable_source_metadata(Old,Info) :-
+    kb_metadata_policy:retention_policy(Policy),
+    get_dict(retentionPolicy,Old,OldPolicy),OldPolicy==Policy,
+    get_dict(retentionPolicy,Info,NewPolicy),NewPolicy==Policy,
+    get_dict(sourceOrigin,Old,OldOrigin),
+    get_dict(sourceOrigin,Info,NewOrigin),OldOrigin==NewOrigin.
 
 commit_generation(Staged, Current, Obsolete) :-
     findall(Native, (source_module(S,_,Native), \+ member(entry(S,_,_,Native,_,_),Staged)), Obsolete),
@@ -244,7 +266,9 @@ commit_generation(Staged, Current, Obsolete) :-
 activate_source(entry(Source,Info,Module,Native,Records,_)) :-
     assertz(source_info(Source,Info)), assertz(source_module(Source,Module,Native)),
     maplist(activate_record(Source,Module), Records).
-activate_record(Source, Module, record(Id,Semantic,Metadata)) :-
+activate_record(Source, Module, record(Id,Semantic,RawMetadata)) :-
+    (source_info(Source,Info)->Context=Info;Context=_{source:Source}),
+    kb_metadata_policy:filter_metadata(Context,RawMetadata,Metadata),
     memberchk(xc_microtheory(Id,Mt), Metadata),
     memberchk(xc_source_line(Id,Line), Metadata),
     memberchk(xc_kb_names(Id,Names), Metadata),
@@ -266,6 +290,59 @@ activate_record(Source, Module, record(Id,Semantic,Metadata)) :-
     forall(member(C,Constants),assertz(constant_locator(C,Id))),
     assertz(mt_locator(Mt,Id)).
 
+metadata_retention_stats(Report) :-
+    with_mutex(openworld_store,
+      (findall(Origin-Store-Stats,retained_metadata_measurement(Origin,Store,Stats),Measurements),
+       findall(Row,(member(Origin,[sumo,non_sumo,unknown]),
+          member(Store,[native,json]),sum_metadata_stats(Measurements,Origin,Store,Row)),Rows),
+       kb_metadata_policy:retention_policy(Policy),
+       Report=_{policy:Policy,byteMetric:serialized_utf8,byOrigin:Rows})).
+retained_metadata_measurement(Origin,native,Stats) :-
+    source_module(Source,Module,_),source_info(Source,Info),
+    kb_metadata_policy:origin_context(Info,Origin),
+    kb_runtime:module_assertion(Module,Id,_,_),
+    kb_runtime:module_metadata_terms(Module,Id,Terms),
+    kb_metadata_policy:metadata_stats(Origin,Terms,Stats).
+retained_metadata_measurement(Origin,json,Stats) :-
+    source_module(Source,Module,_),source_info(Source,Info),
+    kb_metadata_policy:origin_context(Info,Origin),
+    kb_runtime:module_assertion(Module,Id,_,_),assertion(Id,Data),
+    kb_metadata_policy:json_metadata_stats(Origin,Data.properties,Stats).
+sum_metadata_stats(Measurements,Origin,Store,Row) :-
+    findall(S,member(Origin-Store-S,Measurements),Stats),
+    length(Stats,Count),
+    findall(Key-Total,
+      (member(Key,[propertyCount,retainedPropertyCount,droppedPropertyCount,addedCompactPropertyCount,
+                   metadataBytes,retainedMetadataBytes,removedMetadataBytes]),
+       findall(N,(member(S,Stats),get_dict(Key,S,N)),Ns),sum_list(Ns,Total)),Pairs),
+    dict_pairs(Totals,_,Pairs),Row=Totals.put(_{origin:Origin,store:Store,assertions:Count}).
+
+% Called explicitly by the host inside its drained, guarded source mutation.
+% It changes no source manifest, generation, semantic clauses, IDs or caches.
+apply_metadata_retention_locked(Report) :-
+    thread_self(Self),
+    (owns_store_mutex,mutex_property(openworld_code_reload,status(locked(Self,_)))->true;
+     throw(error(permission_error(apply,unguarded_metadata_retention,store),_))),
+    ((query_snapshot(_,_,_,_);native_query_refs(_,_);retired_native(_))->
+      throw(error(metadata_retention_busy(native_snapshots),_));true),
+    metadata_retention_stats(Before),
+    transaction((
+      forall(source_module(Source,Module,_),retain_source_metadata(Source,Module)),
+      (current_predicate(kb_term_roles:clear_term_role_cache/0)->
+        kb_term_roles:clear_term_role_cache;true)
+    )),
+    metadata_retention_stats(After),Report=_{before:Before,after:After}.
+
+retain_source_metadata(Source,Module) :-
+    source_info(Source,Info),kb_metadata_policy:origin_context(Info,Origin),
+    kb_runtime:prune_module_metadata(Module,Origin),
+    forall((kb_runtime:module_assertion(Module,Id,_,_),assertion(Id,Data)),
+      (kb_metadata_policy:filter_json_properties(Origin,Data.properties,Properties),
+       retractall(assertion(Id,_)),assertz(assertion(Id,Data.put(properties,Properties))))),
+    kb_metadata_policy:retention_policy(Policy),
+    retractall(source_info(Source,_)),
+    assertz(source_info(Source,Info.put(_{sourceOrigin:Origin,retentionPolicy:Policy}))).
+
 record_messages(Metadata,Id,Property,Messages) :-
     atom_concat(xc_,Property,Name),Fact=..[Name,Id,Values],
     (memberchk(Fact,Metadata)->maplist(json_value,Values,Messages);Messages=[]).
@@ -284,6 +361,11 @@ cleanup_staged([entry(_,_,_,Native,_,Reuse)|Rest]) :-
     ; cleanup_native(Native) ),
     cleanup_staged(Rest).
 cleanup_native(Native) :-
+    with_mutex(openworld_store,
+      (native_query_refs(Native,Count),Count>0->
+        (retired_native(Native)->true;assertz(retired_native(Native)))
+      ;cleanup_native_now(Native),retractall(retired_native(Native)))).
+cleanup_native_now(Native) :-
     kb_runtime:native_unload(Native),
     ( exists_file(Native) -> delete_file(Native) ; true ),
     file_directory_name(Native,Directory),
@@ -293,9 +375,10 @@ unload_source(Path, Expected, Status) :-
     file_pool_caller, !,
     kb_jobs:queue_unload(Path,Expected,Job),kb_jobs:await_result(Job.jobId,Status).
 unload_source(Path, Expected, Status) :-
-    atom_string(Input,Path),repo_root(Root),
-    absolute_file_name(Input,Absolute,[relative_to(Root),access(none)]),
-    with_mutex(openworld_store, unload_locked(Absolute, Expected, Status)).
+    with_application(
+      (atom_string(Input,Path),repo_root(Root),
+       absolute_file_name(Input,Absolute,[relative_to(Root),access(none)]),
+       with_mutex(openworld_store, unload_locked(Absolute, Expected, Status)))).
 unload_locked(Path, Expected, Status) :-
     generation(Current),
     ( Expected =:= Current -> true
@@ -369,23 +452,86 @@ diagnostic_text(Data,Message,Text) :-
     format(string(Text),'~w:~d: ~w',[Data.source,Data.line,Message]).
 
 query_text(Text, MT, Limit, Timeout, Result) :-
-    kb_reader:normalize_query(Text,Semantic,Names),
+    current_predicate(kb_jobs:inference_pool_started/0),
+    kb_jobs:inference_pool_started,\+kb_jobs:in_inference,\+owns_store_mutex, !,
+    kb_jobs:queue_query(Text,MT,Limit,Timeout,Job),kb_jobs:await_result(Job.jobId,Result).
+query_text(Text, MT, Limit, Timeout, Result) :-
+    query_text_direct(Text,MT,Limit,Timeout,Result).
+
+owns_store_mutex :-
+    thread_self(Self),mutex_property(openworld_store,status(locked(Self,_))).
+
+query_text_direct(Text, MT, Limit, Timeout, Result) :-
+    with_application(
+      setup_call_cleanup(acquire_query_snapshot(Snapshot),
+        (kb_reader:normalize_query(Text,Semantic,Names),
+         query_in_snapshot(Snapshot,Semantic,Names,MT,Limit,Timeout,Result)),
+        release_query_snapshot(Snapshot))).
+
+acquire_query_snapshot(Snapshot) :-
+    uuid(Id),
     with_mutex(openworld_store,
-      query_semantic(Semantic,Names,MT,Limit,Timeout,Result)).
+      (generation(Generation),
+       findall(Module-Native,source_module(_,Module,Native),Pairs),
+       pairs_keys_values(Pairs,Modules,Natives),
+       transaction((maplist(retain_query_native,Natives),
+                    assertz(query_snapshot(Id,Generation,Modules,Natives)))),
+       Snapshot=snapshot{id:Id,generation:Generation,modules:Modules})).
+retain_query_native(Native) :-
+    (retract(native_query_refs(Native,Previous))->Count is Previous+1;Count=1),
+    assertz(native_query_refs(Native,Count)).
+
+release_query_snapshot(Snapshot) :-
+    with_mutex(openworld_store,
+      (retract(query_snapshot(Snapshot.id,_,_,Natives))->
+        maplist(release_query_native,Natives),
+        findall(N,(member(N,Natives),retired_native(N),\+native_query_refs(N,_)),Ready),
+        cleanup_obsolete(Ready,Issues),
+        (Issues=[]->true;print_message(warning,error(query_snapshot_cleanup_failed(Issues),_)))
+      ;true)).
+release_query_native(Native) :-
+    retract(native_query_refs(Native,Count)),
+    (Count>1->Next is Count-1,assertz(native_query_refs(Native,Next));true).
+
+cleanup_retired_snapshots(Issues) :-
+    with_mutex(openworld_store,
+      (findall(Native,(retired_native(Native),\+native_query_refs(Native,_)),Natives),
+       cleanup_obsolete(Natives,Issues))).
+
+query_in_snapshot(Snapshot,Semantic,Names,MT,Limit,Timeout,Result) :-
+    (query_snapshot(Snapshot.id,Snapshot.generation,Snapshot.modules,_)->true;
+     throw(error(existence_error(query_snapshot,Snapshot.id),_))),
+    Modules=Snapshot.modules,
+    kb_runtime:query_modules_report(Modules,Semantic,MT,Limit,Timeout,
+      [generation(Snapshot.generation)],Solutions,Utility),
+    maplist(solution_json(Modules,Names),Solutions,Values),
+    Result=_{generation:Snapshot.generation,solutions:Values,utility:Utility}.
+
 query_semantic(Semantic,Names,MT,Limit,Timeout,Result) :-
-    active_modules(Modules),
-    kb_runtime:query_modules(Modules,Semantic,MT,Limit,Timeout,Solutions),
-    maplist(solution_json(Names),Solutions,Values), Result=_{solutions:Values}.
-solution_json(Names,solution(Mt,Variables,Steps),
+    setup_call_cleanup(acquire_query_snapshot(Snapshot),
+      query_in_snapshot(Snapshot,Semantic,Names,MT,Limit,Timeout,Result),
+      release_query_snapshot(Snapshot)).
+solution_json(Modules,Names,solution(Mt,Variables,Steps),
               _{mt:MtKey,mtExpression:MtExpression,bindings:Bindings,proof:Proof}) :-
     context_key(Mt,MtKey),term_ast(Mt,[],MtExpression),
     maplist(binding_json,Names,Variables,Bindings),
-    maplist(step_json,Steps,Proof).
+    maplist(step_json(Modules),Steps,Proof).
 binding_json(Name,Value,_{name:Name,value:AST}) :- term_ast(Value,[Name],AST).
-step_json(step(Id,Kind,Slots,Before,After),JSON) :-
-    assertion(Id,Data),
-    maplist(binding_json,Data.names,Slots,Bindings),
-    kb_runtime:module_assertion(Data.module,Id,Semantic,_),
-    bound_semantic_ast(Semantic,Data.names,Slots,Expression),
-    JSON=_{id:Id,kind:Kind,expression:Expression,mt:Data.mt,mtExpression:Data.mtExpression,
-           before:Before,after:After,bindings:Bindings}.
+step_json(Modules,step(Id,Kind,Slots,Before,After),JSON) :-
+    member(Module,Modules),kb_runtime:module_assertion(Module,Id,Semantic,_),!,
+    kb_runtime:module_metadata(Module,kb_names,Id,Names),
+    kb_runtime:module_metadata(Module,microtheory,Id,Mt),
+    context_key(Mt,MtKey),term_ast(Mt,[],MtExpression),
+    maplist(binding_json,Names,Slots,Bindings),
+    bound_semantic_ast(Semantic,Names,Slots,Expression),
+    findall(Property,
+      (member(Name,[monotonicity,strength,direction,truth,truth_value,truthValue,
+                    'cyc::original-tv','original-tv',original_tv]),
+       kb_runtime:module_metadata(Module,Name,Id,Value),json_value(Value,PublicValue),
+       Property=_{name:Name,value:PublicValue}),Properties),
+    Base=_{id:Id,kind:Kind,expression:Expression,mt:MtKey,mtExpression:MtExpression,
+           before:Before,after:After,bindings:Bindings,properties:Properties},
+    (kb_runtime:module_metadata(Module,source_file,Id,Source),
+     kb_runtime:module_metadata(Module,source_line,Id,Line)->
+      public_path(Source,PublicSource),JSON=Base.put(_{source:PublicSource,line:Line});
+      JSON=Base).

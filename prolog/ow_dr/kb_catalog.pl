@@ -34,7 +34,9 @@ startup_sources(Startup) :-
 
 configured_startup_sources(Startup) :-
     server_settings(Settings),startup_selection([],Settings,Selected),
-    maplist(startup_public_path,Selected,Paths0),sort(Paths0,Paths),
+    findall(File,(member(Input,Selected),
+      (exists_directory(Input)->kb_compile:discover_sources([Input],Children),member(File,Children);File=Input)),Concrete),
+    maplist(startup_public_path,Concrete,Paths0),sort(Paths0,Paths),
     (Settings.startupConfigured==true->Evidence=configured_startup;Evidence=default_startup),
     Startup=_{known:true,paths:Paths,evidence:Evidence}.
 startup_public_path(Input,Public) :-

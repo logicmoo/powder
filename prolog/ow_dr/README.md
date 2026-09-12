@@ -65,10 +65,37 @@ to its specialized microtheory page. Headings use linked S-expressions, not nati
 Prolog or opaque keys. A non-atomic term is not assumed to be a microtheory from its
 constructor's spelling.
 
-Property-ball colors describe available metadata: monotonic white, actual
-back-chaining rule purple, explicit stored FALSE red, otherwise default yellow.
+Property-ball colors describe available metadata: MONOTONIC white, DEFAULT yellow,
+canonical negative/FALSE red (which takes precedence), otherwise unknown gray.
+Executable back-chaining rules have a separate small purple marker.
 They are not truth-confidence or rule-utility scores; asserted implications are
 not colored as executable rules merely because of their formula or direction.
+
+Enabled native NARS, OpenCog/PLN and Cyc annotations appear inline. Select them
+with UI Settings, including **Show TVA OpenCog/PLN**. Values resolve by record
+presence at the selected atom, explicit current annotation MT, then `default`;
+no current MT means the middle step is skipped. Full native payloads are lazy
+inside the existing assertion Properties. Native values and configured assertion
+priors are distinct. The global defaults and seven editable Cyc settings are
+documented in [native TVA](docs/native-tva.md); none changes logical inference.
+
+Term Search has persistent, multi-membership category checkboxes. External
+Symbols starts unchecked. Group counts overlap; the distinct union count is
+reported separately. Source Packs and recorded inventories do not imply that
+all unloaded corpus files are covered by the active semantic-term index.
+
+Task pools expose desired/running profiles and bounded task contents. Save a
+profile, then explicitly Apply live; HTTP settings are restart-only. **Queue
+Selected for Loading** returns after acceptance so the Sources page is usable
+while work proceeds. Directory selection separates Subdirectories and Local
+files; selected totals are distinct from all-files totals. **Not at startup**
+adds only that file to the saved next-startup selection without loading it now.
+
+Source links open the local [CodeMirror workspace](docs/source-editor.md).
+Save changes only the original file, with a revision precondition; reload is
+separate. Tabs and split panes retain buffers across routes and layout switches.
+SUMO mapping browsing is now entered from Settings; existing `#/mappings` and
+mapping-row links remain valid.
 
 ## Console controls
 
@@ -361,7 +388,8 @@ their original sources to migrate.
 
 ## Shared file-worker pool
 
-The trusted host API in `kb_jobs` uses **one file pool**, not an inference pool:
+The trusted host API in `kb_jobs` uses **one shared file pool** for indexing and
+loading. Bounded queries and stored questions use a separate inference pool:
 
 ```prolog
 kb_jobs:start_file_pool(_{start:5,max:10,spare:2}).
@@ -379,7 +407,8 @@ kb_jobs:stop_file_pool(drain). % or cancel
 `start_file_pool/1` also accepts saved settings and selects `Settings.pools.loader`.
 Five persistent workers start immediately for the selected profile; demand grows
 the same pool to at most ten, retaining two spare workers where capacity allows.
-Workers remain alive until explicit shutdown. `queueCapacity` optionally sets the
+Workers remain alive until explicit shutdown or an explicitly lowered maximum.
+Both managed pool profiles accept worker limits up to 128. `queueCapacity` optionally sets the
 accepted nonterminal-job bound (default 100, maximum 1000); excess submissions
 raise `task_queue_full(file)` rather than blocking the request thread. Completed
 history retains 100 jobs and is not a durable work queue.
@@ -391,6 +420,9 @@ and native snapshot preparation can overlap; successful KB publication is FIFO
 among mutating jobs and checks the exact accepted generation again. `any` captures
 the generation at acceptance: later queued mutations are **not silently rebased**
 after an earlier mutation changes it. Index jobs never publish KB assertions.
+Native snapshot reuse additionally requires the current metadata-retention policy
+and the same verified source origin. Equal cache bytes alone cannot retain an
+older in-memory representation that still contains discarded metadata.
 Index jobs use the existing compiler/index pipeline, so a missing or stale
 normalized cache is compiled first; no separate semantic analyzer is introduced.
 Discovery resolves source spelling once and the compiler implementation is
@@ -417,7 +449,121 @@ HTTP stop/restart must not stop this pool. Application exit owns explicit pool
 shutdown. Code Make must use `kb_activity:with_exclusive_reload/1` together with
 the existing reload locks; queued and running jobs hold the matching shared gate.
 Source authorization and HTTP/UI lifecycle wiring remain host responsibilities.
-The obsolete dual-pool/inference job interfaces are not activated.
+`start_file_pool/1` alone does not start query workers.
+
+### Separate bounded query and test-question pool
+
+```prolog
+kb_jobs:start_inference_pool(Settings).
+kb_jobs:queue_query(Text,Scope,Limit,Seconds,Accepted).
+kb_jobs:queue_question(AssertionId,Limit,Seconds,Accepted).
+kb_jobs:stop_inference_pool(cancel). % or drain
+```
+
+This pool uses `Settings.pools.inference`, or a supplied profile dict. The selected
+default is start 5, maximum 10, spare 2; configured inference limits may differ
+(up to the existing settings maximum of 128). Its queue, worker budget and
+backpressure are independent of file work. `start_pools/1` starts both configured
+pools; `stop_pools/0` cancels and joins both. Their shared lightweight scheduler
+remains alive until the last pool stops. HTTP stop/restart stops neither.
+
+Queries are bounded by the existing result limit, a maximum 30-second execution
+timeout and 65,536-character input limit. Scope is a ground MT, `context(MT)`, or
+`none` for independent per-MT enumeration. Results identify the generation
+actually queried and carry the existing proof and rule-utility report. A short
+snapshot acquisition pins immutable native source modules; queries do not hold
+the store mutex while evaluating. Replaced/unloaded native files are retired only
+after the last query releases them, including exception, timeout and cancellation
+paths. Query results remain accessible by job ID; public task overviews show only
+counts and generation, not bindings.
+
+“Tests” here means existing `test_Qs` stored question assertions. Execution resolves
+the assertion ID in a pinned generation and dispatches its formula data in its
+own MT. Displayed Prolog text is never evaluated. No PL-Unit/software suites,
+arbitrary goals, or full-Prolog console evaluation are added to this pool.
+
+`kb_store:query_text/5` and `kb_questions:run_question/4` synchronously enqueue and
+await when query workers are active. A legacy caller already owning the store
+mutex executes directly to avoid self-deadlock. New HTTP handlers should instead
+return `queue_query/5` or `queue_question/4` acceptance immediately, without an
+outer store mutex. `submit_inference/3` accepts only bounded `kb` query requests
+and stored `question` requests; unsupported kinds are rejected.
+
+### Revisioned pool settings and bounded task management
+
+The dependency-free `kb_pool_settings` host API is ready for Settings integration:
+
+```prolog
+kb_pool_settings:pool_settings(Overview).
+kb_pool_settings:save_pool_settings(
+    _{file:_{start:5,max:10,spare:2,queueCapacity:100}}, Revision, Saved).
+kb_pool_settings:apply_pool_settings(Saved.revision, Applied).
+kb_pool_settings:task_list(_{pool:file,state:active,offset:0,limit:25}, Page).
+kb_pool_settings:task_details(JobId, _{section:files,offset:0,limit:25}, Detail).
+kb_pool_settings:cancel_task(JobId, UpdatedSummary).
+```
+
+Updates are per-pool patches (`file`/`loader`, `inference`, `http`) using the shared
+server-settings revision. Other profiles and startup selections are preserved;
+conflicting revisions, unknown fields and invalid ranges are rejected. Saving
+changes only durable desired profiles. An explicit Apply uses the current saved
+revision and changes existing file/inference pools in place, never creating a
+second manager or starting a stopped pool. HTTP remains host-controlled,
+restart-only; its effective observations come from `attach_http/2`, and an
+unattached listener is reported as untracked rather than presumed stopped.
+
+Responses distinguish desired/effective profiles, pending application, stopped
+and settling workers, next-start settings and HTTP restart requirements. Raising
+limits grows the existing pool. Lowering a maximum stops new excess dispatch and
+retires idle workers normally; already dispatched work completes without being
+killed. Lowering `queueCapacity` never drops accepted jobs: new submissions are
+rejected until outstanding work falls below the new bound. Queue capacity is the
+logical accepted-job limit, independent of the bounded internal dispatch buffer.
+Settings writes and live application respect checkpoint admission leases.
+
+Task lists default to active work, with `all`, `queued`, `running` and `completed`
+filters. Pages default to 25 and are capped at 100 records. Detail sections are
+`files`, `progress` and `results`; they return bounded management metadata, not
+embedded full query bindings/proofs/utility reports. Query previews are capped at
+512 characters and file-error previews at 1024. Existing authorized query-result
+retrieval remains separate. Cancellation reports its request state and preserves
+the non-cancellable atomic publication boundary. Runtime worker/job references
+remain volatile; only desired settings survive restoration.
+
+### Saved-state boundaries
+
+`kb_jobs:save_quiescence/1` is a read-only advisory report: outstanding jobs,
+workers, query leases, cleanup work and application activity make it `busy`.
+For a race-free live-manifest copy, use `kb_jobs:with_saved_state_snapshot(Goal)`
+outside any `with_application/1` caller. It refuses active work, prevents new
+admissions, and nonblockingly acquires the code-reload/store mutexes. `Goal` runs
+once; every exit releases the guard before subsequent serialization or qsave.
+Busy conditions raise `error(saved_state_busy(Reason),_)`. Do not stop pools or
+discard jobs to save.
+
+An isolated snapshot builder may call `kb_jobs:prepare_saved_state/0` immediately
+before `qsave_program/2`. It refuses live pools, HTTP attachments, job history,
+query leases and application activity; it removes only transient standard-stream
+references. The restored entry point must call `kb_jobs:restore_saved_state/0`
+before starting fresh pools from saved settings. This rebinds process-local I/O
+and rejects calls in the original process or unprepared/nonquiescent images.
+Neither hook restores jobs, resets the live KG, or serializes worker/queue handles.
+Pool, queue, worker, job, I/O and application-activity registries are explicitly
+volatile. Only the builder-process/prepared-image guards persist. Repeating
+`start_pools/1` with the same profiles does not create duplicate workers.
+
+Checkpoint promotion uses `kb_jobs:begin_checkpoint_drain(Token)` and
+`end_checkpoint_drain(Token)`. Begin returns `error(checkpoint_busy(Reason),_)`
+immediately if work, query leases, cleanup or mutation locks are active. It does
+not wait, cancel jobs, stop pools, or change listeners. Success keeps a volatile
+admission lease until idempotent `end_checkpoint_drain/1`; ordinary queued and
+synchronous store mutations/queries are blocked meanwhile. The acquiring thread
+may use `with_saved_state_snapshot/1` for identity rechecks under that lease.
+Use `setup_call_cleanup/3` in an independent coordinator thread so rollback,
+exceptions and cancellation release admission. Listener takeover/rollback remains
+the host's responsibility; private native adapters must not bypass these gates.
+Acquire outside `with_application/1`, not from a file/inference job whose own
+activity would correctly make the drain busy.
 
 ## Queries and active generations
 

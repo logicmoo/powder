@@ -1,4 +1,4 @@
-import { contextLabel, routeHref, symbolLabel } from './render.js';
+import { contextLabel, expressionText, routeHref, symbolLabel } from './render.js';
 
 const sectionLabels = [
   ['documentation', 'Documentation'], ['definition', 'Definitional Info'],
@@ -6,7 +6,9 @@ const sectionLabels = [
   ['all', 'All Asserted Knowledge'], ['assertions', 'All KB Assertions'], ['gafs', 'All GAFs'],
 ];
 const documentation = new Set(['x_comment', 'x_documentation', 'x_genGloss']);
-const definition = new Set(['x_isa', 'x_instance', 'x_genls', 'x_subclass', 'x_genlPreds', 'x_arity', 'x_argIsa', 'x_argGenl', 'x_resultIsa', 'x_resultGenl', 'x_genlMt']);
+const definition = new Set(['x_isa', 'x_instance', 'x_genls', 'x_subclass', 'x_genlPreds', 'x_arity', 'x_valence', 'x_arityMin', 'x_arityMax',
+  'x_argIsa', 'x_argGenl', 'x_argFormat', 'x_argAndRestIsa', 'x_argAndRestGenl', 'x_resultIsa', 'x_resultGenl', 'x_genlMt',
+  'x_domain', 'x_domainSubclass', 'x_range', 'x_rangeSubclass', 'x_defnIff', 'x_defnNecessary', 'x_defnSufficient']);
 const lexical = new Set(['x_genPhrase', 'x_genTemplate', 'x_termStrings', 'x_prettyString', 'x_prettyName', 'x_nameString', 'x_synonymousExternalConcept', 'x_denotation', 'x_lex']);
 const logical = new Set(['x_<===', 'x_<==', 'x_=>', 'x_<=>', 'x_implies', 'x_equiv', 'x_and', 'x_or', 'x_not', 'x_forAll', 'x_forall', 'x_exists', 'x_thereExists']);
 const head = item => item.expression?.head?.type === 'symbol' ? item.expression.head.value : null;
@@ -14,15 +16,17 @@ const children = node => node?.type === 'application' ? [node.head, ...(node.arg
   : node?.type === 'list' ? node.items ?? [] : node?.type === 'map' ? (node.entries ?? []).flatMap(entry => [entry.key, entry.value])
     : ['value', 'execute'].includes(node?.type) ? [node.value] : [];
 const has = (node, predicate) => Boolean(node && (predicate(node) || children(node).some(child => has(child, predicate))));
-const contains = (node, term) => has(node, part => part.type === 'symbol' && part.value === term);
+const contains = (node, term) => has(node, part => (part.type === 'symbol' && part.value === term) || (part.denotesNat === true && part.natKey === term));
 
-export function inContextSection(item, section) {
+export function inContextSection(item, section, term) {
   const predicate = head(item);
+  const subject = item.expression?.args?.[0];
+  const focusedSubject = subject?.type === 'symbol' ? subject.value === term : subject?.denotesNat === true && subject.natKey === term;
   switch (section) {
     case 'all': case 'assertions': return true;
-    case 'documentation': return documentation.has(predicate);
-    case 'definition': return definition.has(predicate);
-    case 'lexical': return lexical.has(predicate);
+    case 'documentation': return documentation.has(predicate) && focusedSubject;
+    case 'definition': return focusedSubject && (definition.has(predicate) || /^x_arg[0-9]+(?:Isa|Genl|Format)$/u.test(predicate));
+    case 'lexical': return lexical.has(predicate) && focusedSubject;
     case 'relations': return Boolean(predicate) && !documentation.has(predicate) && !lexical.has(predicate) && !logical.has(predicate);
     case 'gafs': return Boolean(predicate) && !logical.has(predicate) && !has(item.expression, node => node.type === 'variable');
     default: return false;
@@ -36,9 +40,10 @@ export function filterContextItems(items, term, params) {
   const arg = Number(params.get('arg') || 0);
   const predicate = params.get('predicate');
   const mt = params.get('mt');
-  return items.filter(item => inContextSection(item, section)
+  const source = params.get('source');
+  return items.filter(item => inContextSection(item, section, term)
     && (!arg || contains(item.expression?.args?.[arg - 1], term))
-    && (!predicate || head(item) === predicate) && (!mt || item.mt === mt));
+    && (!predicate || head(item) === predicate) && (!mt || item.mt === mt) && (!source || item.source === source));
 }
 
 function predicateGroups(items) {
@@ -56,14 +61,16 @@ function predicateGroups(items) {
     ({ ...predicate, microtheories: [...contexts.values()].sort((a, b) => a.mt.localeCompare(b.mt)) }));
 }
 
-export function literalQuerySpec(term, predicate, position, shape, mt = '') {
-  if (!term?.startsWith('x_') || !predicate?.startsWith('x_') || !Number.isSafeInteger(position)
+export function literalQuerySpec(term, predicate, position, shape, mt = '', expression) {
+  const selected = term?.startsWith('x_') ? { type: 'symbol', value: term }
+    : expression?.denotesNat === true && expression.natKey === term ? expression : null;
+  if (!selected || !predicate?.startsWith('x_') || !Number.isSafeInteger(position)
     || !Number.isSafeInteger(shape?.arity) || position < 1 || position > shape.arity
     || shape.directCount < 1 || (mt && !shape.contexts?.includes(mt))) return null;
   return {
     expression: { type: 'application', head: { type: 'symbol', value: predicate },
       args: Array.from({ length: shape.arity }, (_, index) => index + 1 === position
-        ? { type: 'symbol', value: term } : { type: 'variable', value: `?ARG${index + 1}` }) },
+        ? selected : { type: 'variable', value: `?ARG${index + 1}` }) },
     mt, limit: 20, timeout: 3,
   };
 }
@@ -79,7 +86,7 @@ export function pageTermNavigation(term, items) {
   }
   return {
     total: items.length,
-    sections: sectionLabels.map(([key, label]) => ({ key, label, count: items.filter(item => inContextSection(item, key)).length })),
+    sections: sectionLabels.map(([key, label]) => ({ key, label, count: items.filter(item => inContextSection(item, key, term)).length })),
     arguments: [...argumentsByPosition].sort(([a], [b]) => a - b).map(([position, members]) =>
       ({ position, count: members.length, predicates: predicateGroups(members).map(predicate => {
         const found = members.filter(item => head(item) === predicate.term);
@@ -97,21 +104,22 @@ export function pageTermNavigation(term, items) {
 export function termContextModel(route, data, term) {
   const navigation = data.navigation ?? pageTermNavigation(term, data.items ?? []);
   const complete = Boolean(data.navigation) || ((data.offset ?? 0) === 0 && data.total === (data.items?.length ?? 0));
-  const href = filters => routeHref('term', { term, limit: route.limit, ...filters });
+  const href = filters => routeHref('term', { term, limit: route.limit, ...(term.startsWith('nat:') ? { view: 'references' } : {}), ...filters });
   const contexts = (predicate, arg) => (predicate.microtheories ?? []).map(context => ({
     label: contextLabel(context.mt, context.mtExpression), count: context.count,
     href: href({ arg, predicate: predicate.term, mt: context.mt }),
     selected: route.params.get('mt') === context.mt && route.params.get('predicate') === predicate.term,
-    querySpecs: arg ? (predicate.queryShapes ?? []).map(shape => literalQuerySpec(term, predicate.term, arg, shape, context.mt)).filter(Boolean) : undefined,
+    querySpecs: arg ? (predicate.queryShapes ?? []).map(shape => literalQuerySpec(term, predicate.term, arg, shape, context.mt, data.expression)).filter(Boolean) : undefined,
   }));
   const predicates = (groups, arg) => groups.map(predicate => ({
     label: symbolLabel(predicate.term), count: predicate.count,
     href: href({ arg, predicate: predicate.term }), children: contexts(predicate, arg),
     selected: route.params.get('predicate') === predicate.term && !route.params.get('mt'),
-    querySpecs: arg ? (predicate.queryShapes ?? []).map(shape => literalQuerySpec(term, predicate.term, arg, shape)).filter(Boolean) : undefined,
+    querySpecs: arg ? (predicate.queryShapes ?? []).map(shape => literalQuerySpec(term, predicate.term, arg, shape, '', data.expression)).filter(Boolean) : undefined,
   }));
   return {
-    title: symbolLabel(term), coverage: complete ? 'complete' : 'page',
+    title: data.expression ? expressionText(data.expression, { pretty: false }) : symbolLabel(term),
+    coverage: complete ? 'complete' : 'page',
     shown: data.items?.length ?? 0, total: data.navigation?.total ?? data.total,
     description: complete ? 'Filters apply to this term’s loaded assertions. Argument groups include nested occurrences.'
       : 'Counts and filters cover this page only until the complete server index is available.',

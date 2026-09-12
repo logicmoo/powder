@@ -83,6 +83,7 @@ creator and creation_date properties.
 :- use_module(library(option)).
 :- use_module(library(readutil)).
 :- use_module(kb_mappings).
+:- use_module(kb_metadata_policy, [mapping_origin/2,redundant_property/1,filter_properties/3]).
 
 :- dynamic source_case_cache/3.
 :- thread_local collecting_comments/2.
@@ -112,14 +113,16 @@ read_source_body(Stream,File,Dialect,Features,Options,Assertions,Info) :-
     initialize_progress(File,Options,ProgressOptions),
     leading_trivia(Stream,File,Leading),
     source_mapping_mode(File,Dialect,Leading,Options,Mode),
+    mapping_origin(Mode,Origin),
     mapping_context(Mode,Map,Hash),
     default_microtheory(File,Mt),
     empty_assoc(Counts),
-    Ctx=ctx(File,Dialect,Features,[warning_state(warning_counts(Counts))|ProgressOptions],Map),
+    Ctx=ctx(File,Dialect,Features,
+            [retention_origin(Origin),warning_state(warning_counts(Counts))|ProgressOptions],Map),
     read_assertions(Stream,Ctx,Mt,[],Assertions,Warnings),
     physical_line_count(Stream,Lines),
     finish_progress(Stream,ProgressOptions),
-    Info=info{dialect:Dialect,mappingHash:Hash,warnings:Warnings,lineCount:Lines}.
+    Info=info{dialect:Dialect,sourceOrigin:Origin,mappingHash:Hash,warnings:Warnings,lineCount:Lines}.
 
 initialize_progress(File,Options,WithProgress) :-
     ( File\=='<text>', option(progress_callback(Handler),Options)
@@ -253,25 +256,8 @@ feature_name(Raw,Name) :-
 text_atom(Text,Atom) :-
     ( atom(Text) -> Atom=Text ; atom_string(Atom,Text) ).
 
-source_mapping_mode(_,Dialect,_,_,none) :- memberchk(Dialect,[krf,metta]), !.
-source_mapping_mode(_,_,_,Options,sumo) :- option(sumo_mappings(true),Options,false), !.
-source_mapping_mode(_,_,_,Options,global) :- option(sumo_mappings(false),Options,true), !.
-source_mapping_mode(File,_,Leading,_,sumo) :-
-    ( sumo_path(File) ; sumo_header(Leading) ), !.
-source_mapping_mode(_,_,_,_,global).
-
-sumo_path(File) :-
-    downcase_atom(File,Lower),
-    ( file_base_name(Lower,Base), memberchk(Base,['tinykb.kif','merge.kif','engformat.kif'])
-    ; sub_atom(Lower,_,_,_,'sumo')
-    ).
-sumo_header(Leading) :-
-    string_lower(Leading,Lower),
-    ( split_string(Lower,"\n","\r",Lines),
-      member(Line,Lines), normalize_space(string(";; logos: sumo-mappings"),Line)
-    ; sub_string(Lower,_,_,_,"suggested upper merged ontology")
-    ; sub_string(Lower,_,_,_,"sumo (")
-    ).
+source_mapping_mode(File,Dialect,Leading,Options,Mode) :-
+    kb_metadata_policy:source_mapping_mode(File,Dialect,Leading,Options,Mode).
 
 default_microtheory(File,Mt) :-
     original_basename(File,Base),
@@ -324,8 +310,9 @@ read_assertions(Stream,Ctx,Mt,DirectiveProps,Assertions,Warnings) :-
 source_assertion(Node,ctx(File,Dialect,_,Options,Map),DefaultMt,DirectiveProps,
                  assertion(Semantic,Names,Mt,Line,Properties,Key),Warnings) :-
     Node=n(Line,_,_),
+    option(retention_origin(Origin),Options,unknown),
     ( Dialect\==metta, assertion_wrapper(Node)
-    -> unwrap_assertion(Node,File,Formula,WrapperProps,Override),
+    -> unwrap_assertion(Node,File,Origin,Formula,WrapperProps,Override),
        ( Override==none -> Mt=DefaultMt ; Mt=Override )
     ; Formula=Node, WrapperProps=[], Mt=DefaultMt ),
     append(DirectiveProps,WrapperProps,BaseProps),
@@ -453,12 +440,12 @@ directive_options([Node|_],File,_,_) :-
 assertion_wrapper(n(_,_,list([n(_,_,sym(Key))|_]))) :-
     atom_concat(':',Rest,Key), Rest\==''.
 
-unwrap_assertion(n(L,C,list(Items)),File,Formula,Props,Mt) :-
-    wrapper_pairs(Items,File,[],none,none,Formula,Mt,Props),
+unwrap_assertion(n(L,C,list(Items)),File,Origin,Formula,Props,Mt) :-
+    wrapper_pairs(Items,File,Origin,[],none,none,Formula,Mt,Props),
     ( Formula==none -> source_error(File,L,C,'Assertion wrapper is missing :KIF') ; true ).
 
-wrapper_pairs([],_,_,Formula,Mt,Formula,Mt,[]).
-wrapper_pairs([Key,Value|Rest],File,Seen,F0,Mt0,Formula,Mt,Props) :- !,
+wrapper_pairs([],_,_,_,Formula,Mt,Formula,Mt,[]).
+wrapper_pairs([Key,Value|Rest],File,Origin,Seen,F0,Mt0,Formula,Mt,Props) :- !,
     ( node_symbol(Key,Keyword), atom_concat(':',_,Keyword)
     -> downcase_atom(Keyword,Lower)
     ; node_error(Key,File,'Expected a wrapper property keyword') ),
@@ -470,10 +457,12 @@ wrapper_pairs([Key,Value|Rest],File,Seen,F0,Mt0,Formula,Mt,Props) :- !,
       property_name(Lower,Keyword,Property),
       ( memberchk(Property,[creator,creation_date]), nil_node(Value)
       -> Props=Tail
+      ; Origin\==sumo,redundant_property(Property)
+      -> filter_properties(Origin,[Property-Value],Compact),append(Compact,Tail,Props)
       ; inert_metadata(Value,Data), Props=[Property-Data|Tail] )
     ),
-    wrapper_pairs(Rest,File,[Lower|Seen],F1,Mt1,Formula,Mt,Tail).
-wrapper_pairs([Node],File,_,_,_,_,_,_) :-
+    wrapper_pairs(Rest,File,Origin,[Lower|Seen],F1,Mt1,Formula,Mt,Tail).
+wrapper_pairs([Node],File,_,_,_,_,_,_,_) :-
     node_error(Node,File,'Assertion wrapper property has no value').
 
 property_name(':direction',_,direction) :- !.

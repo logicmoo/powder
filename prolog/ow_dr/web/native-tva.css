@@ -1,0 +1,46 @@
+.native-tva { min-width: 0; margin-block: .2rem .45rem; font-size: .82rem; }
+.native-tva-scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem; color: var(--muted); margin-block: .2rem; }
+.native-tva-scope .expression, .native-tva-origin .expression { display: inline; font: inherit; margin: 0; padding: 0; }
+.native-tva-entry { margin-block: .18rem; }
+.native-tva-entry > summary { min-height: 24px; overflow-wrap: anywhere; }
+.native-tva-entry > summary > * { margin-right: .5rem; }
+.native-tva-summary { font-variant-numeric: tabular-nums; }
+.native-tva-origin { color: var(--muted); }
+.native-tva-key { white-space: pre-wrap; overflow-wrap: anywhere; }
+.native-tva-detail { margin: .35rem 0 .65rem 1.1rem; min-width: 0; }
+.native-tva-record { display: grid; justify-items: start; gap: .5rem; padding-block: .4rem; min-width: 0; }
+.native-tva-record + .native-tva-record { border-top: 1px solid var(--line); }
+.native-tva-data, .native-tva-raw { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
+.native-tva-raw { padding: .5rem; background: var(--surface); border: 1px solid var(--line); width: 100%; }
+.native-tva-error { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem; color: var(--danger); margin-block: .4rem; }
+.native-tva-property-search { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-block: .5rem; }
+.native-tva-property-search input { min-height: 28px; padding: .2rem .4rem; }
+.native-tva-settings { min-width: 0; }
+.native-tva-settings > p { max-width: 75ch; margin-block: .5rem 1rem; }
+.native-tva-settings .native-tva-context { display: grid; gap: .5rem; margin-block: 1rem; }
+.native-tva-settings .native-tva-context select { max-width: 100%; }
+.native-tva-settings .native-tva-settings-fields { display: grid; gap: .9rem; }
+.native-tva-setting { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(11rem, 2fr); gap: .4rem 1rem; align-items: start; }
+.native-tva-setting > label { display: grid; gap: .35rem; font-weight: 600; }
+.native-tva-setting > label input[type="number"] { width: 8rem; }
+.native-tva-setting > label select { max-width: 100%; }
+.native-tva-setting-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .7rem; min-width: 0; }
+.native-tva-setting-controls input[type="number"] { width: 8rem; }
+.native-tva-setting-effective { grid-column: 2; overflow-wrap: anywhere; font-size: .82rem; }
+.native-tva-settings-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; }
+.native-tva-settings-feedback { margin-top: .7rem; overflow-wrap: anywhere; }
+.native-tva-settings-feedback[role="alert"] { color: var(--danger); }
+.native-tva-prior-settings { margin-top: 1.3rem; }
+.native-tva-prior > p { margin-block: .35rem; }
+.native-tva-prior-values { margin-block: .5rem; }
+.native-tva-prior-values dd { overflow-wrap: anywhere; }
+@media (max-width: 620px) {
+  .native-tva-setting { grid-template-columns: minmax(0, 1fr); }
+  .native-tva-setting-effective { grid-column: 1; }
+  .native-tva-detail { margin-left: .5rem; }
+}
+@media (pointer: coarse) {
+  .native-tva-entry > summary { min-height: 40px; }
+}
+.native-tva-inline { display: inline-block; margin: 2px 12px 2px 0; font-size: .78rem; border: 0; padding: 0; }
+.native-tva-inline > span { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; }

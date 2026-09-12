@@ -2,5 +2,17 @@
   "name": "powder",
   "description": "Paraconsistent Open World Defeasible Epistemic Reasoner",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "build:editor": "node build-editor.mjs"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "6.11.0",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/legacy-modes": "6.5.4",
+    "@codemirror/state": "6.7.4",
+    "@codemirror/view": "6.43.11",
+    "@lezer/highlight": "1.2.3",
+    "esbuild": "0.28.2"
+  }
 }

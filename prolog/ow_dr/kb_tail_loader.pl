@@ -1,11 +1,14 @@
 :- module(kb_tail_loader, [load_remaining/0, enable_includer/0, release_source/2]).
 :- use_module(kb_runtime, []).
 :- use_module(kb_legacy, []).
+:- use_module(kb_metadata_policy, []).
 :- multifile user:term_expansion/2.
 :- multifile prolog:comment_hook/3.
 :- thread_local owned_stream/4.
 :- thread_local pending_properties/2, last_assertion/2, seen_property/4.
 :- thread_local pending_origin/4.
+:- thread_local stream_retention/2.
+:- thread_local stream_retention_fixed/1.
 
 load_remaining :-
     prolog_load_context(stream, Stream),
@@ -27,7 +30,11 @@ enable_includer :-
 enable(Stream, Module, File) :-
     prolog_load_context(source, Owner),
     retractall(owned_stream(Stream, _, _, _)),
-    asserta(owned_stream(Stream, Module, File, Owner)).
+    asserta(owned_stream(Stream, Module, File, Owner)),
+    (kb_runtime:native_retention_context(Context)->
+      kb_metadata_policy:origin_context(Context,Origin),
+      assertz(stream_retention(Stream,Origin)),assertz(stream_retention_fixed(Stream))
+    ;true).
 
 release_source(Owner,Module) :-
     forall(retract(owned_stream(Stream,Module,_,Owner)),clear_stream(Stream)),
@@ -35,6 +42,8 @@ release_source(Owner,Module) :-
 clear_stream(Stream) :-
     retractall(pending_properties(Stream,_)),retractall(last_assertion(Stream,_)),
     retractall(pending_origin(Stream,_,_,_)),
+    retractall(stream_retention(Stream,_)),
+    retractall(stream_retention_fixed(Stream)),
     retractall(seen_property(Stream,_,_,_)).
 
 expand_owned(end_of_file, []) :-
@@ -63,7 +72,10 @@ helper_file(File) :- file_base_name(File, 'kb_dynamic_assert.pl').
 expand_term_data(end_of_file, _, Stream, []) :- !,
     owned_stream(Stream,_,File,_),no_orphan_comments(Stream,File),
     retractall(owned_stream(Stream, _, _, _)),clear_stream(Stream).
-expand_term_data(kb_cache_header(Header), _, _, []) :- !,
+expand_term_data(kb_cache_header(Header), _, Stream, []) :- !,
+    kb_metadata_policy:origin_context(Header,Origin),
+    retractall(stream_retention(Stream,_)),assertz(stream_retention(Stream,Origin)),
+    assertz(stream_retention_fixed(Stream)),
     kb_runtime:cache_warnings(Header).
 expand_term_data(kb_cache_footer(_), _, _, []) :- !.
 expand_term_data((Head :- Guard), Module, Stream, Expanded) :- !,
@@ -71,6 +83,7 @@ expand_term_data((Head :- Guard), Module, Stream, Expanded) :- !,
     functor(Head, Name, Arity),
     kb_runtime:install_guard(Module, Guard),
     arg(1,Guard,Id),
+    (stream_retention_fixed(Stream)->true;retractall(stream_retention(Stream,_))),
     retractall(last_assertion(Stream,_)),assertz(last_assertion(Stream,Id)),
     retractall(seen_property(Stream,_,_,_)),
     (retract(pending_properties(Stream,Props))->true;Props=[]),
@@ -97,12 +110,22 @@ expand_term_data(Term, _, _, _) :-
 
 properties_terms([],_,_,[]).
 properties_terms([Property-Value|Rest],Id,Stream,Terms) :-
+    (Property==source_file,\+stream_retention_fixed(Stream)->
+      kb_metadata_policy:source_origin(Value,[],SourceOrigin),
+      retractall(stream_retention(Stream,_)),
+      assertz(stream_retention(Stream,SourceOrigin));true),
+    (stream_retention(Stream,Origin)->true;Origin=unknown),
+    kb_metadata_policy:filter_properties(Origin,[Property-Value],Filtered),
+    retained_properties_terms(Filtered,Id,Stream,Terms,Tail),
+    properties_terms(Rest,Id,Stream,Tail).
+retained_properties_terms([],_,_,Tail,Tail).
+retained_properties_terms([Property-Value|Rest],Id,Stream,Terms,End) :-
     ( seen_property(Stream,Id,Property,Previous) ->
       (Previous==Value->Terms=Tail;native_error('Conflicting assertion metadata'))
     ; assertz(seen_property(Stream,Id,Property,Value)),
       atom_concat(xc_,Property,Name),Term=..[Name,Id,Value],Terms=[Term|Tail]
     ),
-    properties_terms(Rest,Id,Stream,Tail).
+    retained_properties_terms(Rest,Id,Stream,Tail,End).
 metadata_expansions([],[]).
 metadata_expansions([Term|Rest],[(:-dynamic(Name/2)),(:-multifile(Name/2)),Term|Tail]) :-
     functor(Term,Name,2),metadata_expansions(Rest,Tail).
