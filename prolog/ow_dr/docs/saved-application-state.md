@@ -80,7 +80,8 @@ resource-free modules; importing an unconnected helper is not application readin
   owned child; it never contacts an existing server. Live takeover still requires
   the explicit trial/coordinator transaction, not this direct startup API.
 
-Explicit Settings **Save checkpoint → Try → Take over original ports** uses
+Separate explicit Settings **Create saved state**, **Start candidate**, and
+**Promote candidate** actions use
 the managed coordinator described in [checkpoint-handoff.md](checkpoint-handoff.md).
 Selection for the next ordinary startup and a live takeover are separate actions.
 
@@ -332,7 +333,7 @@ shutdown race is fixed. Cleanup stages now identify debug/HTTP/control/pools
 failures. A subsequent expanded native test also exposed an unresolved candidate
 exit `0xC000013A`; no root cause is claimed. App/API/Settings wiring is now
 integrated. The final **nonserving** copied-app native workflow passed in
-166.055 seconds, including real browser-created qsave, source/cache removal,
+312.080 seconds, including real browser-created qsave, source/cache removal,
 private-IPC trial queries, zero preapproval candidate TCP/UDP endpoints,
 cancellation, failed-bind rollback, fresh debug credentials, original
 port takeover, survival after old-owner/job retirement, sidecar-free repeat save,

@@ -16,8 +16,12 @@
 :- use_module(library(lists)).
 :- use_module(library(uuid)).
 :- use_module(library(time)).
+:- use_module(library(aggregate)).
 :- dynamic operation/3.
 :- volatile operation/3.
+:- dynamic mutation_epoch/1, mutation_receipt/4.
+:- volatile mutation_epoch/1, mutation_receipt/4.
+:- meta_predicate explicit_mutation(+, +, 0, -).
 
 :- http_handler(openworld_dr('api/checkpoint/catalog'),checkpoint_endpoint(catalog),[method(get)]).
 :- http_handler(openworld_dr('api/checkpoint/configuration'),checkpoint_endpoint(configuration),[method(get)]).
@@ -70,30 +74,80 @@ action(configuration,_,Reply) :- kb_saved_state:effective_configuration(Reply).
 action(inspect,Request,Reply) :-
     http_parameters(Request,[id(Id,[atom])]),kb_saved_state:saved_state_metadata(Id,Reply).
 action(create,Request,Reply) :-
-    small_body(Request,[name,generation,revision],Body),
-    submit_checkpoint_operation(create,Body,Reply).
+    mutation_body(create,Request,[name,generation,revision],Body),
+    explicit_mutation(create,Body,submit_checkpoint_operation(create,Body,Reply),Reply).
 action(try,Request,Reply) :-
-    small_body(Request,[id,generation],Body),submit_checkpoint_operation(try,Body,Reply).
+    mutation_body(try,Request,[id,generation],Body),
+    explicit_mutation(try,Body,submit_checkpoint_operation(try,Body,Reply),Reply).
 action(select,Request,Reply) :-
-    kb_checkpoint_policy:require_checkpoint_execution(select),
-    small_body(Request,[id,revision],Body),text(Body.id),text(Body.revision),
-    kb_activity:with_application(kb_saved_state:select_saved_state(Body.id,Body.revision,Reply)).
+    mutation_body(select,Request,[id,revision],Body),text(Body.id),text(Body.revision),
+    explicit_mutation(select,Body,
+      (kb_checkpoint_policy:require_checkpoint_execution(select),
+       kb_activity:with_application(kb_saved_state:select_saved_state(Body.id,Body.revision,Reply))),Reply).
 action(status,Request,Reply) :-
     http_parameters(Request,[operation(Operation,[atom,optional(true)]),run(Run,[atom,optional(true)])]),
     (nonvar(Operation),var(Run)->checkpoint_operation(Operation,Reply)
     ;nonvar(Run),var(Operation)->kb_checkpoint:checkpoint_status(Run,Reply)
     ;domain_error(checkpoint_status_selector,one_required)).
 action(cancel,Request,Reply) :-
-    small_body(Request,[kind,id],Body),text(Body.id),
-    (Body.kind==operation->cancel_checkpoint_operation(Body.id,Reply)
-    ;Body.kind==trial->kb_checkpoint:cancel_checkpoint(Body.id,Reply)
-    ;domain_error(checkpoint_cancel_kind,Body.kind)).
+    mutation_body(cancel,Request,[kind,id],Body),text(Body.id),
+    explicit_mutation(cancel,Body,
+      (Body.kind==operation->cancel_checkpoint_operation(Body.id,Reply)
+      ;Body.kind==trial->kb_checkpoint:cancel_checkpoint(Body.id,Reply)
+      ;domain_error(checkpoint_cancel_kind,Body.kind)),Reply).
 action(promote,Request,Reply) :-
-    small_body(Request,[run,revision,confirm],Body),
+    mutation_body(promote,Request,[run,revision,confirm],Body),
     (Body.confirm=='take-over-original-ports'->true;
       throw(error(permission_error(promote,checkpoint,explicit_consent_required),_))),
     text(Body.run),integer_field(Body,revision),
-    kb_checkpoint:promote_checkpoint(Body.run,Body.revision,Reply).
+    explicit_mutation(promote,Body,
+      kb_checkpoint:promote_checkpoint(Body.run,Body.revision,Reply),Reply).
+
+mutation_body(Action,Request,Keys,Body) :-
+    append([intent,checkpointRevision,requestId],Keys,Required),
+    small_body(Request,Required,Body),require_intent(Action,Body).
+require_intent(Action,Body) :-
+    (expected_intent(Action,Body,Intent),Body.intent==Intent->true;
+      throw(error(checkpoint_explicit_intent_required,_))).
+expected_intent(create,_,'save-state').
+expected_intent(select,_,'select-next-start').
+expected_intent(try,_,'start-candidate').
+expected_intent(promote,_,'promote-candidate').
+expected_intent(cancel,Body,'stop-candidate') :- Body.kind==trial.
+expected_intent(cancel,Body,'cancel-operation') :- Body.kind==operation.
+
+request_epoch(Epoch) :-
+    with_mutex(powder_checkpoint_mutations,
+      (mutation_epoch(Epoch)->true;uuid(Epoch),assertz(mutation_epoch(Epoch)))).
+explicit_mutation(Action,Body,Goal,Reply) :-
+    require_intent(Action,Body),text(Body.checkpointRevision),text(Body.requestId),
+    request_epoch(Epoch),
+    (atomic_list_concat([Epoch,UUID],':',Body.requestId),request_uuid(UUID)->true;
+      throw(error(checkpoint_request_expired,_))),
+    with_mutex(powder_checkpoint_mutations,
+      (mutation_receipt(Body.requestId,PriorAction,PriorBody,Outcome)->
+        (PriorAction==Action,PriorBody=@=Body->receipt_reply(Outcome,Reply);
+          throw(error(checkpoint_request_reused,_)))
+      ;aggregate_all(count,mutation_receipt(_,_,_,_),Count),
+       (Count<1024->true;throw(error(checkpoint_request_capacity,_))),
+       setup_call_cleanup(
+         assertz(mutation_receipt(Body.requestId,Action,Body,pending)),
+         (kb_saved_state:saved_states(Catalog),
+          (Catalog.revision==Body.checkpointRevision->true;
+            throw(error(saved_state_revision_conflict,_))),
+          (call(Goal)->true;throw(error(checkpoint_request_failed,_))),
+          sig_atomic((retract(mutation_receipt(Body.requestId,Action,Body,pending)),
+            assertz(mutation_receipt(Body.requestId,Action,Body,completed(Reply)))))),
+         interrupt_receipt(Body.requestId,Action,Body)))).
+request_uuid(UUID) :-
+    atomic_list_concat(Parts,'-',UUID),maplist(atom_length,Parts,[8,4,4,4,12]),
+    forall((member(Part,Parts),atom_codes(Part,Codes),member(C,Codes)),
+      (between(0'0,0'9,C);between(0'a,0'f,C))).
+receipt_reply(completed(Reply),Reply) :- !.
+receipt_reply(_,_) :- throw(error(checkpoint_request_already_received,_)).
+interrupt_receipt(Id,Action,Body) :-
+    sig_atomic((retract(mutation_receipt(Id,Action,Body,pending))->
+      assertz(mutation_receipt(Id,Action,Body,interrupted));true)).
 
 checkpoint_catalog(Reply) :-
     kb_checkpoint_policy:checkpoint_policy(Policy),
@@ -101,7 +155,9 @@ checkpoint_catalog(Reply) :-
     (kb_checkpoint:checkpoint_instance(Instance)->true;Instance=null),
     kb_checkpoint:checkpoint_runs(Runs),
     with_mutex(powder_checkpoint_operations,findall(Data,operation(_,Data,_),Operations)),
+    request_epoch(Epoch),
     Reply=Catalog.put(_{generation:Generation,instance:Instance,runs:Runs,operations:Operations,
+      mutationEpoch:Epoch,
       automation:Policy}).
 
 submit_checkpoint_operation(Action,Body,Reply) :-
@@ -186,6 +242,13 @@ error_description(error(checkpoint_execution_paused(_),_),409,checkpoint_paused,
                   "Automatic checkpointing is OFF. Checkpoint execution is paused pending manual-only, non-serving candidate support.") :- !.
 error_description(error(permission_error(promote,checkpoint,explicit_consent_required),_),403,forbidden,
                   "Explicit original-port takeover consent is required.") :- !.
+error_description(error(checkpoint_explicit_intent_required,_),403,explicit_intent_required,
+                  "Use the explicit checkpoint action; automatic candidate startup is not permitted.") :- !.
+error_description(Error,409,request_conflict,
+                  "Request already received, expired or unavailable. Refresh status; do not replay a start request.") :-
+    Error=error(Reason,_),
+    memberchk(Reason,[checkpoint_request_expired,checkpoint_request_reused,
+      checkpoint_request_capacity,checkpoint_request_already_received]), !.
 error_description(error(permission_error(modify,checkpoint_trial,_),_),409,trial_read_only,
                   "Trials are read-only until promoted from the original instance.") :- !.
 error_description(error(permission_error(cancel,checkpoint_transition,_),_),409,transition_busy,

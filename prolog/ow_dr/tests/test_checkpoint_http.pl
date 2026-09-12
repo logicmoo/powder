@@ -11,6 +11,7 @@
 :- use_module(library(http/json)).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
+:- use_module(library(aggregate)).
 
 fixture(D,Port) :-
     source_file(plunit_checkpoint_http:fixture(_,_),File),file_directory_name(File,Tests),
@@ -25,6 +26,8 @@ cleanup(D,Port) :-
     (http_current_server(_,Port)->http_stop_server('127.0.0.1':Port,[]);true),
     retractall(kb_server:server_port(Port)),
     retractall(kb_checkpoint_http:operation(_,_,_)),
+    retractall(kb_checkpoint_http:mutation_receipt(_,_,_,_)),
+    retractall(kb_checkpoint_http:mutation_epoch(_)),
     unsetenv('POWDER_SERVER_SETTINGS'),delete_directory_and_contents(D).
 url(Port,Action,URL) :-
     app_base(Base),format(atom(URL),'http://127.0.0.1:~d~wapi/checkpoint/~w',[Port,Base,Action]).
@@ -32,6 +35,15 @@ read_api(Port,Action,Options,Status,Reply) :-
     url(Port,Action,URL),
     setup_call_cleanup(http_open(URL,S,[status_code(Status)|Options]),json_read_dict(S,Reply),close(S)).
 origin(Port,Origin) :- format(atom(Origin),'http://127.0.0.1:~d',[Port]).
+envelope(Action,Fields,Body) :-
+    checkpoint_catalog(Catalog),uuid(UUID),
+    format(atom(Key),'~w:~w',[Catalog.mutationEpoch,UUID]),
+    kb_checkpoint_http:expected_intent(Action,Fields,Intent),
+    Body=Fields.put(_{intent:Intent,checkpointRevision:Catalog.revision,requestId:Key}).
+post_api(P,Action,Body,Code,Reply) :-
+    url(P,Action,URL),origin(P,Origin),
+    http_post(URL,json(Body),Reply,
+      [status_code(Code),json_object(dict),request_header('Origin'=Origin)]).
 
 test(real_get_catalog,[setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
     read_api(P,catalog,[],Code,Reply),
@@ -44,16 +56,66 @@ test(select_requires_origin,[setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
     http_post(URL,json(_{id:none,revision:none}),_,[status_code(Code),json_object(dict)]),
     assertion(Code=:=403).
 test(select_never_promotes,[setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
-    url(P,select,URL),origin(P,Origin),
-    http_post(URL,json(_{id:none,revision:none}),Reply,
-      [status_code(Code),json_object(dict),request_header('Origin'=Origin)]),
+    envelope(select,_{id:none,revision:none},Body),
+    post_api(P,select,Body,Code,Reply),
     assertion(Code=:=200),assertion(Reply.selected=="none"),
     assertion(\+kb_checkpoint:instance(_)).
 test(promotion_requires_exact_consent,[setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
-    url(P,promote,URL),origin(P,Origin),
-    http_post(URL,json(_{run:fake,revision:1,confirm:no}),_,
-      [status_code(Code),json_object(dict),request_header('Origin'=Origin)]),
+    envelope(promote,_{run:fake,revision:1,confirm:no},Body),
+    post_api(P,promote,Body,Code,_),
     assertion(Code=:=403).
+test(legacy_or_automatic_start_requests_never_start,
+     [setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
+    post_api(P,try,_{id:unused,generation:0},Legacy,_),assertion(Legacy=:=400),
+    envelope(try,_{id:unused,generation:0},Body),
+    post_api(P,try,Body.put(intent,'auto-start'),Automatic,_),assertion(Automatic=:=403),
+    post_api(P,try,Body.put(autoStart,true),Preference,_),assertion(Preference=:=400),
+    assertion(\+kb_checkpoint_http:operation(_,_,_)),
+    assertion(\+kb_checkpoint:run(_,_,_)).
+test(stale_checkpoint_revision_never_registers_start,
+     [setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
+    envelope(try,_{id:unused,generation:0},Body),
+    post_api(P,try,Body.put(checkpointRevision,stale),Code,_),assertion(Code=:=409),
+    assertion(\+kb_checkpoint_http:operation(_,_,_)),
+    assertion(\+kb_checkpoint:run(_,_,_)).
+test(idempotent_select_returns_original_without_second_mutation,
+     [setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
+    envelope(select,_{id:none,revision:none},Body),
+    post_api(P,select,Body,200,First),post_api(P,select,Body,200,Again),
+    assertion(First=@=Again),
+    aggregate_all(count,kb_checkpoint_http:mutation_receipt(_,_,_,_),Count),assertion(Count=:=1),
+    post_api(P,select,Body.put(id,other),Conflict,_),assertion(Conflict=:=409),
+    assertion(\+kb_checkpoint:run(_,_,_)),
+    assertion(\+kb_checkpoint_http:operation(_,_,_)).
+test(request_from_previous_instance_cannot_replay,
+     [setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
+    envelope(try,_{id:unused,generation:0},Body),
+    retractall(kb_checkpoint_http:mutation_epoch(_)),
+    post_api(P,try,Body,Code,_),assertion(Code=:=409),
+    assertion(\+kb_checkpoint_http:operation(_,_,_)).
+test(duplicate_start_returns_same_operation_even_after_completion,
+     [setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
+    envelope(try,_{id:'s-00000000-0000-0000-0000-000000000000',generation:0},Body),
+    setup_call_cleanup(assertz(kb_checkpoint:instance(_{role:active}),Ref),
+      (post_api(P,try,Body,200,First),
+      atom_string(Id,First.id),wait_operation(Id,100,Done),assertion(Done.phase==failed),
+      post_api(P,try,Body,200,Again),assertion(First.id==Again.id),
+      aggregate_all(count,kb_checkpoint_http:operation(_,_,_),Count),assertion(Count=:=1),
+      assertion(\+kb_checkpoint:run(_,_,_))),
+      erase(Ref)).
+test(interrupted_request_is_consumed_not_reexecuted,
+     [setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
+    envelope(try,_{id:unused,generation:0},Body),
+    catch(kb_checkpoint_http:explicit_mutation(try,Body,throw(interrupted_fixture),_),interrupted_fixture,true),
+    catch(kb_checkpoint_http:explicit_mutation(try,Body,throw(replayed_fixture),_),Error,true),
+    assertion(nonvar(Error)),assertion(Error=error(checkpoint_request_already_received,_)).
+test(catalog_and_status_do_not_register_mutations,
+     [setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
+    forall(between(1,3,_),read_api(P,catalog,[],200,_)),
+    read_api(P,'status?operation=absent',[],404,_),
+    assertion(\+kb_checkpoint_http:mutation_receipt(_,_,_,_)),
+    assertion(\+kb_checkpoint_http:operation(_,_,_)),
+    assertion(\+kb_checkpoint:run(_,_,_)).
 test(native_cleanup_permission_is_not_reported_as_an_origin_failure) :-
     kb_checkpoint_http:error_description(
       error(permission_error(delete,directory,owned_runtime),test),Status,Code,_),

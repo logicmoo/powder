@@ -31,19 +31,39 @@ memory-only role check, not a potentially failing status/profile expansion.
 Routes are below the canonical `/swish/openworld_dr/api/checkpoint/` mount.
 GET requires an owned local Host; POST additionally requires its exact Origin.
 Use JSON bodies, not filesystem paths or executable goals.
+Every mutating POST additionally requires:
+
+* `intent`: the exact action from the table below;
+* `checkpointRevision`: the current catalog revision;
+* `requestId`: `catalog.mutationEpoch + ":" + crypto.randomUUID()`, generated
+  **only inside the explicit click/submit handler**.
+
+The volatile receipt ledger executes a request ID at most once per process.
+Identical retries return the original acceptance/result, never launch again;
+changed payloads, interrupted requests and keys from a previous process are
+rejected. Receipts are not evicted: the bounded 1,024-entry ledger fails closed
+when full. A new process has a new epoch, including after saved-state resume.
+Clients never automatically retry POSTs. Refresh/reconnect only reads status.
 
 | Method / route | Input | Result |
 |---|---|---|
 | GET `catalog` | none | Image catalog/revision, generation, redacted instance, operations and trials |
 | GET `configuration` | none | Effective settings/SourcePacks, using module-owned imported fallback only for absent sidecars |
 | GET `inspect` | `?id=s-UUID` | Full image metadata, without control credentials |
-| POST `create` | `{name,generation,revision}` | Accepted operation; poll until completed/failed/cancelled |
-| POST `select` | `{id,revision}`; `id:"none"` clears selection | Updated next-start catalog; does not start or promote |
-| POST `try` | `{id,generation}` | Accepted operation; its result contains the verified trial |
+| POST `create` | `{name,generation,revision}`; intent `save-state` | Save only; accepted operation, no retained candidate |
+| POST `select` | `{id,revision}`; intent `select-next-start`; `id:"none"` clears selection | Updated next-start catalog; does not start or promote |
+| POST `try` | `{id,generation}`; intent `start-candidate` | Explicit **Start candidate**; its result contains the nonserving candidate |
 | GET `status` | exactly one of `?operation=UUID` / `?run=UUID` | Current operation or trial state |
-| POST `cancel` | `{kind:"operation"|"trial",id}` | Cancellation state; existing images are retained |
-| POST `promote` | `{run,revision,confirm:"take-over-original-ports"}` | Asynchronous explicit takeover |
+| POST `cancel` | `{kind:"operation"|"trial",id}`; intent `cancel-operation` / `stop-candidate` | Explicit **Stop candidate** or operation cancellation; images remain |
+| POST `promote` | `{run,revision,confirm:"take-over-original-ports"}`; intent `promote-candidate` | Separate explicit **Promote candidate**; never follows health automatically |
 | GET `identity` | `?nonce=...` | Read-only public identity proof; never a capability |
+
+The table's payload fields supplement the three mandatory fields above. Settings
+opening, selection, page initialization, refresh, polling and reconnect never
+start a candidate. Start is disabled for unavailable images, generation mismatches, pending work or an
+existing candidate. A failed/lost Start response keeps it disabled until a
+successful status refresh. There is no saved auto-run-candidate preference.
+Normal user startup and resume selection are unchanged.
 
 The async registry is volatile, bounded, and separate from ordinary file and
 inference jobs. A running save blocks retirement, and new operations/selection
@@ -77,11 +97,13 @@ user-authorized Settings actions:
 * Save: `kb_saved_state:create_saved_state(Name,Generation,CatalogRevision,Metadata)`.
   Save is synchronous and cancellable through its caller. Success includes a
   **real separate-process restore validation**, never just qsave's return value.
-* Try: `try_checkpoint(StateId,ExpectedGeneration,Trial)`. Starts an isolated
+  This bounded, nonserving validator exits before publication; it is not a
+  retained candidate and never invokes `try_checkpoint/3`.
+* Start candidate: `try_checkpoint(StateId,ExpectedGeneration,Trial)`. Starts an isolated
   **nonserving** image candidate and returns `trial_ready` only after private-IPC
   identity/data/query/provenance checks. It leaves old listeners alone. Browser,
   CSS/JavaScript and HTTP API checks occur only after approved original-port binding.
-* Take over: `promote_checkpoint(RunId,ExpectedRunRevision,Status)`.
+* Promote candidate: `promote_checkpoint(RunId,ExpectedRunRevision,Status)`.
   Returns `promoting` and runs the drain/rebind transaction on an owned management
   thread, not the HTTP worker whose own listener must drain.
 * Poll: `checkpoint_status(RunId,Status)` or
@@ -94,11 +116,11 @@ user-authorized Settings actions:
   `stop_managed_instance/0` stops only the private IPC worker; normal
   application cleanup still owns application listeners, pools, and console.
 
-Create does not select the next-start state. Use the saved-state catalog's
+Create does not start a candidate or select the next-start state. Use the saved-state catalog's
 optimistic revision API for selection; use the run revision for promotion.
 Repeated Try for an existing active trial and repeated promotion of a promoting/
 promoted run are idempotent. Display phase/message and recovery information, not
-merely the initial HTTP request's success. Never auto-promote after Try.
+merely the initial HTTP request's success. Never auto-start or auto-promote.
 
 The loaded generation, full semantic/metadata snapshot digest, material startup/
 pool configuration, and listener profiles must still match the checkpoint.
@@ -335,13 +357,18 @@ while original HTTP remains available. Separate real-socket tests retain mounted
 mutation-fence coverage for the approved promotion interval. The
 standalone Chrome fixture additionally covers escaped names, paused controls,
 operation-specific status and default-off promotion consent.
-The final nonserving native run passed in **166.055 seconds**, including missing-sidecar
+The final manual-only, nonserving native run passed in **312.080 seconds**, including missing-sidecar
 repeat save and selected restart through `app.pl`. Earlier native shutdown
 failures remain historical observations, not a claimed diagnosis of every
 Windows termination path.
-The frozen-copy backend/API suite passed **37/37**, the private-IPC and real-qsave
-early-fence suite **5/5**, and the Chrome component suite **2/2**. The native
-runner also passed its 24-case copied-host/API/wiring preflight.
+Validation covers **19 saved-state tests**, **25 HTTP tests**, **7 wiring tests**,
+**5 production-pause tests**, **5 IPC/real-qsave fence tests**, and **2 Chrome tests**.
+The native runner passed its 31-case copied-host/API/wiring preflight.
+The manual-intent cases exercise legacy/automatic request rejection, stale
+revisions, duplicate/interrupted requests, previous-process keys and read-only
+catalog/status calls. Browser checks cover opening/reloading Settings, selection,
+refresh, a failed Start response, polling/reconnect without replay, explicit Stop,
+and separate promotion consent.
 
 The older `checkpoint_integration.py` entry now delegates to the actual native
 workflow. Its superseded temporary-HTTP surrogate host has been retired.

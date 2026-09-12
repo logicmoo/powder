@@ -20,9 +20,9 @@ test('real browser keeps create, select, trial, cancel and explicit takeover sep
   skip: !process.env.LOGOS_CHROME, timeout: 60000,
 }, async () => {
   const requests = [];
-  let catalog = { generation: 4, revision: 'initial', selected: 'none',
+  let catalog = { generation: 4, revision: 'initial', selected: 'none', mutationEpoch: 'fixture-epoch',
     instance: { role: 'active' }, items: [], operations: [], runs: [] };
-  let operation, sequence = 0, failSelect = false;
+  let operation, sequence = 0, failSelect = false, failStart = false;
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, 'http://localhost');
@@ -62,6 +62,11 @@ test('real browser keeps create, select, trial, cancel and explicit takeover sep
       else if (action === 'create' || action === 'try') {
         operation = { id: `operation-${++sequence}`, phase: 'running', action, message: 'Validation is running.' };
         catalog.operations = [operation];
+        if (action === 'try' && failStart) {
+          failStart = false; response.statusCode = 503;
+          response.end(JSON.stringify({ error: { message: 'Start response unavailable; inspect status.' } }));
+          return;
+        }
         reply = operation;
       } else if (action === 'select') {
         if (failSelect) {
@@ -110,6 +115,10 @@ test('real browser keeps create, select, trial, cancel and explicit takeover sep
     await send('Emulation.setDeviceMetricsOverride', { width: 1360, height: 950, deviceScaleFactor: 1, mobile: false });
     await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
     await wait(`document.body.textContent.includes('No saved states yet')`);
+    await click('Refresh');
+    await send('Page.reload');
+    await wait(`document.body.textContent.includes('No saved states yet')`);
+    assert.equal(requests.some(item => item.body), false);
     await evaluate(`document.querySelector('input[name="checkpoint-name"]').value='Private fixture'; document.querySelector('form').requestSubmit()`);
     await wait(`document.querySelector('.checkpoint-image') !== null`);
     assert.equal(requests.some(item => item.action === 'select' || item.action === 'try' || item.action === 'promote'), false);
@@ -118,18 +127,45 @@ test('real browser keeps create, select, trial, cancel and explicit takeover sep
     await click('Select for next launch');
     await wait(`document.body.textContent.includes('Selected for next launch')`);
     assert.equal(requests.some(item => item.action === 'try' || item.action === 'promote'), false);
-    await click('Try in a new console');
+    await send('Page.reload');
+    await wait(`document.body.textContent.includes('Selected for next launch')`);
+    assert.equal(requests.some(item => item.action === 'try' || item.action === 'promote'), false);
+    catalog.items[0].available = false;
+    await click('Refresh');
+    await wait(`document.body.textContent.includes('Unavailable. Recreate this state')`);
+    assert.equal(await evaluate(`document.querySelector('[data-checkpoint-action="start"]').disabled`), true);
+    catalog.items[0].available = true; catalog.generation = 5;
+    await click('Refresh');
+    await wait(`document.body.textContent.includes('The loaded generation differs')`);
+    assert.equal(await evaluate(`document.querySelector('[data-checkpoint-action="start"]').disabled`), true);
+    catalog.generation = 4;
+    await click('Refresh');
+    await wait(`!document.querySelector('[data-checkpoint-action="start"]').disabled`);
+    failStart = true;
+    await click('Start candidate');
+    await wait(`document.querySelector('[role="alert"]')?.textContent.includes('no action will retry automatically')`);
+    assert.equal(await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Start candidate').disabled`), true);
+    await new Promise(resolve => setTimeout(resolve, 1600));
+    assert.equal(requests.filter(item => item.action === 'try').length, 1);
+    await click('Refresh');
     await wait(`document.querySelector('.checkpoint-consent') !== null`);
     assert.equal(await evaluate(`document.querySelector('.checkpoint-consent input').checked`), false);
     assert.equal(await evaluate(`document.querySelector('.checkpoint-consent').textContent.includes('debug port 4053')`), true);
     assert.equal(await evaluate(`document.querySelector('.checkpoint-trial').textContent.includes('Debug port 4053 is deferred')`), true);
-    assert.equal(await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Take over original ports').disabled`), true);
+    assert.equal(await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Promote candidate').disabled`), true);
     assert.equal(requests.some(item => item.action === 'promote'), false);
-    await click('Close trial');
+    assert.equal(requests.filter(item => item.action === 'try').length, 1);
+    await click('Stop candidate');
     await wait(`document.body.textContent.includes('Owned trial closed')`);
     assert.equal(await evaluate(`document.querySelectorAll('.checkpoint-trial a').length`), 0);
-    await click('Try in a new console');
+    await click('Start candidate');
+    assert.equal(await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Start candidate').disabled`), true);
     await wait(`document.querySelector('.checkpoint-consent') !== null`);
+    assert.equal(requests.filter(item => item.action === 'try').length, 2);
+    await send('Page.reload');
+    await wait(`document.querySelector('.checkpoint-consent') !== null`);
+    assert.equal(requests.filter(item => item.action === 'try').length, 2);
+    assert.equal(requests.some(item => item.action === 'promote'), false);
     await evaluate(`document.querySelector('details').open=true`);
     for (const [name, width, height] of [['desktop', 1360, 1100], ['mobile', 390, 844]]) {
       await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 500 });
@@ -140,22 +176,32 @@ test('real browser keeps create, select, trial, cancel and explicit takeover sep
       }
     }
     await evaluate(`document.querySelector('.checkpoint-consent input').click()`);
-    await click('Take over original ports');
+    await click('Promote candidate');
     await wait(`document.body.textContent.includes('Replacement verified')`);
-    assert.deepEqual(requests.find(item => item.action === 'promote').body,
-      { run: 'trial-3', revision: 1, confirm: 'take-over-original-ports' });
+    const promotion = requests.find(item => item.action === 'promote').body;
+    assert.equal(promotion.run, 'trial-3');
+    assert.equal(promotion.revision, 1);
+    assert.equal(promotion.confirm, 'take-over-original-ports');
+    assert.equal(promotion.intent, 'promote-candidate');
+    for (const request of requests.filter(item => item.body)) {
+      assert.equal(request.body.checkpointRevision, catalog.revision);
+      assert.match(request.body.requestId, /^fixture-epoch:[a-f0-9-]{36}$/);
+      assert.equal(typeof request.body.intent, 'string');
+    }
+    const startKeys = requests.filter(item => item.action === 'try').map(item => item.body.requestId);
+    assert.equal(new Set(startKeys).size, 2);
     failSelect = true;
     await click('Use normal source startup next time');
     await wait(`document.querySelector('[role="alert"]')?.textContent.includes('Selection changed elsewhere')`);
     catalog = { ...catalog, instance: { role: 'candidate' } };
     await click('Refresh');
     await wait(`document.body.textContent.includes('Read-only until explicitly promoted')`);
-    assert.equal(await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Try in a new console').disabled`), true);
+    assert.equal(await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Start candidate').disabled`), true);
     catalog = { ...catalog, instance: null,
       automation: { executionPaused: true, reason: 'Checkpoint execution is paused in this fixture.' } };
     await click('Refresh');
     await wait(`document.body.textContent.includes('Normal configured source startup is unchanged')`);
-    for (const label of ['Create saved state', 'Select for next launch', 'Try in a new console']) {
+    for (const label of ['Create saved state', 'Select for next launch', 'Start candidate']) {
       assert.equal(await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(label)}).disabled`), true);
     }
     await evaluate('controller.abort()');

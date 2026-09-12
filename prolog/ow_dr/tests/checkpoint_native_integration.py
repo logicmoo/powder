@@ -180,6 +180,13 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         return self.request(port, path)
 
     def api(self, action, body=None, port=None):
+        if body is not None:
+            catalog = self.api("catalog", port=port)
+            intent = {"create": "save-state", "select": "select-next-start",
+                "try": "start-candidate", "promote": "promote-candidate",
+                "cancel": "stop-candidate" if body.get("kind") == "trial" else "cancel-operation"}[action]
+            body = dict(body, intent=intent, checkpointRevision=catalog["revision"],
+                        requestId=f"{catalog['mutationEpoch']}:{uuid.uuid4()}")
         return self.request(port or self.primary, self.base + "api/checkpoint/" + action, body)
 
     def private_status(self, run):

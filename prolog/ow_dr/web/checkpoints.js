@@ -37,15 +37,21 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
   const selection = node('p');
   const files = node('div');
   const operations = node('div', undefined, { 'aria-label': 'Checkpoint operations' });
-  const runs = node('div', undefined, { 'aria-label': 'Checkpoint trials' });
+  const runs = node('div', undefined, { 'aria-label': 'Checkpoint candidates' });
   section.append(node('h2', 'Saved application states'),
     node('p', 'A saved state contains the loaded KB, native annotations, configuration and executable backend code. The next launch resumes that data without re-reading KB sources. Keep these files private.'),
-    node('p', 'Create, select for next launch, and try are separate actions. A trial is nonserving: no HTTP, debug or agent services start. Private local IPC verifies the restored KB. Only explicit takeover can start listeners after the original ports are released.'),
+    node('p', 'Saving only saves. Selecting a state only changes the next normal launch. Start candidate is a separate, manual action: no HTTP, debug or agent services start. Private local IPC verifies the restored KB. A separate Promote candidate action is required before original-port takeover. Nothing starts automatically on refresh or reconnect.'),
     notice, form, selection, files, operations, runs);
-  let catalog, busy = false, timer, polling = false, stopped = false;
+  let catalog, busy = false, timer, polling = false, stopped = false, startUncertain = false;
   let operationRows = [], runRows = [];
   const request = (path, params = {}, options = {}) => api(`checkpoint/${path}`, params, { ...options, signal });
-  const post = (path, body) => request(path, {}, { method: 'POST', body });
+  const post = (path, body) => {
+    const intent = { create: 'save-state', select: 'select-next-start', try: 'start-candidate',
+      promote: 'promote-candidate', cancel: body.kind === 'trial' ? 'stop-candidate' : 'cancel-operation' }[path];
+    if (!catalog?.mutationEpoch || !intent) throw new Error('Refresh checkpoint status before taking an action.');
+    return request(path, {}, { method: 'POST', body: { ...body, intent,
+      checkpointRevision: catalog.revision, requestId: `${catalog.mutationEpoch}:${crypto.randomUUID()}` } });
+  };
   const alive = () => !stopped && !signal?.aborted;
   const say = (text, error = false) => {
     if (!alive()) return;
@@ -55,20 +61,30 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
   function controls() {
     const active = operationRows.some(pendingOperation);
     const paused = catalog?.automation?.executionPaused === true;
+    const candidate = catalog?.instance?.role === 'candidate';
+    const runningCandidate = runRows.some(row => ['starting', 'trial_ready', 'promoting', 'recovery_serving'].includes(row.phase));
     create.disabled = busy || !catalog || active || paused || catalog?.instance?.role === 'candidate';
     refresh.disabled = busy;
     cold.disabled = busy || !catalog || paused || catalog.selected === 'none' || catalog?.instance?.role === 'candidate';
+    for (const control of section.querySelectorAll('[data-checkpoint-action]')) {
+      const type = control.dataset.checkpointAction;
+      control.disabled = busy || control.dataset.unavailable === 'true'
+        || (type !== 'stop' && (paused || candidate))
+        || (type === 'start' && (active || runningCandidate || startUncertain))
+        || (type === 'select' && active)
+        || (type === 'promote' && control.dataset.approved !== 'true');
+    }
   }
   async function action(work) {
     if (busy || !alive()) return;
     busy = true;
     controls();
     try { await work(); }
-    catch (error) { if (alive()) say(error.message || 'Request failed. Refresh to inspect the current state.', true); }
+    catch (error) { if (alive()) say(`${error.message || 'Request failed.'} Refresh to inspect status; no action will retry automatically.`, true); }
     finally { busy = false; if (alive()) controls(); }
   }
-  function button(text, work) {
-    const item = node('button', text, { type: 'button', class: 'button' });
+  function button(text, work, type = 'stop') {
+    const item = node('button', text, { type: 'button', class: 'button', 'data-checkpoint-action': type });
     item.addEventListener('click', () => action(work), { signal });
     return item;
   }
@@ -117,16 +133,19 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
       const select = button('Select for next launch', async () => {
         await post('select', { id: item.id, revision: catalog.revision });
         await load(); onChanged();
-      });
-      select.disabled = !item.available || item.selectedNextStart || catalog.automation?.executionPaused || catalog.instance?.role === 'candidate';
-      const trial = button('Try in a new console', async () => {
+      }, 'select');
+      select.dataset.unavailable = String(!item.available || item.selectedNextStart);
+      const trial = button('Start candidate', async () => {
+        startUncertain = true; controls();
         const operation = await post('try', { id: item.id, generation: catalog.generation });
         operationRows.push(operation); renderOperations(); schedule();
-      });
-      trial.disabled = !item.available || !catalog.instance || catalog.automation?.executionPaused || catalog.instance.role === 'candidate' || operationRows.some(pendingOperation);
+      }, 'start');
+      trial.dataset.unavailable = String(!item.available || !catalog.instance || item.generation !== catalog.generation);
       actions.append(select, trial);
       row.append(actions);
       if (!item.available) row.append(node('p', item.issue || 'Unavailable. Recreate this state with the current backend.', { role: 'note' }));
+      else if (item.generation !== catalog.generation) row.append(node('p',
+        'The loaded generation differs. Save the current KB before starting a candidate; next-launch selection remains available.', { role: 'note' }));
       files.append(row);
     }
   }
@@ -135,7 +154,7 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
     for (const item of operationRows) {
       const row = node('p', `${item.action}: ${item.phase}. ${item.message} `,
         { 'data-operation-id': item.id });
-      if (item.phase === 'running') row.append(button('Cancel operation', async () => {
+      if (item.phase === 'running') row.append(button(item.action === 'try' ? 'Stop candidate' : 'Cancel operation', async () => {
         const updated = await post('cancel', { kind: 'operation', id: item.id });
         operationRows = operationRows.map(old => old.id === updated.id ? updated : old);
         renderOperations(); schedule();
@@ -148,7 +167,7 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
     runs.replaceChildren();
     for (const item of runRows) {
       const row = node('article', undefined, { class: 'checkpoint-trial' });
-      row.append(node('h3', `Trial: ${item.phase.replaceAll('_', ' ')}`), node('p', item.message));
+      row.append(node('h3', `Candidate: ${item.phase.replaceAll('_', ' ')}`), node('p', item.message));
       const debug = catalog?.items.find(image => image.id === item.checkpoint)?.checkpoint?.runtime?.debug;
       const debugPort = debug?.enabled && Number.isInteger(debug.port) && debug.port > 0 && debug.port <= 65535
         ? debug.port : null;
@@ -165,29 +184,30 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
         const consent = node('input', undefined, { type: 'checkbox' });
         const label = node('label', undefined, { class: 'checkpoint-consent' });
         label.append(consent, document.createTextNode(` I authorize takeover of original port(s) ${ports}${debugPort ? ` and debug port ${debugPort}` : ''}, fresh debug credentials if enabled, and retirement of this old instance after verification.`));
-        const promote = button('Take over original ports', async () => {
+        const promote = button('Promote candidate', async () => {
           if (!consent.checked) return;
           const updated = await post('promote', { run: item.id, revision: item.revision, confirm: 'take-over-original-ports' });
           runRows = runRows.map(old => old.id === updated.id ? updated : old);
           renderRuns(); schedule();
-        });
+        }, 'promote');
         promote.disabled = true;
-        consent.addEventListener('change', () => { promote.disabled = !consent.checked; }, { signal });
+        consent.addEventListener('change', () => { promote.dataset.approved = String(consent.checked); controls(); }, { signal });
         row.append(label, promote);
       }
       if (['starting', 'trial_ready', 'failed'].includes(item.phase)) {
-        row.append(button('Close trial', async () => {
+        row.append(button('Stop candidate', async () => {
           const updated = await post('cancel', { kind: 'trial', id: item.id });
           runRows = runRows.map(old => old.id === updated.id ? updated : old); renderRuns();
         }));
       }
       runs.append(row);
     }
+    controls();
   }
   async function load() {
     const next = await request('catalog');
     if (!alive()) return;
-    catalog = next; operationRows = next.operations; runRows = next.runs;
+    catalog = next; operationRows = next.operations; runRows = next.runs; startUncertain = false;
     renderCatalog(); renderOperations(); renderRuns();
     say(next.instance?.role === 'candidate'
       ? `Trial instance · generation ${next.generation}. Read-only until explicitly promoted from the original instance.`
