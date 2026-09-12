@@ -19,6 +19,7 @@ data/templates, not ready agent execution.
 | Operational task pools, source editor and debug console | Implemented application facilities, not an agent permission grant. Debug is **never a KEE tool**. |
 | Checkpoints | Isolated backend validated; full host/UI publication pending. Do not claim a complete published checkpoint workflow. |
 | emullm Chat, GenerateComment, prompt snapshot loader, symbolic agent runner | **PLANNED; not implemented by these documents.** |
+| Operator/Developer chip, resident Python Copilot bridge and independent recovery view | **PLANNED; implementation assigned separately.** Not a KEE capability or an installed recovery service. |
 | Central typed KEE registry, automatic general KB CRUD with durable undo, teaching-case todos | **PLANNED.** Existing operational task jobs are not durable teaching cases. |
 | Declarative workflow applications and held-out symbolic learning pipeline | **PLANNED.** |
 
@@ -34,7 +35,7 @@ are durable, worker contexts can be reused, and external fallback is possible.
 
 The user selected the verified exact model **`gpt-5.6-sol`** at
 `http://127.0.0.1:8801/v1`. The future host must initially send that explicit
-model for this application agent. `emullm/default` is only a previously verified
+model for the LLM teacher application agent. `emullm/default` is only a previously verified
 catalog example, **not the selected model**. If `gpt-5.6-sol` is unavailable,
 stop and report it; do not substitute `emullm/default`, Gemma or another GPT model.
 
@@ -59,7 +60,7 @@ symbolic language ability. No source filename or assertion IDs were provided
 with that measurement; none are invented here. Registry and agent applications
 remain planned.
 
-## Two distinct agents — planned
+## Three distinct text roles — planned
 
 ### LLM teacher, explorer and comment writer
 
@@ -86,7 +87,56 @@ The host enforces this ceiling across nested tool/workflow calls, not merely
 through an agent's declaration. Missing language/procedural knowledge produces
 an honest, inspectable capability gap and a teaching-case proposal.
 
-Each agent has its own text chat, conversation/agent identity and trace.
+### Operator/Developer: human-controlled, outside KEE
+
+The third role is a privileged human code/service interface through a resident
+**Python bridge using the native Copilot CLI or official SDK**, outside the
+Prolog process lifetime. It is not another semantic agent, a Cyc action, an
+emullm tool or an entry in the KEE registry. The teacher and symbolic agent
+cannot invoke, delegate to, impersonate or escalate into Operator/Developer.
+Symbolic runs remain LLM-free even through indirect operator requests.
+
+Use only documented native CLI/official SDK interfaces and supported resume
+mechanisms for the installed version. Do not reverse-engineer private Copilot
+application internals, scrape private credentials or invent session-resume APIs.
+The teacher's selected model does not configure the operator's native session.
+No global installation or automatic code/model task is authorized by this design.
+
+The planned bridge exposes an authenticated localhost WebSocket and a minimal,
+independently served authenticated recovery view. Loopback alone is not
+authentication: validate the browser/session and allowed origin; keep credential
+references private and secrets out of URLs, logs, chat, KB records and replay.
+Privileged operations remain subject to the native CLI's permission system and
+real human decisions. Permission requests fail closed when the human is
+disconnected or cannot respond; do not silently approve them or borrow a
+teacher's ordinary KB-mutation grants.
+
+**A WebSocket alone is not restart persistence.** Prolog serves the main
+application assets, so reconnecting to a surviving socket is insufficient if
+the main UI cannot load. The Python service and minimal recovery assets must
+remain usable independently of Prolog, with explicit process/session state.
+A Prolog restart must not imply the operator process/session restarted, and a
+bridge/CLI restart must not be disguised as a successful resume.
+
+Persist private, bounded, sequenced **output events** and acknowledged cursors
+for reconnect/recovery. Replay those outputs without executing them as HTML,
+commands, stdin, tool calls or new model requests. Never replay submitted
+commands merely because a connection was lost. Use documented native session
+resume only when its outcome is known; otherwise show **unknown in-flight
+outcome**, retain the correlation/audit record and require inspection before a
+human decides whether to retry. Do not promise arbitrary process continuation,
+exactly-once command execution or persistence solely from an open WebSocket.
+
+### Three chat chips, three independent contexts
+
+The planned **Teacher / Symbolic / Operator** chips retain separate buffers,
+history, drafts, settings, status, unread indicators and TODO scope, as well as
+role/conversation identity and trace. Switching chips must not overwrite a
+draft, merge histories or submit work. No automatic cross-role forwarding or
+shared authority: teaching cases, symbolic gaps and operator code/recovery tasks
+remain distinguishable. An operator output or task is not a KB assertion by
+default. Merely selecting a chip does not start a code or model task.
+
 No audio, microphone, STT, TTS, voice, captions or turn-silence UI is in scope.
 A speech-act ontology for **textual** questions, requests, assertions and
 dialogue transitions is compatible with this restriction.
@@ -239,4 +289,9 @@ rule-use observations, Cyc configured utility and proposed agent policy.
   handling are implemented and tested, not inferred from `/v1/models`.
 - Communication and workflow held-out tests run with the LLM disabled and prove
   zero LLM network calls, inspectable proofs, persistent cases and regression checks.
-- Both agents expose separate text identities/traces and honestly report gaps.
+- Teacher, Symbolic and Operator expose separate text identities, buffers,
+  history/drafts/settings/status/unread/TODO scope and traces.
+- Operator recovery is tested with Prolog/main assets unavailable: independent
+  authenticated recovery view, output-only sequence replay, documented resume
+  and explicit unknown in-flight outcomes. Disconnected native permission
+  requests fail closed; neither semantic agent can reach this privileged channel.

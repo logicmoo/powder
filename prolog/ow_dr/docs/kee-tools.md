@@ -23,7 +23,7 @@ not a new KEE capability.
 | Base | `http://127.0.0.1:8801/v1`; recorded evidence, not hardcoded application configuration |
 | GET `/models`, GET `/models/{model-id}` | Model listing/detail; read-only probe verified 61 models, including the previous catalog example `emullm/default` |
 | POST `/chat/completions` | OpenAI-shaped conversation request; always supply an explicit authorized `model` |
-| Model selection | Initial user-selected application-agent model: **`gpt-5.6-sol`**, explicit. **Never omit `model`:** omission routes through `worker-copilot-n/percent100` |
+| Model selection | Initial user-selected LLM teacher model: **`gpt-5.6-sol`**, explicit. **Never omit `model`:** omission routes through `worker-copilot-n/percent100` |
 | Incoming authentication | Keyless; incoming `Authorization` is ignored. This is not application/agent authorization |
 | Caller tools | Schemas are rendered into text; worker JSON is used to synthesize `tool_calls`. The provider never executes caller tools |
 | Tool selection | `tool_choice` is ignored; strict-schema/selection hints are not enforcement |
@@ -213,6 +213,39 @@ The source editor is likewise not the planned managed KB-edit interface.
 Origin/loopback checks and endpoint-local validation must not be mistaken for
 the future authenticated per-agent permissions and MT ceilings.
 Existing `api/tasks*` operational jobs are not the durable teaching-case todos.
+
+## Operator/Developer boundary — planned, never KEE
+
+The proposed third chat role is a human-controlled privileged code/service
+interface, not a semantic capability. Its resident Python bridge uses the
+native Copilot CLI or official SDK **outside Prolog's lifetime**. No operator
+WebSocket, recovery route, installation or SDK adapter is claimed implemented
+by this inventory. Do not invent endpoints or reverse-engineer private
+application internals; use documented supported session/resume interfaces only.
+
+The authenticated localhost WebSocket and recovery view must bind a real human
+session, validate origin and keep credentials private. Native CLI permissions
+continue to require their normal human decisions and fail closed when that
+human is disconnected. KEE grants cannot authorize these privileged actions.
+Teacher and symbolic tools/workflows cannot call the operator, delegate to it,
+submit its TODOs as commands or acquire its privileges through indirection.
+The symbolic role remains LLM-free; the teacher's emullm model setting is not
+an operator/native CLI model change.
+
+Main assets are served by Prolog. Therefore a minimal authenticated recovery
+view must be served independently with the Python bridge; an open WebSocket
+alone does not provide restart persistence or a reachable recovery UI.
+Persist bounded private sequenced **output** with replay cursors, never a queue
+of commands to re-execute on reconnect. Render replay as data, not executable
+HTML, stdin, tool calls or new model tasks. Resume only through documented
+native support. Unknown in-flight command/tool outcomes must remain explicitly
+unknown until inspected; do not blindly retry or claim exactly-once execution.
+Secrets must not enter URLs, transcript/replay logs or KB records.
+
+Teacher, Symbolic and Operator chat chips need separate buffers, history,
+drafts, settings, status, unread indicators and TODO scope. Changing chips must
+not merge authority or submit work. This planned role adds no KEE registry entry,
+global installation authorization or automatic code/model task.
 
 ## One future typed semantic registry — PLANNED
 
