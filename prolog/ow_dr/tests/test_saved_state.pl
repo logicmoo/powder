@@ -239,6 +239,22 @@ test(restored_configuration_falls_back_only_when_sidecars_are_absent,
        assertion(Error=error(domain_error(source_pack_schema,invalid),_))),
       erase(Ref)).
 
+test(retention_reuses_and_preserves_the_callers_admission_lease,
+     [setup(fixture(Directory,_)),cleanup(cleanup(Directory))]) :-
+    setup_call_cleanup(kb_jobs:begin_checkpoint_drain(Lease),
+      (kb_saved_state:retain_restored_metadata,
+       assertion(kb_activity:owns_admission_lease)),
+      kb_jobs:end_checkpoint_drain(Lease)),
+    assertion(\+kb_activity:owns_admission_lease),
+    kb_activity:activity_status(After),assertion(After.exclusive==false).
+
+test(retention_rejects_anonymous_exclusive_ownership,
+     [setup(fixture(Directory,_)),cleanup(cleanup(Directory))]) :-
+    kb_activity:with_exclusive_reload(
+      catch(kb_saved_state:retain_restored_metadata,Error,true)),
+    assertion(Error=error(checkpoint_busy(application),_)),
+    kb_activity:activity_status(After),assertion(After.exclusive==false).
+
 test(retention_verifies_raw_identity_before_adapting_old_payload,
      [setup(fixture(D,F)),cleanup(cleanup(D))]) :-
     kb_store:source_module(F,Module,_),kb_store:source_info(F,Info),

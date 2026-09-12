@@ -438,9 +438,7 @@ adapt_snapshot_data(InputMetadata,OriginalSources,Metadata,Sources) :-
     kb_metadata_policy:retention_policy(Policy),
     Metadata=InputMetadata.put(_{retentionPolicy:Policy,retainedSnapshotDigest:RetainedDigest}).
 retain_restored_metadata :-
-    setup_call_cleanup(kb_jobs:begin_checkpoint_drain(Lease),
-      kb_jobs:with_saved_state_snapshot(kb_store:apply_metadata_retention_locked(_)),
-      kb_jobs:end_checkpoint_drain(Lease)).
+    with_snapshot_lock(kb_store:apply_metadata_retention_locked(_)).
 
 clean_builder_resources :-
     (nb_current(powder_rule_query,_)->
