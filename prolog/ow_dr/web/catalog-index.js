@@ -7,7 +7,8 @@ export const CATALOG_GROUPS = Object.freeze([
   ['all', 'All categories'], ['predicates', 'Predicates'], ['functions', 'Functions'],
   ['collections', 'Collections'], ['microtheories', 'Microtheories'],
   ['do_invocations', 'doInvocations'],
-  ['external_symbols', 'External symbols'], ['typed_other', 'Other recorded types'],
+  ['external_symbols', 'External symbols'], ['lexical_words', 'Lexical words (name convention)'],
+  ['typed_other', 'Other recorded types'],
   ['unclassified', 'Unclassified'],
 ]);
 export function catalogParameters(route, term = false) {
@@ -58,6 +59,13 @@ function coveragePanel(host, data) {
 }
 async function available(host, signal, page, requireDirectory = false) {
   const status = await host.api('catalog/status', {}, { signal });
+  if (!requireDirectory && status.projection?.available && !status.lookupDirectory?.search?.available) {
+    page.append(coveragePanel(host, status),
+      host.element('p', { className: 'empty-state', role: 'status' },
+        'Compact term search is pending. Exact-term Definitional Info remains available; this page does not read the full query model.'),
+      host.link('Indexer progress', 'tasks', {}, 'button secondary'));
+    return false;
+  }
   if (status.projection?.available && (!requireDirectory || status.lookupDirectory?.available)) return true;
   if (requireDirectory && status.projection?.available) {
     const lookup = status.lookupDirectory;
@@ -107,7 +115,7 @@ export async function catalogSearchPage(host, route, signal) {
         el('td', {}, link(`Definitional Info (${item.definitions})`, 'definitions', { term: item.term, scope: params.scope }),
           el('div', {}, link('All occurrences', 'definitions', { term: item.term, facet: 'semantic', scope: params.scope })))))))));
   page.append(pagination(data, route),
-    el('p', { className: 'muted' }, 'Categories retain multiple memberships and unknowns. Recorded types use catalog-wide evidence, even when occurrences are filtered to loaded files. Detailed type-support links are pending. Type declarations and static definitions do not establish an executable implementation.'));
+    el('p', { className: 'muted' }, 'Categories retain multiple memberships and unknowns. Lexical words identifies the exact “-TheWord” naming convention, not an inferred ontology type. Recorded types use catalog-wide evidence, even when occurrences are filtered to loaded files. Detailed type-support links are pending. Type declarations and static definitions do not establish an executable implementation.'));
   return page;
 }
 

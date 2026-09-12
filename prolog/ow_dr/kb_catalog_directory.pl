@@ -1,7 +1,8 @@
 :- module(kb_catalog_directory,
     [build_catalog_directory/1,build_from_model/3,directory_status/1,
-     lookup_term/3,lookup_source/3,request_cancel/2]).
+     lookup_term/3,lookup_terms/3,lookup_source/3,request_cancel/2]).
 :- use_module(kb_catalog_index,[]).
+:- use_module(kb_catalog_search,[]).
 :- use_module(kb_paths).
 :- use_module(kb_cache,[]).
 :- use_module(library(assoc)).
@@ -97,7 +98,10 @@ build_locked(Query,Manifest,Model,Report) :-
          directory:Directory,revision:Model.revision,taxonomy:Model.taxonomy,
          coverage:Model.coverage,verifiedAt:Model.verifiedAt,providerCoverage:Provider,
          termCount:Count,fileCount:FileCount,buckets:BucketCount},
-        (get_dict(definitionSchema,Model,Definition)->Data=Base.put(definitionSchema,Definition);Data=Base),
+        (get_dict(definitionSchema,Model,Definition)->Typed=Base.put(definitionSchema,Definition);Typed=Base),
+        progress(writing_search,Count,Count),
+        kb_catalog_search:write_model_search(Directory,Model,Typed,Search),
+        Data=Typed.put(search,Search),
        progress(publishing,Count,Count),
        write_record(Manifest,catalog_directory(Data)),
        nb_setarg(1,Published,true),
@@ -176,7 +180,9 @@ directory_status(Reply) :-
        (exists_file(Query),kb_catalog_index:file_stamp(Query,Stamp),Stamp==Data.inputStamp,
           current_catalog_revision(Data.revision)->
           Available=true,State=ready;Available=false,State=stale),
+       kb_catalog_search:search_status(Data,Search),
        Reply=json{available:Available,state:State,terms:Data.termCount,files:Data.fileCount,job:Job,
+         search:Search,
          buckets:Data.buckets,revision:Data.revision,taxonomy:Data.taxonomy,
          coverage:Data.coverage,providerCoverage:Data.providerCoverage}
     ;Reply=json{available:false,state:pending,job:Job}).
@@ -192,6 +198,20 @@ lookup_term(Key,Model,Entry) :-
     Model=query_lookup{revision:Header.revision,taxonomy:Header.taxonomy,
       coverage:Header.coverage,verifiedAt:Header.verifiedAt,providerCoverage:Header.providerCoverage,
       directory:Header.directory,terms:Terms,postings:Postings}.
+lookup_terms(Header,Keys,Model) :-
+    findall(Bucket-Key,(member(Key,Keys),bucket_id(Key,Bucket)),Pairs),
+    keysort(Pairs,Sorted),group_pairs_by_key(Sorted,Groups),
+    maplist(selected_bucket(Header),Groups,Chunks),append(Chunks,Selected),
+    findall(Key-Entry,member(Key-row(Entry,_),Selected),TermPairs),
+    findall(Key-Posts,member(Key-row(_,Posts),Selected),PostPairs),
+    list_to_assoc(TermPairs,Terms),list_to_assoc(PostPairs,Postings),
+    Model=query_lookup{revision:Header.revision,taxonomy:Header.taxonomy,
+      coverage:Header.coverage,verifiedAt:Header.verifiedAt,providerCoverage:Header.providerCoverage,
+      directory:Header.directory,terms:Terms,postings:Postings}.
+selected_bucket(Header,Bucket-Keys,Selected) :-
+    bucket_path(Header.directory,Bucket,Path),
+    read_record(Path,catalog_bucket(Header.revision,Header.taxonomy,Rows)),
+    findall(Key-Row,(member(Key,Keys),get_assoc(Key,Rows,Row)),Selected).
 lookup_source(Model,Source,File) :-
     source_path(Model.directory,Source,Path),
     read_record(Path,catalog_source_descriptor(Model.revision,Model.taxonomy,File)),

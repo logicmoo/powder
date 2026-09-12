@@ -56,6 +56,33 @@ failure remains explicit rather than advertising the previous projection as fres
 
 ## Persistent data
 
+Broad term search uses a compact ranked binary view in the **same query
+directory**. It contains only term keys, category bits and source ordinals, not
+sentences, formula copies, source payloads or another provider model. Requests
+read the selected result buckets for counts/types and preserve the existing
+per-source postings. Blank search uses stored rank order; substring/category/file
+filters preserve deterministic pagination. No search request calls `model/1`.
+
+New query/directory publication creates this view automatically. An existing
+directory can be upgraded without reading `query.data`, rebuilding any source or
+rewriting existing buckets/postings:
+
+```powershell
+swipl --stack-limit=8g prolog\ow_dr\index_catalog.pl -- --search-directory
+```
+
+The existing native directory lock serializes publication. A unique binary file
+is validated before the small manifest references it; failed upgrades leave the
+old directory intact. SHA-256, term/file counts, source ordinals, complete EOF,
+query revision, taxonomy and SWI version/architecture are validated. A missing
+view is explicitly pending, never a fallback to the monolithic model. One compact
+view and one filtered key list are cached per HTTP thread and replaced on revision
+changes. Exact lookup remains independently usable during this upgrade.
+
+The `lexical_words` category recognizes the exact `x_*-TheWord` naming convention.
+It retains other categories and unknown/recorded types; it is not ontology
+evidence or an inference that the term is an Individual.
+
 `tmp\KBs\<relative-source>.catalog.data` contains one validated source snapshot.
 `tmp\catalog\terms.data` contains the aggregate inverted term-to-files index.
 Its small `terms.data.summary` companion binds coverage to that aggregate's

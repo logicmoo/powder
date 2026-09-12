@@ -21,6 +21,9 @@ catalog_error(error(catalog_stale(Reason),_)) :- !,
 catalog_error(error(catalog_directory_pending,_)) :- !,
     reply_json_dict(json{error:json{code:catalog_directory_pending,
       message:"The bounded term directory has not been published yet."}},[status(503)]).
+catalog_error(error(catalog_search_pending,_)) :- !,
+    reply_json_dict(json{error:json{code:catalog_search_pending,
+      message:"The compact search view is pending; exact-term browsing remains available."}},[status(503)]).
 catalog_error(error(catalog_directory_stale,_)) :- !,
     reply_json_dict(json{error:json{code:catalog_directory_stale,
       message:"The term directory needs refreshing for the current query revision."}},[status(409)]).

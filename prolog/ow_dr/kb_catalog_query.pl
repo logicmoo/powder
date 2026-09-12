@@ -6,6 +6,7 @@
 :- use_module(kb_catalog_schema).
 :- use_module(kb_catalog_providers,[source_provider_extensions/4]).
 :- use_module(kb_catalog_directory,[]).
+:- use_module(kb_catalog_search,[]).
 :- use_module(kb_catalog,[authorize_sources/2,directory_manifest/3]).
 :- use_module(kb_cache,[]).
 :- use_module(kb_paths).
@@ -355,45 +356,28 @@ options(Input,Options) :-
     maplist(text_option(Options),[q,term,scope,group,facet,source,mt]),
     (memberchk(Options.scope,[all,loaded,unloaded])->true;domain_error(catalog_scope,Options.scope)),
     (memberchk(Options.group,[all,predicates,functions,collections,microtheories,
-       external_symbols,do_invocations,typed_other,individuals,unclassified])->true;domain_error(catalog_group,Options.group)),
+       external_symbols,do_invocations,typed_other,individuals,unclassified,lexical_words])->true;domain_error(catalog_group,Options.group)),
     (memberchk(Options.facet,[semantic,definition,context])->true;domain_error(catalog_facet,Options.facet)).
 text_option(Dict,Key) :- get_dict(Key,Dict,Value),must_be(atom,Value).
 
 catalog_query_search(Input,Reply) :-
-    options(Input,Options),model(Model),active(Generation,Active),
+    options(Input,Options),
+    catch(kb_catalog_directory:manifest(Header),error(catalog_directory_stale,_),
+      throw(error(catalog_stale(query_revision),_))),
+    active(Generation,Active),
+    kb_catalog_search:search_page(Header,Options,Active,Selected,Total,_),
+    kb_catalog_directory:lookup_terms(Header,Selected,Model),
     provider_coverage(Model,ProviderCoverage),
-    downcase_atom(Options.q,Query),
-    search_keys(Model,Options,Active,Generation,Query,Keys),
-    kb_catalog_index:page(Keys,Options.offset,Options.limit,Selected,Total),
     maplist(search_key_json(Model,Active,Options.scope),Selected,Items),
     Reply=json{items:Items,total:Total,offset:Options.offset,limit:Options.limit,
       generation:Generation,coverage:Model.coverage,verifiedAt:Model.verifiedAt,
       revision:Model.revision,scope:Options.scope,providerCoverage:ProviderCoverage}.
 provider_coverage(Model,Coverage) :-
     (get_dict(providerCoverage,Model,Coverage)->true;Coverage=unknown).
-search_keys(Model,Options,_,_,'',Keys) :-
-    Options.scope==all,Options.group==all,!,Keys=Model.ranked.
-search_keys(Model,Options,Active,Generation,Query,Keys) :-
-    CacheKey=search(Model.revision,Model.taxonomy,Generation,Options.scope,Options.group,Query),
-    (nb_current(powder_catalog_search,cache(CacheKey,Keys))->true;
-     findall(Key,search_entry(Model,Options,Active,Query,Key),Keys),
-     nb_linkval(powder_catalog_search,cache(CacheKey,Keys))).
-search_entry(Model,Options,Active,Query,Key) :-
-    member(Key,Model.ranked),
-    (Query==''->true;downcase_atom(Key,Lower),once(sub_atom(Lower,_,_,_,Query))),
-    (Options.group==all->true;
-     get_assoc(Key,Model.terms,entry(_,StoredGroups,_,_,_,_)),
-     maplist(public_group,StoredGroups,Groups),public_group(Options.group,Group),memberchk(Group,Groups)),
-    (Options.scope==all->true;key_in_scope(Model,Options.scope,Active,Key)).
-key_in_scope(Model,Scope,Active,Key) :-
-    get_assoc(Key,Model.postings,Posts),
-    once((member(p(Source,_,_,_,_,_),Posts),scope_file(Scope,Source,Active))).
 search_key_json(Model,Active,Scope,Key,Row) :-
     get_assoc(Key,Model.terms,Entry),search_json(Model,Active,Scope,Key,Entry,Row).
-public_group(individuals,typed_other) :- !.
-public_group(Group,Group).
 search_json(Model,Active,Scope,Key,entry(_,StoredGroups,Types,Roles,_,_),Row) :-
-    maplist(public_group,StoredGroups,Groups),
+    kb_catalog_search:public_groups(Key,StoredGroups,Groups),
     get_assoc(Key,Model.postings,Posts),
     findall(p(S,O,N,C,D,M),(member(p(S,O,N,C,D,M),Posts),scope_file(Scope,S,Active)),Selected),
     findall(N,member(p(_,_,N,_,_,_),Selected),Ns),sum_list(Ns,Sentences),
