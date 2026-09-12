@@ -121,6 +121,31 @@ test(compound_mt_and_case_preserved) :-
 test(utf8_result_budget_counts_bytes) :-
     kb_kee_schema:json_size(json{text:"α"},Wide),
     kb_kee_schema:json_size(json{text:"a"},Narrow),assertion(Wide>Narrow).
+test(utf8_supplementary_and_escaped_bytes_are_exact) :-
+    forall(member(Codes-Expected,[[128512]-16,[65,945,28450,128512]-22,[65,34,92,10,9,128512]-25]),
+      (string_codes(Value,Codes),kb_kee_schema:json_size(json{value:Value},Size),
+       assertion(Size==Expected))).
+test(utf8_json_text_preserves_keys_atoms_and_strings) :-
+    string_codes(Value,[128512,10,34,92]),atom_codes(Key,[120,95,128512]),
+    dict_create(Input,json,[Key-Value,symbol-Key]),
+    kb_kee_schema:json_text(Input,Text),atom_json_dict(Text,Roundtrip,[]),
+    get_dict(Key,Roundtrip,Actual),assertion(Actual==Value),
+    atom_string(Key,Symbol),assertion(Roundtrip.symbol==Symbol),
+    kb_kee_schema:json_text(json{value:"a"},ASCII),assertion(ASCII=="{\"value\":\"a\"}").
+test(utf8_stored_validation_preserves_supplementary_data) :-
+    string_codes(Value,[128512]),atom_string(Symbol,Value),
+    Spec=obj([req(value,str(1,8)),req(symbol,enum([Symbol])),req(enabled,boolean)]),
+    kb_kee_schema:validate_stored(Spec,json{value:Value,symbol:Symbol,enabled:false}).
+test(utf8_json_writer_cleans_up_after_invalid_value) :-
+    current_output(Output),stream_property(Output,encoding(Before)),
+    catch(kb_kee_schema:json_text(json{value:opaque(term)},_),error(_,_),Rejected=true),
+    assertion(Rejected==true),string_codes(Value,[128512]),
+    kb_kee_schema:json_size(json{value:Value},16),
+    stream_property(Output,encoding(After)),assertion(After==Before).
+test(json_unpaired_surrogate_escapes_rejected) :-
+    forall(member(Text,["{\"value\":\"\\ud800\"}","{\"value\":\"\\udfff\"}"]),
+      (catch(kb_kee_schema:decode_object(Text,_),error(kee(invalid_json,_),_),Rejected=true),
+       assertion(Rejected==true))).
 
 test(real_catalog_definitions_occurrences_and_negative_mt,[setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('terms.krf',"(in-microtheory PublicMt)\n(arity p 1)\n(p a)\n(in-microtheory PrivateMt)\n(p secret)\n",Source),

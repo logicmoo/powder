@@ -155,6 +155,17 @@ Time and UTF-8 result-byte budgets apply. Expired/revoked contexts and
 missing grants fail closed. Tool output remains untrusted data; returning local
 KB data does not authorize exporting it to any model or network.
 
+JSON output is serialized through explicitly UTF-8 in-memory streams, including
+supplementary Unicode in keys, strings and inert lifecycle payloads. Result
+budgets count the actual serialized bytes (including escapes), not characters or
+UTF-16 code units. The shared trusted helper `kb_kee_schema:json_text(Value,Text)`
+returns compact JSON as a Prolog string; it does not grant export permission.
+Stored-schema validation and lifecycle canonicalization reuse the same writer.
+On Windows, its memory output is decoded to scalar text before sizing: raw SWI
+JSON-writer bytes may encode a supplementary character as two surrogate halves.
+Unpaired surrogates are rejected. The helper creates no files and does not change
+console or process-wide encodings.
+
 ## Validation
 
 Run only the dedicated unit so the reused catalog fixture definitions do not

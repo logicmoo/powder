@@ -30,7 +30,7 @@ canonical_json(Input,Canonical) :-
     (string(Input),string_length(Input,N),N=<65536->true;invalid_json),
     catch(atom_json_dict(Input,Data,[]),_,invalid_json),
     (is_dict(Data),json_depth(Data,0)->true;invalid_json),
-    catch(atom_json_dict(Atom,Data,[width(0)]),_,invalid_json),atom_string(Atom,Canonical).
+    catch(kb_kee_schema:json_text(Data,Canonical),_,invalid_json).
 invalid_json :- kb_kee_schema:reject(invalid_agent_json,json{reason:bounded_json_object_required}).
 json_depth(Value,N) :-
     N=<32,

@@ -40,6 +40,47 @@ test(cas_state_event_atomic_and_same_call_replayed,[setup(fixture(F)),cleanup(cl
     assertion(Again.result.changeset==First.result.changeset),
     invoke(T,"kee_agent_run_events","events",json{id:Id},Events),
     assertion(Events.result.total==2),Events.result.items=[_,Event],assertion(Event.event.id=="event-1").
+test(utf8_public_todo_write_read_and_replay,[setup(fixture(F)),cleanup(cleanup(F))]) :-
+    F=state(_,T,_),string_codes(Value,[128512,945,28450]),string_concat("unicode-",Value,CallId),
+    revision(Rev),plunit_kee_ledger:data(Base),Data=Base.put(json{title:Value,description:Value}),
+    Request=json{tool:"kee_todo_create",schemaVersion:1,callId:CallId,
+      arguments:json{revision:Rev,mt:"x_PublicMt",data:Data}},
+    kb_kee_schema:json_text(Request,JSON),kb_kee:invoke_json(T,JSON,Created),
+    Id=Created.result.result.id,invoke(T,"kee_todo_get","unicode-get",json{id:Id},Detail),
+    assertion(Detail.result.resource.data.title==Value),
+    assertion(Detail.result.resource.data.description==Value),assertion(Created.callId==CallId),
+    kb_kee_ledger:snapshot(Before),kb_kee:invoke_json(T,JSON,Replay),
+    assertion(Replay.result.replayed==true),assertion(Replay.result.changeset==Created.result.changeset),
+    kb_kee_ledger:snapshot(After),assertion(After==Before).
+test(utf8_public_read_budget_counts_bytes_not_characters,[setup(fixture(F)),cleanup(cleanup(F))]) :-
+    F=state(_,T,Host),length(Codes,400),maplist(=(128512),Codes),string_codes(Value,Codes),
+    revision(Rev),plunit_kee_ledger:data(Base),Data=Base.put(description,Value),
+    invoke(T,"kee_todo_create","unicode-task",json{revision:Rev,mt:"x_PublicMt",data:Data},Created),
+    Request=json{tool:"kee_todo_get",schemaVersion:1,callId:"unicode-read",
+      arguments:json{id:Created.result.result.id}},
+    kb_kee:invoke(T,Request,Full),kb_kee_schema:json_text(Full,Text),string_length(Text,Characters),
+    kb_kee_schema:json_size(Full,Bytes),Limit is max(1024,Characters),assertion(Bytes>Limit),
+    Budgets=Host.budgets.put(resultBytes,Limit),kb_kee_ledger:snapshot(Before),
+    setup_call_cleanup(kb_kee:open_context(Host.put(budgets,Budgets),Limited),
+      (catch(kb_kee:invoke(Limited,Request,_),error(kee(result_budget,_),_),Rejected=true),
+       assertion(Rejected==true)),kb_kee:close_context(Limited)),
+    kb_kee_ledger:snapshot(After),assertion(After==Before).
+test(utf8_public_lifecycle_source_state_event_and_replay,[setup(fixture(F)),cleanup(cleanup(F))]) :-
+    F=state(_,T,_),string_codes(Value,[128512]),atom_codes(Key,[120,95,128512]),
+    dict_create(State,json,[Key-Value,enabled-false]),
+    kb_kee_schema:json_text(json{label:Value},SourceJSON),kb_kee_schema:json_text(State,StateJSON),
+    revision(Rev),Input=json{revision:Rev,mt:"x_PublicMt",sourceJson:SourceJSON,stateJson:StateJSON},
+    invoke(T,"kee_agent_run_create","unicode-run",Input,Created),Id=Created.result.result.id,
+    invoke(T,"kee_agent_run_get","unicode-run-get",json{id:Id},Detail),
+    assertion(Detail.result.resource.data.sourceJson==SourceJSON),
+    assertion(Detail.result.resource.data.stateJson==StateJSON),
+    event_input(Id,Base),Event=Base.put(json{stateJson:StateJSON,eventJson:SourceJSON}),
+    invoke(T,"kee_agent_run_event","unicode-event",Event,Written),
+    invoke(T,"kee_agent_run_events","unicode-events",json{id:Id},Events),
+    Events.result.items=[_,Last],assertion(Last.event.json==SourceJSON),
+    kb_kee_ledger:snapshot(Before),invoke(T,"kee_agent_run_event","unicode-event",Event,Replay),
+    assertion(Replay.result.replayed==true),assertion(Replay.result.changeset==Written.result.changeset),
+    kb_kee_ledger:snapshot(After),assertion(After==Before).
 test(stale_event_and_resource_preconditions_preserve_state,[setup(fixture(F)),cleanup(cleanup(F))]) :-
     F=state(_,T,_),create(T,_,Created),Id=Created.result.result.id,event_input(Id,Input),
     invoke(T,"kee_agent_run_event","event-1",Input,_),event_input(Id,Next),
