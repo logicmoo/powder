@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pair operator recovery · powder</title><link rel="stylesheet" href="/assets/recovery.css"></head>
+<body>
+<!-- THESIS: A separate human operator boundary, not another teacher chat.
+OWN-WORLD: powder's light slate navigation, blue links, restrained five-pixel controls.
+STORY: Pair locally, inspect bridge state, then explicitly start or recover an operator session.
+FIRST VIEWPORT: Existing-style top navigation, one readable pairing form, privacy boundary below.
+FORM: Precisely scoped recovery utility; incumbent visual system, no new visual-world selection. -->
+<header><a class="brand" href="/">powder <span>Operator recovery</span></a></header>
+<main class="pairing">
+<h1>Pair this browser</h1>
+<p>This independent recovery view remains available when the Prolog application stops.
+Only the human operator can authorize Copilot actions here.</p>
+<form action="/login" method="post" autocomplete="off">
+<label for="phrase">Local bridge pairing phrase</label>
+<input id="phrase" name="phrase" type="password" minlength="16" maxlength="1024" required autocomplete="off"
+aria-describedby="pairing-help">
+<p id="pairing-help" class="muted">Use the phrase you entered in the bridge’s own console—not your GitHub password or token.
+It is sent only to this loopback bridge. The session cookie is HttpOnly and expires after 12 hours.</p>
+<button type="submit">Pair operator view</button>
+</form>
+<p class="boundary">Teacher and Symbolic agents cannot use this operator session.
+The bridge uses a dedicated <code>operator.localhost</code> host; do not replace it with the Prolog application’s hostname.</p>
+</main></body></html>

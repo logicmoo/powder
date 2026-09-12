@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Operator recovery · powder</title><link rel="stylesheet" href="/assets/recovery.css">
+<script src="/assets/recovery.js" defer></script></head>
+<body>
+<!-- THESIS: Show transport, native session and application availability separately.
+OWN-WORLD: Incumbent powder slate/white/blue palette, system typography and compact navigation.
+STORY: Inspect durable output and uncertain commands, decide each permission, send only explicit human input.
+FIRST VIEWPORT: Top navigation; connection summary; transcript/composer alongside permission and command inspector.
+FORM: Narrow independent recovery surface; not a pretend terminal or replacement main application. -->
+<a class="skip" href="#transcript">Skip to operator transcript</a>
+<header><a class="brand" href="/">powder <span>Operator recovery</span></a>
+<nav aria-label="Recovery navigation"><a href="#transcript" aria-current="page">Operator / Copilot</a>
+<a href="#inspector">Session inspector</a><button id="logout" type="button">Unpair browser</button></nav></header>
+<main>
+<section class="summary" aria-labelledby="title">
+<div><h1 id="title">Human operator</h1><p>Separate from Teacher / LLM and Symbolic / Cyc-only. No commands cross between agents.</p></div>
+<dl class="connections"><div><dt>Bridge</dt><dd id="bridge">Connecting</dd></div>
+<div><dt>Copilot</dt><dd id="copilot">Not connected</dd></div>
+<div><dt>Prolog</dt><dd id="prolog">Not registered</dd></div></dl>
+</section>
+<p id="notice" class="notice" role="status">Loading the independent operator session…</p>
+<div class="workspace">
+<section class="conversation" aria-labelledby="transcript-title">
+<div class="section-heading"><h2 id="transcript-title">Operator transcript</h2><button id="start" type="button" disabled>Start / resume session</button></div>
+<p id="empty" class="muted empty">No recorded operator messages. Nothing is sent automatically.</p>
+<ol id="transcript" tabindex="0" aria-label="Sequenced operator events"></ol>
+<form id="composer">
+<label for="prompt">Message to Operator / Copilot</label>
+<textarea id="prompt" rows="5" maxlength="65536" placeholder="Describe the action you want the human-operated Copilot session to consider." disabled></textarea>
+<div class="compose-actions"><span class="muted">Reconnect replays output only. An uncertain command is never resent automatically.</span>
+<button id="send" type="submit" disabled>Send to operator</button></div>
+</form>
+</section>
+<aside id="inspector" aria-label="Operator session inspector">
+<section><h2>Permissions</h2><p class="muted">Every native request needs a human decision. Disconnection pauses the decision; it never approves.</p><div id="permissions"></div></section>
+<section><h2>Session identity</h2><dl id="identity"></dl></section>
+<section><h2>Recent commands</h2><ul id="commands"></ul></section>
+<section><h2>Stop operator</h2><p class="muted">Stops only this operator adapter and its owned CLI resources. The recovery bridge stays online.</p>
+<label for="confirmation">Type STOP OPERATOR to confirm</label><input id="confirmation" autocomplete="off">
+<button id="stop" type="button" class="danger">Stop operator session</button></section>
+</aside>
+</div>
+</main></body></html>
