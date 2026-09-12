@@ -150,7 +150,7 @@ test(policy_bounded_literal_pattern,[nondet]) :-
     row(x_p(x_a),x_TestMt,true,a1,R),report([x_p],[R],Out),
     policy_preview(json{rules:[json{kind:definition,patterns:[json{mode:prefix,value:x_}]}]},Out.items,Preview),
     member(F,Preview.items),F.kind==definition,assertion(F.disposition==suppressed).
-test(reject_regex_policy,[throws(error(domain_error(literal_pattern_mode,regex),_))]) :-
+test(reject_regex_policy,[throws(error(kee(invalid_arguments,_),_))]) :-
     normalize_policy(json{rules:[json{kind:comment,patterns:[json{mode:regex,value:'.*'}]}]},_).
 test(reject_duplicate_policy_rule,[throws(error(domain_error(duplicate_policy_rules,_),_))]) :-
     normalize_policy(json{rules:[json{kind:comment},json{kind:comment}]},_).
@@ -196,3 +196,79 @@ test(foreign_reference_reuses_existing_inert_reference_codec) :-
     status(Out,definition,external_implementation_required).
 
 :- end_tests(dependency_resolution_checks).
+
+:- begin_tests(dependency_resolution_policy_dto).
+:- use_module('../kb_dependency_resolution_policy').
+:- use_module('../kb_kee_schema',[]).
+
+test(schema_is_closed_at_every_object_level) :-
+    policy_spec(Spec),kb_kee_schema:json_schema(Spec,Schema),
+    assertion(Schema.additionalProperties==false),
+    assertion(Schema.required==[]),
+    Rules=Schema.properties.rules,assertion(Rules.maxItems==6),
+    Rule=Rules.items,assertion(Rule.additionalProperties==false),
+    assertion(Rule.required==[kind]),
+    Patterns=Rule.properties.patterns,assertion(Patterns.maxItems==32),
+    Pattern=Patterns.items,assertion(Pattern.additionalProperties==false),
+    assertion(Pattern.required==[mode,value]),
+    assertion(Pattern.properties.mode.enum==[exact,prefix,suffix]).
+test(defaults_are_canonical_complete_dto_not_persisted_record) :-
+    default_policy_dto(DTO),policy_spec(Spec),
+    kb_kee_schema:validate_stored(Spec,DTO),
+    assertion(ground(DTO)),length(DTO.rules,6),
+    dict_keys(DTO,Keys),assertion(Keys==[rules]),
+    forall(member(Rule,DTO.rules),
+      (assertion(Rule.enabled==true),
+       assertion(Rule.ignoreTerms==[]),assertion(Rule.ignoreMts==[]),
+       assertion(Rule.exemptTypes==[]),assertion(Rule.patterns==[]))).
+test(strict_dto_normalization_is_deterministic_and_roundtrips) :-
+    Input=json{rules:[json{kind:"definition",severity:"error",
+      ignoreTerms:["x_Z","x_A","x_Z"],ignoreMts:["mt:x_MtFn(x_a)"],
+      patterns:[json{mode:"prefix",value:"x_"}]}]},
+    findall(DTO,validate_policy(Input,DTO),[Canonical]),
+    assertion(ground(Canonical)),policy_spec(Spec),
+    kb_kee_schema:validate_stored(Spec,Canonical),
+    Canonical.rules=[First|_],
+    assertion(First.ignoreTerms==["x_A","x_Z"]),
+    assertion(First.ignoreMts==["mt:x_MtFn(x_a)"]),
+    normalize_policy(Input,FromJSON),normalize_policy(Canonical,FromDTO),
+    assertion(FromJSON==FromDTO).
+test(programmatic_atoms_preserve_existing_report_format) :-
+    normalize_policy(json{rules:[json{kind:definition,ignoreTerms:[x_p],
+      patterns:[json{mode:prefix,value:x_}]}]},Programmatic),
+    normalize_policy(json{rules:[json{kind:"definition",ignoreTerms:["x_p"],
+      patterns:[json{mode:"prefix",value:"x_"}]}]},JSON),
+    assertion(Programmatic==JSON),
+    Programmatic.rules=[Rule|_],
+    assertion(Rule.ignoreTerms==[x_p]),
+    assertion(Rule.patterns==[pattern{mode:prefix,value:x_}]).
+test(strict_dto_requires_json_text,[throws(error(kee(invalid_arguments,_),_))]) :-
+    validate_policy(json{rules:[json{kind:definition}]},_).
+test(strict_dto_rejects_duplicate_kinds,
+     [throws(error(domain_error(duplicate_policy_rules,_),_))]) :-
+    validate_policy(json{rules:[json{kind:"comment"},json{kind:"comment"}]},_).
+test(strict_dto_rejects_scope_not_implicitly_per_mt,
+     [throws(error(kee(invalid_arguments,_),_))]) :-
+    validate_policy(json{mt:"x_BaseKB",rules:[]},_).
+test(strict_dto_rejects_rule_actions,[throws(error(kee(invalid_arguments,_),_))]) :-
+    validate_policy(json{rules:[json{kind:"comment",action:"generate"}]},_).
+test(strict_dto_rejects_nested_pattern_properties,
+     [throws(error(kee(invalid_arguments,_),_))]) :-
+    validate_policy(json{rules:[json{kind:"comment",
+      patterns:[json{mode:"prefix",value:"x_",execute:"anything"}]}]},_).
+test(strict_dto_bounds_rule_count,[throws(error(kee(invalid_arguments,_),_))]) :-
+    length(Rules,7),maplist(=(json{kind:"comment"}),Rules),
+    validate_policy(json{rules:Rules},_).
+test(strict_dto_bounds_pattern_count,[throws(error(kee(invalid_arguments,_),_))]) :-
+    length(Patterns,33),maplist(=(json{mode:"prefix",value:"x_"}),Patterns),
+    validate_policy(json{rules:[json{kind:"comment",patterns:Patterns}]},_).
+test(strict_dto_rejects_unbound_values_without_binding_input) :-
+    catch(validate_policy(json{rules:[json{kind:"comment",enabled:Flag}]},_),Error,true),
+    assertion(nonvar(Error)),assertion(Error=error(kee(invalid_arguments,_),_)),
+    assertion(var(Flag)).
+test(saving_empty_rule_patch_means_defaults_not_clear) :-
+    validate_policy(json{rules:[]},DTO),default_policy_dto(Default),
+    assertion(DTO==Default),normalize_policy(DTO,Policy),default_policy(Expected),
+    assertion(Policy==Expected).
+
+:- end_tests(dependency_resolution_policy_dto).

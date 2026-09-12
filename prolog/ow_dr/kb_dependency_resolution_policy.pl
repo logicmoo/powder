@@ -1,6 +1,8 @@
 :- module(kb_dependency_resolution_policy,
-          [default_policy/1,normalize_policy/2,apply_policy/3,policy_preview/3]).
+          [policy_spec/1,validate_policy/2,default_policy_dto/1,
+           default_policy/1,normalize_policy/2,apply_policy/3,policy_preview/3]).
 :- use_module(kb_cache,[terms_digest/2]).
+:- use_module(kb_kee_schema,[]).
 :- use_module(library(error)).
 :- use_module(library(lists)).
 :- use_module(library(apply)).
@@ -16,50 +18,67 @@ kind(microtheory_declaration,warning).
 kind(microtheory_attachment,info).
 kind(comment,info).
 
-default_policy(Policy) :- normalize_policy(json{},Policy).
-normalize_policy(Input,Policy) :-
-    must_be(dict,Input),known_keys(Input,[rules]),
-    option(Input,rules,[],Patches),bounded_list(Patches,6),
+policy_spec(obj([opt(rules,list(Rule,6))])) :-
+    findall(Kind,kind(Kind,_),Kinds),
+    Pattern=obj([req(mode,enum([exact,prefix,suffix])),req(value,str(1,128))]),
+    Rule=obj([req(kind,enum(Kinds)),opt(enabled,boolean),
+              opt(severity,enum([info,warning,error])),
+              opt(ignoreTerms,list(str(1,4096),128)),
+              opt(ignoreMts,list(str(1,4096),128)),
+              opt(exemptTypes,list(str(1,4096),128)),
+              opt(patterns,list(Pattern,32))]).
+
+validate_policy(Input,json{rules:Rules}) :-
+    policy_spec(Spec),kb_kee_schema:validate(Spec,Input,Typed),
+    option(Typed,rules,[],Patches),
     maplist(rule_id,Patches,Ids),sort(Ids,Unique),
     (same_length(Ids,Unique)->true;domain_error(duplicate_policy_rules,Ids)),
-    findall(Rule,(kind(Kind,Severity),normalize_rule(Patches,Kind,Severity,Rule)),Rules),
+    findall(Rule,(kind(Kind,Severity),normalize_rule(Patches,Kind,Severity,Rule)),Rules).
+
+default_policy_dto(Policy) :- validate_policy(json{},Policy).
+default_policy(Policy) :- normalize_policy(json{},Policy).
+normalize_policy(Input,Policy) :-
+    must_be(dict,Input),policy_spec(Spec),
+    policy_json_input(Spec,Input,JSON),validate_policy(JSON,Canonical),
+    maplist(report_rule,Canonical.rules,Rules),
     terms_digest([dependency_policy_v1,Rules],Revision),
     Policy=policy{schema:dependency_policy_v1,revision:Revision,rules:Rules}.
 
-rule_id(Input,Id) :-
-    must_be(dict,Input),text_atom(Input.kind,Id),
-    (kind(Id,_)->true;domain_error(dependency_check,Id)).
+% Existing Prolog callers use atoms for text. The strict host DTO uses strings.
+policy_json_input(obj(Fields),Input,JSON) :- is_dict(Input),!,
+    dict_pairs(Input,_,Pairs),maplist(policy_json_field(Fields),Pairs,Values),
+    dict_pairs(JSON,json,Values).
+policy_json_input(list(Spec,Max),Input,JSON) :-
+    is_list(Input),length(Input,N),N=<Max,!,
+    maplist(policy_json_input(Spec),Input,JSON).
+policy_json_input(str(_,_),Input,JSON) :- atom(Input),!,atom_string(Input,JSON).
+policy_json_input(enum(_),Input,JSON) :- atom(Input),!,atom_string(Input,JSON).
+policy_json_input(_,Input,Input).
+policy_json_field(Fields,Key-Input,Key-JSON) :-
+    (member(Field,Fields),Field=..[_,Key,Spec]->
+       policy_json_input(Spec,Input,JSON)
+    ;JSON=Input).
+
+rule_id(Input,Id) :- Id=Input.kind.
 normalize_rule(Patches,Kind,Severity,Rule) :-
     (member(Patch,Patches),rule_id(Patch,Kind)->true;Patch=json{}),
-    known_keys(Patch,[kind,enabled,severity,ignoreTerms,ignoreMts,exemptTypes,patterns]),
-    option(Patch,enabled,true,Enabled),must_be(boolean,Enabled),
-    option(Patch,severity,Severity,S0),text_atom(S0,S),
-    (memberchk(S,[info,warning,error])->true;domain_error(dependency_severity,S)),
+    option(Patch,enabled,true,Enabled),option(Patch,severity,Severity,S),
     text_list(Patch,ignoreTerms,Terms),text_list(Patch,ignoreMts,Mts),
     text_list(Patch,exemptTypes,Types),
-    option(Patch,patterns,[],Patterns0),bounded_list(Patterns0,32),
-    maplist(pattern,Patterns0,Patterns),
-    Rule=rule{kind:Kind,enabled:Enabled,severity:S,ignoreTerms:Terms,
+    option(Patch,patterns,[],Patterns),
+    Rule=json{kind:Kind,enabled:Enabled,severity:S,ignoreTerms:Terms,
               ignoreMts:Mts,exemptTypes:Types,patterns:Patterns}.
 text_list(Dict,Key,Values) :-
-    option(Dict,Key,[],Raw),bounded_list(Raw,128),maplist(bounded_text(4096),Raw,Texts),
-    sort(Texts,Values).
-pattern(Input,pattern{mode:Mode,value:Value}) :-
-    must_be(dict,Input),known_keys(Input,[mode,value]),
-    text_atom(Input.mode,Mode),
-    (memberchk(Mode,[exact,prefix,suffix])->true;domain_error(literal_pattern_mode,Mode)),
-    bounded_text(128,Input.value,Value).
-bounded_text(Max,Input,Text) :-
-    text_atom(Input,Text),atom_length(Text,N),
-    (N>0,N=<Max->true;domain_error(bounded_policy_text,Input)).
-bounded_list(Input,Max) :-
-    must_be(list,Input),length(Input,N),
-    (N=<Max->true;domain_error(policy_list_limit,Max)).
-known_keys(Dict,Allowed) :-
-    dict_pairs(Dict,_,Pairs),
-    forall(member(Key-_,Pairs),(memberchk(Key,Allowed)->true;domain_error(policy_property,Key))).
-text_atom(Input,Atom) :-
-    (atom(Input)->Atom=Input;string(Input)->atom_string(Atom,Input);type_error(text,Input)).
+    option(Dict,Key,[],Raw),sort(Raw,Values).
+report_rule(Input,Rule) :-
+    maplist(atom_string,Terms,Input.ignoreTerms),
+    maplist(atom_string,Mts,Input.ignoreMts),
+    maplist(atom_string,Types,Input.exemptTypes),
+    maplist(report_pattern,Input.patterns,Patterns),
+    Rule=rule{kind:Input.kind,enabled:Input.enabled,severity:Input.severity,
+              ignoreTerms:Terms,ignoreMts:Mts,exemptTypes:Types,patterns:Patterns}.
+report_pattern(Input,pattern{mode:Mode,value:Value}) :-
+    Mode=Input.mode,atom_string(Value,Input.value).
 option(Dict,Key,Default,Value) :- (get_dict(Key,Dict,Value)->true;Value=Default).
 
 apply_policy(Policy,Finding,Output) :-

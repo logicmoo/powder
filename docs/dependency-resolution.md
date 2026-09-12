@@ -148,6 +148,55 @@ boundary or claim one exists. A future KEE integration must authorize all MTs
 whose evidence is exposed (including BaseKB), audit policy changes, and never
 derive permission from KB text.
 
+### Typed policy handoff to KEE
+
+The owner module exports one canonical closed schema, using the existing
+`kb_kee_schema` DSL rather than a separate JSON Schema:
+
+* `policy_spec(-Spec)` returns `obj([...])`. Derive browser/registry JSON Schema
+  with `kb_kee_schema:json_schema(Spec,Schema)`.
+* `validate_policy(+JSON,-CanonicalDTO)` strictly validates JSON text values,
+  rejects unknown fields and duplicate rule kinds, and returns a deterministic,
+  ground `json{rules:SixCompleteRules}`. It has no side effects.
+* `default_policy_dto(-CanonicalDTO)` returns the same complete DTO for built-in
+  defaults. This is **not** evidence of a saved record.
+* Existing `normalize_policy/2` accepts both JSON strings and programmatic Prolog
+  atoms and returns the report's `policy{schema,revision,rules}` representation.
+  That content digest is **not** a ledger/resource revision.
+* Existing `default_policy/1` and `policy_preview/3` retain their report-format
+  output; preview still reports persistence unavailable.
+
+The closed input is `{"rules":[Rule...]}`; `rules` defaults to `[]`, has at most
+six entries, and has unique `kind` values. Each closed rule requires `kind`:
+`definition`, `function_result_isa`, `collection_root`,
+`microtheory_declaration`, `microtheory_attachment`, or `comment`.
+Optional fields are:
+
+| Field | Accepted values / default |
+|---|---|
+| `enabled` | Boolean; `true` |
+| `severity` | `info`, `warning`, `error`; `warning` except attachment/comment `info` |
+| `ignoreTerms`, `ignoreMts`, `exemptTypes` | Up to 128 nonempty strings of at most 4096 characters; `[]`; sorted/deduplicated |
+| `patterns` | Up to 32 closed `{mode,value}` objects; `[]` |
+| Pattern `mode` | Required `exact`, `prefix`, or `suffix` |
+| Pattern `value` | Required nonempty string of at most 128 characters |
+
+Exemptions compare exact canonical finding keys. Validation does not claim that
+those terms/types/MTs exist. Patterns match the canonical **term** key literally,
+case-sensitively; they are not regexes or glob patterns. Normalization fills all
+omitted rules/fields from built-in defaults, not from a previous saved policy.
+The canonical DTO is suitable for `kb_kee_schema:validate_stored/2`.
+
+The agreed scope for the first prospective persistence adapter is **one global
+singleton**, not implicit per-MT overrides. `ignoreMts` are rule exemptions, not
+saved-policy scopes. The prospective save envelope is `{policy,revision}` with
+the expected exact ledger revision; this owner module validates `policy` only.
+Save means whole-policy replacement. Saving `{"rules":[]}` explicitly stores
+defaults. A separate future clear operation would write a tombstone and restore
+labelled built-in defaults; it must not infer the browser's current MT. No
+per-MT inheritance or clear endpoint exists in this module. KEE owns any future
+typed domain, permissions, audit, idempotency, undo and registered handler.
+
 **Runtime reports do not certify global absence.** The current catalog may have
 complete membership while provider enrichment is pending. Reading bounded
 source-verified pages is not fresh, exhaustive ontology/provider reasoning.
@@ -198,7 +247,7 @@ node --test prolog\ow_dr\tests\dependency-resolution.test.mjs
 random loopback port, without contacting the knowledge server. Desktop/mobile
 browser checks covered pagination, filters, policy draft submission, cancellation,
 error states, canonical links, labels and overflow. The focused suites pass
-**71 PL-Unit tests and 8 Node tests**.
+**84 PL-Unit tests and 8 Node tests**.
 
 Existing-catalog checks used `KBs/tinykb.krf` and `x_BaseKB`, without compilation
 or real KB loading:
