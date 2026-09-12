@@ -14,7 +14,8 @@ an agent, configure a model, or grant tool permissions. See the verified
 | All-file catalog search, definitions and occurrences | Routes/index machinery exist; one coordinator-reported cold HTTP lookup succeeded (below). Complete, fast corpus-wide coverage remains a validation prerequisite. |
 | SourcePack composition, resolution and loading | Implemented application operations; static provider evidence does not prove executable behavior. |
 | Native annotation inspection and revision-checked editing | Implemented, independently of general KB assertion editing and measured rule utility. |
-| Operational task pools, source editor, checkpoints and debug console | Implemented application facilities, not an agent permission grant. Debug is **never a KEE tool**. |
+| Operational task pools, source editor and debug console | Implemented application facilities, not an agent permission grant. Debug is **never a KEE tool**. |
+| Checkpoints | Backend tested; full host/UI publication is still in progress. Do not claim a complete published checkpoint workflow. |
 | emullm Chat, GenerateComment, prompt snapshot loader, symbolic agent runner | **PLANNED; not implemented by these documents.** |
 | Central typed KEE registry, automatic general KB CRUD with durable undo, teaching-case todos | **PLANNED.** Existing operational task jobs are not durable teaching cases. |
 | Declarative workflow applications and held-out symbolic learning pipeline | **PLANNED.** |
@@ -31,11 +32,12 @@ No KB filename, ontology symbol inventory or language capability is inferred
 here. Find and cite actual indexed assertions before claiming that knowledge
 exists. Retain IDs, source locations, MTs, revisions and coverage qualifications.
 
-**Reported readback, 2026-09-12:** the coordinator verified a cold HTTP lookup
+**Reported readback, 2026-09-12:** the coordinator verified a cold HTTP 200 lookup
 of unloaded `x_diplomaticState`: 6 definitions from 1 file in **3966 ms**, with
-no KB change. This is one measured lookup, not proof of complete corpus coverage
-or general symbolic language ability. No source filename or assertion IDs were
-provided with that measurement; none are invented here.
+no KB change. This is one measured lookup, not proof of complete corpus coverage,
+broad-search or incremental-maintenance readiness, or general symbolic language
+ability. No source filename or assertion IDs were provided with that measurement;
+none are invented here.
 
 ## Two distinct agents — planned
 
