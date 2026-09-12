@@ -153,7 +153,8 @@ client_main(G,Id,Socket,C) :-
     setup_call_cleanup(true,
       catch((thread_get_message(start),
         setup_call_cleanup(tcp_open_socket(Socket,In,Out),
-          (set_stream(In,encoding(octet)),set_stream(Out,encoding(utf8)),
+          (set_stream(In,encoding(octet)),set_stream(In,timeout(0.25)),
+           set_stream(Out,encoding(utf8)),
            set_stream(Out,newline(posix)),set_stream(Out,buffer(false)),
            set_stream(Out,timeout(C.query_timeout)),
            setup_call_cleanup(asserta(telnet_channel(In,Out),Channel),
@@ -201,8 +202,15 @@ telnet_line_codes(In,Left,Acc,Codes,Budget) :-
 
 wire_byte(In,Budget,B) :-
     arg(1,Budget,Left),
-    (Left>0->Next is Left-1,nb_setarg(1,Budget,Next),get_byte(In,B);
+    (Left>0->read_transport_byte(In,B),Next is Left-1,nb_setarg(1,Budget,Next);
      throw(debug_telnet_wire_limit)).
+read_transport_byte(In,B) :-
+    thread_self(Self),
+    (client(G,_,Self,_,_) ->
+       (service(G,running,_,_,_,_)->true;throw(debug_stop))
+    ;true),
+    catch(get_byte(In,B),error(timeout_error(read,_),_),Retry=true),
+    (Retry==true->read_transport_byte(In,B);true).
 telnet_byte(In,Budget,B) :-
     wire_byte(In,Budget,Byte),
     (Byte=:=255 ->

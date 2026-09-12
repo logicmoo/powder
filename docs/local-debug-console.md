@@ -122,7 +122,9 @@ transport data, but is not valid UTF-8 and cannot bypass authentication or
 source decoding. Each line has at most 32 IAC commands, 256 bytes per
 subnegotiation, and `4*line_limit+256` total wire bytes, in addition to existing
 authentication/idle/session deadlines. Incomplete or excessive negotiation
-closes only that client.
+closes only that client. Socket reads block in quarter-second intervals and
+recheck service ownership between intervals, so pending reads observe host
+shutdown even if a Windows asynchronous signal wakeup is delayed.
 
 Code-only publication of `kb_debug_telnet.pl` does not restart the service or
 rotate credentials. Authenticated sessions reaching the new reader are

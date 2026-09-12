@@ -139,6 +139,23 @@ def wait_sessions(app, expected=0):
 
 @unittest.skipUnless(sys.platform == "win32", "Owner-private Windows credential ACL")
 class DebugTelnetIntegration(unittest.TestCase):
+    def test_pending_read_poll_preserves_partial_auth_and_idle_session(self):
+        with App() as app:
+            app.start(auth_timeout=2, idle_timeout=2, session_timeout=5)
+            token = app.credentials()["token"].encode("ascii")
+            with app.raw() as s:
+                receive_until(s, b"AUTH required\n")
+                s.sendall(b"AUTH " + token[:12])
+                time.sleep(.65)
+                s.sendall(token[12:] + b"\r\n")
+                self.assertIn(b"OK\n", receive_until(s, b"?- "))
+                time.sleep(.65)
+                s.sendall(b"current_prolog_flag(pid, PID).\r\n")
+                self.assertIn(str(app.pid).encode(), receive_until(s, b"?- "))
+                s.sendall(b"end_of_file.\r\n")
+                read_all(s)
+            wait_sessions(app)
+
     def test_telnet_negotiation_before_auth_and_inside_utf8_query(self):
         with App() as app:
             app.start()
