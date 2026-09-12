@@ -20,7 +20,7 @@ implementation from a planned requirement or a model-discovery response.
 
 ## Verified emullm boundary; powder integration remains planned
 
-Coordinator-provided read-only evidence establishes base
+The coordinator's read-only probe and emullm owner's inspection establish base
 `http://127.0.0.1:8801/v1`, GET `/models`, GET `/models/{model-id}` and
 POST `/chat/completions`. Always provide an explicit authorized `model`;
 `emullm/default` is valid. Omission routes through
@@ -63,8 +63,12 @@ idempotent outcomes. A symbolic run must never contact this provider.
    fictional tools or convert ordinary REST/debug access into an agent tool.
    Separately authorized existing application reads remain only those reads.
 4. Verify catalog coverage/freshness before absence, uniqueness or language
-   capability claims. Complete fast all-file lookup is a prerequisite still
-   undergoing repair/validation, not a documentation-delivered feature.
+   capability claims. The coordinator verified the live **978-file catalog**
+   and exact unloaded `x_diplomaticState` HTTP 200 lookup: 6 definitions from
+   1 file in **4–5 seconds** (earlier sample **3966 ms**), with no KB change.
+   Broad-search and provider/type-proof details remain pending; incremental
+   maintenance requires separate verification. None is established by this
+   sample. Registry/agent applications are still planned.
 
 One future typed registry must drive application adapters, LLM tools and the
 generated reference. Do not build parallel hand-maintained registries here.

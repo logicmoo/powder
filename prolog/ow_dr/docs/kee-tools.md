@@ -12,7 +12,8 @@ deployment, authorization, index completeness or model tool-call compatibility.
 
 ## Verified emullm provider contract
 
-**Evidence:** coordinator-relayed read-only contract inspection, 2026-09-12.
+**Evidence:** coordinator's read-only probe and emullm-owner contract inspection,
+2026-09-12.
 No model prompt or user data was sent by this documentation worker. This is
 verified provider behavior, not implemented powder Chat/tool integration and
 not a new KEE capability.
@@ -20,7 +21,7 @@ not a new KEE capability.
 | Provider surface | Verified behavior |
 |---|---|
 | Base | `http://127.0.0.1:8801/v1`; recorded evidence, not hardcoded application configuration |
-| GET `/models`, GET `/models/{model-id}` | Model listing/detail; user reported 61 models, including `emullm/default` |
+| GET `/models`, GET `/models/{model-id}` | Model listing/detail; read-only probe verified 61 models, including `emullm/default` |
 | POST `/chat/completions` | OpenAI-shaped conversation request; always supply an explicit authorized `model` |
 | Model selection | `emullm/default` is valid. **Never omit `model`:** omission routes through `worker-copilot-n/percent100` |
 | Incoming authentication | Keyless; incoming `Authorization` is ignored. This is not application/agent authorization |
@@ -133,16 +134,18 @@ assertions do not acquire fabricated execution counts.
 
 Pending directories can return 503; stale projections/directories can return
 409. Treat these as incomplete/unavailable knowledge access, never an empty KB
-or proof of absence. Complete fast cold lookup remains a release prerequisite
-under active repair/validation. Do not extrapolate complete vocabulary, global
-uniqueness or executable support from a partial index.
+or proof of absence. Do not extrapolate complete vocabulary, global uniqueness
+or executable support from a partial index or one successful exact lookup.
 
-**Coordinator-verified readback (2026-09-12):** a cold actual HTTP 200 lookup of
-unloaded `x_diplomaticState` returned 6 definitions from 1 file in **3966 ms**,
-without a KB change. This successful sample does not establish complete all-file
-coverage, broad-search or incremental-maintenance readiness, or general
-cold/warm latency. The measurement did not supply source filenames or
-assertion IDs, so this reference does not invent them.
+**Coordinator-verified live readback (2026-09-12):** the **978-file catalog** and
+exact HTTP 200 lookup of unloaded `x_diplomaticState` are verified. The lookup
+returned 6 definitions from 1 file in the reported **4–5 second** live range
+(earlier measured sample: **3966 ms**), without a KB change. Broad-search and
+provider/type-proof details remain pending; incremental-maintenance readiness
+requires separate verification. Registry and agent applications remain planned.
+Do not infer general cold/warm
+latency or complete semantic coverage from this sample. No source filenames or
+assertion IDs were supplied with the measurement; none are invented here.
 
 Additional routes in `kb_server.pl`:
 

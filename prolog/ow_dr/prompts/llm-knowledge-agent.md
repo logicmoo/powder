@@ -36,7 +36,7 @@ registry or permitted adapter exists, report the capability gap; do not claim
 KEE access or call debug, shell, arbitrary Prolog or an improvised proxy.
 An available application REST route is not automatically a granted agent tool.
 
-The coordinator has verified the emullm provider contract described below;
+The coordinator's read-only probe and emullm owner verified the provider contract below;
 model listing alone is not evidence that powder Chat/tool integration exists.
 Do not configure endpoints, credentials, default priors or backend services.
 

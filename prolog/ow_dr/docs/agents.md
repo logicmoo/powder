@@ -13,17 +13,17 @@ data/templates, not ready agent execution.
 | Area | Status |
 |---|---|
 | Loaded-KB browsing, assertion/source/MT inspection, bounded executable queries and proofs | Implemented; see `kb_server.pl`, `kb_store.pl`, `kb_runtime.pl`. |
-| All-file catalog search, definitions and occurrences | Routes/index machinery exist; one coordinator-reported cold HTTP lookup succeeded (below). Complete, fast corpus-wide coverage remains a validation prerequisite. |
-| SourcePack composition, resolution and loading | Implemented application operations; static provider evidence does not prove executable behavior. |
+| All-file catalog and exact lookup | Coordinator verified the live 978-file catalog and the unloaded-term HTTP 200 lookup below. Broad-search and incremental-maintenance readiness remain separate. |
+| SourcePack composition, resolution and loading | Implemented application operations; provider/type-proof detail readiness remains pending. Static provider evidence does not prove executable behavior. |
 | Native annotation inspection and revision-checked editing | Implemented, independently of general KB assertion editing and measured rule utility. |
 | Operational task pools, source editor and debug console | Implemented application facilities, not an agent permission grant. Debug is **never a KEE tool**. |
-| Checkpoints | Backend tested; full host/UI publication is still in progress. Do not claim a complete published checkpoint workflow. |
+| Checkpoints | Isolated backend validated; full host/UI publication pending. Do not claim a complete published checkpoint workflow. |
 | emullm Chat, GenerateComment, prompt snapshot loader, symbolic agent runner | **PLANNED; not implemented by these documents.** |
 | Central typed KEE registry, automatic general KB CRUD with durable undo, teaching-case todos | **PLANNED.** Existing operational task jobs are not durable teaching cases. |
 | Declarative workflow applications and held-out symbolic learning pipeline | **PLANNED.** |
 
-The user reported 61 models, including `emullm/default`, from model discovery on
-2026-09-12. The coordinator subsequently supplied a read-only-verified
+The coordinator's read-only probe and emullm owner verified 61 models, including
+`emullm/default`, and supplied the verified transport/tool
 [emullm provider contract](kee-tools.md#verified-emullm-provider-contract).
 This establishes provider behavior, **not an installed application integration**
 or a configuration default. No model or network call was made to write these
@@ -34,12 +34,14 @@ No KB filename, ontology symbol inventory or language capability is inferred
 here. Find and cite actual indexed assertions before claiming that knowledge
 exists. Retain IDs, source locations, MTs, revisions and coverage qualifications.
 
-**Reported readback, 2026-09-12:** the coordinator verified a cold HTTP 200 lookup
-of unloaded `x_diplomaticState`: 6 definitions from 1 file in **3966 ms**, with
-no KB change. This is one measured lookup, not proof of complete corpus coverage,
-broad-search or incremental-maintenance readiness, or general symbolic language
-ability. No source filename or assertion IDs were provided with that measurement;
-none are invented here.
+**Live readback, 2026-09-12:** the coordinator verified the **978-file catalog**
+and exact HTTP 200 lookup of unloaded `x_diplomaticState`: 6 definitions from
+1 file, with reported live timing **4–5 seconds** (earlier measured sample:
+**3966 ms**) and no KB change. This does not establish broad-search,
+provider/type-proof detail or incremental-maintenance readiness, nor general
+symbolic language ability. No source filename or assertion IDs were provided
+with that measurement; none are invented here. Registry and agent applications
+remain planned.
 
 ## Two distinct agents — planned
 
