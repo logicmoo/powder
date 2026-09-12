@@ -62,7 +62,7 @@ listener inventory. The UI router imports `renderLLMKnowledgeAgent` from
 returned element on `#/llm-knowledge`. The module loads its own CSS.
 No changes to `app.js` or `kb_server.pl` are included in this ownership stage.
 
-For the three-chip host, use the persistent controller instead:
+For the four-chip host, use the persistent controller instead:
 
 ```javascript
 const teacher = await createLLMKnowledgeAgent(host, {
@@ -86,12 +86,16 @@ signal, **not** a signal aborted whenever the selected chip changes.
 Destroy aborts that view's network/polling only; stopping a running conversation
 remains the explicit Stop action.
 
-Teacher/LLM (`llm-knowledge` settings and selected application model),
-Symbolic/Cyc-only (no model), and Operator/Copilot require separate controllers,
-settings and transports. This module does not mount, import, invoke or fall back
-to either other agent. Operator is not a Teacher KEE tool; Symbolic must never
-call this module's completion transport. Changing Teacher's application model
-does not change the Copilot coding model.
+Teacher/LLM (`llm-knowledge` settings, initially `gpt-5.6-sol`),
+Symbolic/Cyc-only (no model), Copilot Operator, and Codex Operator require four
+separate controllers, settings and transports. This module does not mount,
+import, invoke or fall back to any other agent. Neither operator nor its SDK
+is a Teacher KEE tool; Symbolic must never call this completion transport.
+Changing Teacher's application model does not change either CLI operator model.
+The operator host owns their fixed primary-repository CWD and concurrent-start
+warning: starting the second operator is explicitly allowed after warning,
+without automatic exclusion, cancellation or process termination. Teacher's
+view controller does not arbitrate operator starts.
 
 | Route suffix | Method | Contract |
 |---|---|---|
