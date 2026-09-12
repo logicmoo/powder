@@ -89,7 +89,7 @@ test(real_loaded_assertion_via_typed_registry,
     Intent=intent{capability:"kee_assertion",
       arguments:json{id:"a71",mt:"x_SymbolicTestWorldMt",generation:G}},
     kb_symbolic_agent_kee:invoke(Token,["kee_assertion"],Intent,"run-test/action-1",Reply),
-    assertion(Reply.ok==true),assertion(Reply.result.id==a71),
+    assertion(Reply.ok==true),assertion(Reply.result.id=="a71"),
     assertion(Reply.result.generation==G).
 
 test(real_query_and_proofs_with_network_and_processes_trapped,
@@ -123,6 +123,7 @@ test(mutable_grants_cannot_enable_llm_or_proxy_calls,
                          "llm_chat","http_get","shell","prolog","kee_load_files"]),
         (catch(kb_symbolic_agent_kee:invoke(Token,[Name],
            intent{capability:Name,arguments:json{}},"denied",_),Error,true),
+         assertion(nonvar(Error)),
          assertion(Error=error(symbolic_forbidden_capability(_),_)))),
       untrap_transports),
     flag(symbolic_external_calls,Count,Count),assertion(Count==0).
@@ -146,6 +147,7 @@ test(indirect_and_unknown_effects_are_denied,
       wrap_predicate(kb_kee_registry:capability(Name,C),symbolic_effect_test,Wrapped,
         (Name==kee_query->C=Poisoned;Name==kee_assertion->C=Proxy;call(Wrapped))),
       (catch(kb_symbolic_agent_kee:authorize(Token,["kee_query"],"kee_query",_),Error,true),
+       assertion(nonvar(Error)),
        assertion(Error=error(symbolic_forbidden_capability(kee_assertion),_))),
       unwrap_predicate(kb_kee_registry:capability(_,_),symbolic_effect_test)).
 

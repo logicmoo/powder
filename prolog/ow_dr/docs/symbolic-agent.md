@@ -131,6 +131,24 @@ Results contain `state`, `effects` and `events`, including language/rule/plan
 assertion-ID evidence, responses, requests and structured gaps. The interpreter
 does not dispatch effects or persist state. Action completion is a separate step
 before continuing: an ensuing budget failure cannot erase the completed action.
+For structured tool results, the result pattern can be:
+
+```lisp
+(symbolicResultFields
+  (TheList
+    (symbolicResultField (TheList "revision") ?Revision)
+    (symbolicResultField (TheList "items" 0 "id") ?FirstId)))
+```
+
+Paths are explicit string keys or zero-based array indexes, limited to 16
+components and 32 selected fields. They are validated before yielding an action;
+no expression evaluation or code dispatch occurs during selection. Values retain
+their JSON types. Selected variables share the continuation's real variables.
+A missing/mismatched result produces a binding gap **after recording successful
+completion**, clearing the unsafe continuation rather than pretending the action
+failed. A receipt arriving after Stop/Interrupt clears pending action state but
+does not resume work.
+
 Compensation remains failed/compensated rather than claiming successful rollback.
 Stop/Interrupt preserve semantic state; an unresolved action cannot simply resume.
 
@@ -155,22 +173,53 @@ arguments are errors. Only explicit `True`, `False` and `Null` produce JSON valu
 kb_symbolic_agent_kee:capabilities(ContextToken,Reply).
 kb_symbolic_agent_kee:authorize(ContextToken,Policy,Capability,Checked).
 kb_symbolic_agent_kee:invoke(ContextToken,Policy,Intent,GlobalCallId,Reply).
+kb_symbolic_agent_kee:action_outcome(Reply,Outcome).
 ```
 
 This is wired to actual `kb_kee:registry/2` and `invoke/3`, not fixture dispatch.
 The caller supplies an opaque, authenticated symbolic context with null model
 and prompt metadata. Actual registry permission, MT scope, budgets, expiry and
-revocation checks remain in force. The immutable ceiling currently permits only
-these registered read/query operations:
+revocation checks remain in force. The immutable ceiling permits these registered
+read/query operations:
 
 `kee_catalog_status`, `kee_find_terms`, `kee_definitions`, `kee_occurrences`,
 `kee_catalog_assertion`, `kee_assertion`, `kee_query`.
 
-It independently checks schema version, direct and transitive operation/effect
-allowlists, cycles and symbolic eligibility. Unknown/model/proxy/process/network
+It also permits the **real application-TODO domain only**:
+
+`kee_ledger_status`, `kee_call_status`, `kee_todo_list`, `kee_todo_get`,
+`kee_todo_create`, `kee_todo_update`, `kee_todo_delete`, `kee_audit`, `kee_undo`,
+`kee_redo`.
+
+These require actual host-granted `todo.read`, `todo.write`, `changeset.read` or
+`changeset.undo` permissions and `application_read`/`application_write` effects,
+as specified by the shared registry. Mutation budgets and old/new MT authorization
+remain enforced there. Mutable agent policy cannot supply those grants. The
+backend still forbids symbolic task completion by claimed evidence: setting or
+restoring `done` requires the real user-attestation boundary.
+
+The gateway independently checks the **exact name/operation/domain/mutation
+tuple**, schema version, direct and transitive effect allowlists, cycles and
+symbolic eligibility. Expanding a TODO undo tool to another domain does not
+implicitly expand this ceiling. Unknown/model/proxy/process/network
 capabilities remain forbidden even if mutable policies request them. Tool schemas
 and dispatch implementations exist only in the shared registry. Call IDs must be
 prefixed with a real durable run identity; pure `action-N` ordinals are insufficient.
+
+Replies normalize ordinary Prolog atoms to JSON strings, preserving true/false/null,
+and include `symbolicEffect`:
+
+- `"not_mutation"`: a registered non-mutation operation.
+- `"committed"`: the actual mutation returned its durable committed receipt.
+- `"unknown"`: an attempted mutation failed or did not return a verified receipt.
+  Its `ok:false` error remains explicit. This **does not mean no effect occurred**.
+
+`action_outcome/2` returns `ok(Result)` only for acknowledged completion;
+uncertain writes return `unresolved(Reply)`, which must not be passed as a failed
+action, compensated automatically, or retried under a new ID. Inspect
+`kee_call_status` in the same actor/agent/conversation namespace and recover with
+the same durable call ID and request. An unknown receipt is not proof that an
+in-flight operation cannot commit. No automatic retry loop is implemented here.
 
 ## Canonical knowledge snapshot adapter
 
@@ -206,10 +255,18 @@ examples, execute a hidden fallback, or expose the pure host-control input direc
 No source-load operation is currently permitted, so load A/B selection cannot be
 invented or treated as automatically approved.
 
+The separate `tests\fixtures\symbolic-agent-todos.krf` defines a reusable
+`review phrase CLASS` production and workflow: obtain the real ledger revision,
+bind it into a real TODO creation request, extract the returned task ID and
+update the pure goal continuation. Dog/cat variations create distinct durable,
+audited open tasks with the same program and interpreter process. These are
+genuine application TODOs, **not** persisted agent runs, taught KB assertions,
+verified acceptance results or automatic completed tasks.
+
 ## Focused validation
 
 ```powershell
-swipl -q -s prolog\ow_dr\tests\test_symbolic_agent_language.pl -s prolog\ow_dr\tests\test_symbolic_agent_engine.pl -s prolog\ow_dr\tests\test_symbolic_agent_kee.pl -g "run_tests([symbolic_agent_language,symbolic_agent_engine,symbolic_agent_kee])" -t halt
+swipl -q -s prolog\ow_dr\tests\test_symbolic_agent_language.pl -s prolog\ow_dr\tests\test_symbolic_agent_engine.pl -s prolog\ow_dr\tests\test_symbolic_agent_kee.pl -s prolog\ow_dr\tests\test_symbolic_agent_todos.pl -g "run_tests([symbolic_agent_language,symbolic_agent_engine,symbolic_agent_kee,symbolic_agent_todos])" -t halt
 ```
 
 The existing grammar tests demonstrate one learned production and held-out
@@ -217,7 +274,10 @@ combinations/synonyms, bidirectional generation, ambiguity, MT isolation, exact
 compound identity, quantified sharing, fresh variables and resource limits.
 Further tests cover workflow/form/approval continuations, wire persistence,
 compensation, capability/effect denial, actual native assertion/query calls and
-pinned multi-MT knowledge retrieval. HTTP GET/POST and process creation are
-trapped during real query dispatch with zero attempted calls. All fixture sources,
-native modules and identities are isolated; no model transport is configured.
+pinned multi-MT knowledge retrieval. Actual TODO writes, receipt replay, a
+committed-write/lost-reply scenario, user-completion protection and undo/redo are
+tested through the public registry. HTTP GET/POST and process creation are trapped
+during real query and declarative TODO workflows with zero attempted calls.
+All fixture sources, ledgers, native modules and identities are isolated; no model
+transport is configured. These commands do not run any checkpoint/qsave tests.
 These tests do not claim general NLU or an already-persisted teaching transaction.

@@ -81,6 +81,46 @@ test(action_result_saved_before_following_work_or_budget_failure) :-
     step(P,R.state,continue,[],Limited),
     assertion(Limited.state.phase==gap),assertion(Limited.state.pending==none).
 
+test(declarative_result_fields_bind_whole_term_continuations) :-
+    fixture_program([],P),initial_state(P,S0),
+    Pattern=x_symbolicResultFields(x_TheList(
+      x_symbolicResultField(x_TheList("items",0,"id"),Id))),
+    S=S0.put(_{phase:awaiting_action,pending:call(expected,Pattern),
+      queue:[x_symbolicSetState(x_Recorded(Id))]}),
+    encode_term(S,Wire),decode_term(Wire,Independent),
+    step(P,Independent,action_result(expected,ok(json{items:[json{id:"todo:fixture"}]})),[],R),
+    assertion(R.state.queue==[x_symbolicSetState(x_Recorded("todo:fixture"))]),
+    assertion(var(Id)).
+
+test(result_binding_gap_does_not_erase_a_successful_action) :-
+    fixture_program([],P),initial_state(P,S0),
+    Pattern=x_symbolicResultFields(x_TheList(x_symbolicResultField(x_TheList("missing"),_))),
+    S=S0.put(_{phase:awaiting_action,pending:call(expected,Pattern),
+      queue:[x_symbolicSetState(x_UnsafeContinuation)]}),
+    step(P,S,action_result(expected,ok(json{committed:true})),[],R),
+    assertion(R.state.phase==gap),assertion(R.state.pending==none),
+    assertion(R.state.queue==[]),
+    assertion(member(action_completed(json{committed:true}),R.events)),
+    assertion(member(gap(result_binding,_),R.events)).
+
+test(completion_after_stop_or_interrupt_does_not_resume_work) :-
+    fixture_program([],P),initial_state(P,S0),
+    forall(member(Phase,[stopped,interrupted]),
+      (S=S0.put(_{phase:Phase,pending:call(expected,Value),
+         queue:[x_symbolicSetState(x_Received(Value))]}),
+       step(P,S,action_result(expected,ok("receipt")),[],R),
+       assertion(R.state.phase==Phase),assertion(R.state.pending==none),
+       assertion(R.state.fsm==S0.fsm),
+       assertion(R.state.queue==[x_symbolicSetState(x_Received("receipt"))]))).
+
+test(result_path_is_validated_before_yielding_an_action,
+     [throws(error(domain_error(symbolic_result_key,x_invalid),_))]) :-
+    fixture_program([],P),initial_state(P,S0),
+    Pattern=x_symbolicResultFields(x_TheList(x_symbolicResultField(x_TheList(x_invalid),_))),
+    S=S0.put(_{phase:running,queue:[
+      x_symbolicInvoke("kee_query",x_symbolicObject(x_TheList),Pattern)]}),
+    step(P,S,continue,[],_).
+
 test(wrong_action_receipt_is_rejected,
      [throws(error(symbolic_action_result_mismatch(wrong),_))]) :-
     fixture_program([],P),initial_state(P,S0),

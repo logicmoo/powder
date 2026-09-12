@@ -1,0 +1,55 @@
+; Isolated declarative workflow. Application TODOs, not agent-run persistence.
+(in-microtheory SymbolicTestPolicyMt)
+(symbolicAllowedCapability SymbolicTestAgent "kee_ledger_status")
+(symbolicAllowedCapability SymbolicTestAgent "kee_todo_create")
+
+(in-microtheory SymbolicTestGrammarMt)
+(symbolicProduction sentence
+  (TheList (symbolicLiteral "review")
+           (symbolicLiteral "phrase")
+           (symbolicNonterminal class ?Class))
+  (LexicalCoverageCase ?Class))
+
+(in-microtheory SymbolicTestDialogueMt)
+(symbolicDialogueRule AwaitCommand (symbolicUtterance (LexicalCoverageCase ?Class))
+  symbolicTrue
+  (symbolicSequence
+    (TheList
+      (symbolicInvoke "kee_ledger_status"
+        (symbolicObject (TheList))
+        (symbolicResultFields
+          (TheList (symbolicResultField (TheList "revision") ?Revision))))
+      (symbolicInvoke "kee_todo_create"
+        (symbolicObject
+          (TheList
+            (symbolicField "revision" ?Revision)
+            (symbolicField "mt" (symbolicContextKey SymbolicTestGoalsMt))
+            (symbolicField "data"
+              (symbolicObject
+                (TheList
+                  (symbolicField "title" "Review lexical coverage")
+                  (symbolicField "description"
+                    (symbolicSExpression (LexicalCoverageCase ?Class)))
+                  (symbolicField "status" "open")
+                  (symbolicField "priority" 0)
+                  (symbolicField "dependencies" (symbolicArray (TheList)))
+                  (symbolicField "evidence" (symbolicArray (TheList)))
+                  (symbolicField "acceptance"
+                    (symbolicArray
+                      (TheList
+                        (symbolicObject
+                          (TheList
+                            (symbolicField "given" "Explicitly reviewed lexical knowledge")
+                            (symbolicField "when" "Held-out combinations are evaluated without a model")
+                            (symbolicField "then" "A real acceptance result is reviewed"))))))
+                  (symbolicField "links"
+                    (symbolicObject
+                      (TheList
+                        (symbolicField "conversation" Null)
+                        (symbolicField "agent" "x_SymbolicTestAgent")
+                        (symbolicField "changesets" (symbolicArray (TheList)))
+                        (symbolicField "assertions" (symbolicArray (TheList)))))))))))
+        (symbolicResultFields
+          (TheList (symbolicResultField (TheList "result" "id") ?Todo))))
+      (symbolicGoal (ReviewCase ?Todo))
+      (symbolicSetState AwaitCommand))))

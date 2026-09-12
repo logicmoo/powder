@@ -56,11 +56,12 @@ advance(_,State,host_approval(Key,Choice,Receipt),_,After,[],[approval_received(
       throw(error(symbolic_approval_mismatch,_))),
     (unify_with_occurs_check(Pattern,Choice)->true;throw(error(symbolic_approval_mismatch,_))),
     After=State.put(_{pending:none,phase:running}).
-advance(_,State,action_result(Id,Outcome),_,After,[],[ActionEvent]) :- !,
+advance(_,State,action_result(Id,Outcome),_,After,[],Events) :- !,
     must_be(ground,Id-Outcome),
-    (State.phase==awaiting_action,State.pending=call(Id,Pattern)->true;
+    (memberchk(State.phase,[awaiting_action,stopped,interrupted]),State.pending=call(Id,Pattern)->true;
       throw(error(symbolic_action_result_mismatch(Id),_))),
-    action_result(Outcome,Pattern,State,After,ActionEvent).
+    action_result(Outcome,Pattern,State,Completed,Events),
+    (memberchk(State.phase,[stopped,interrupted])->After=Completed.put(phase,State.phase);After=Completed).
 advance(Program,State,continue,Limits,After,Effects,Events) :- !,
     (memberchk(State.phase,[running,compensating])->true;throw(error(symbolic_not_running,_))),
     execute(Program,State,Limits,After,Effects,Events).
@@ -162,20 +163,49 @@ instruction(x_symbolicInvoke(Capability,Arguments,Pattern),Program,State,Limits,
       throw(error(symbolic_policy_denied(Capability),_))),
     (State.actions<Limits.actions->true;throw(error(symbolic_budget(actions),_))),
     kb_symbolic_agent_wire:json_arguments(Arguments,JSON),
+    validate_result_pattern(Pattern),
     Number is State.actions+1,format(atom(Id),'action-~d',[Number]),
     Intent=intent{id:Id,capability:Capability,arguments:JSON},
     Next=State.put(_{phase:awaiting_action,pending:call(Id,Pattern),actions:Number}).
 instruction(Instruction,_,_,_,_,_,_) :- domain_error(symbolic_plan_instruction,Instruction).
 
-action_result(ok(Value),Pattern,State,Next,action_completed(Value)) :- !,
-    (unify_with_occurs_check(Pattern,Value)->true;throw(error(symbolic_action_result_shape,_))),
-    Next=State.put(_{pending:none,phase:running}).
-action_result(error(Reason),_,State,Next,action_failed(Reason)) :- !,
+action_result(ok(Value),Pattern,State,Next,Events) :- !,
+    (bind_result(Pattern,Value)->
+      Next=State.put(_{pending:none,phase:running}),Events=[action_completed(Value)]
+    ;Next=State.put(_{pending:none,phase:gap,queue:[],compensations:[]}),
+      Events=[action_completed(Value),gap(result_binding,mismatched_result)]).
+action_result(error(Reason),_,State,Next,[action_failed(Reason)]) :- !,
     (State.compensating==false,State.compensations\=[]->
       Next=State.put(_{pending:none,phase:compensating,compensating:true,
                       queue:State.compensations,compensations:[]})
     ;Next=State.put(_{pending:none,phase:failed,queue:[]})).
 action_result(Outcome,_,_,_,_) :- domain_error(symbolic_action_outcome,Outcome).
+
+validate_result_pattern(Pattern) :- var(Pattern),!.
+validate_result_pattern(x_symbolicResultFields(Sequence)) :- !,
+    kb_symbolic_agent_program:sequence(Sequence,Fields),
+    length(Fields,N),bounded(N,1,32,result_fields),maplist(valid_result_field,Fields).
+validate_result_pattern(_).
+valid_result_field(Field) :-
+    (nonvar(Field),Field=x_symbolicResultField(Sequence,_)->true;
+      domain_error(symbolic_result_field,Field)),
+    kb_symbolic_agent_program:sequence(Sequence,Path),
+    length(Path,N),bounded(N,1,16,result_path),maplist(valid_result_key,Path).
+valid_result_key(Key) :-
+    (string(Key)->string_length(Key,N),bounded(N,1,128,result_key);
+      integer(Key)->bounded(Key,0,4095,result_index);domain_error(symbolic_result_key,Key)).
+bind_result(Pattern,Value) :- var(Pattern),!,unify_with_occurs_check(Pattern,Value).
+bind_result(x_symbolicResultFields(Sequence),Value) :- !,
+    kb_symbolic_agent_program:sequence(Sequence,Fields),maplist(bind_result_field(Value),Fields).
+bind_result(Pattern,Value) :- unify_with_occurs_check(Pattern,Value).
+bind_result_field(Value,x_symbolicResultField(Sequence,Pattern)) :-
+    kb_symbolic_agent_program:sequence(Sequence,Path),result_path(Path,Value,Selected),
+    unify_with_occurs_check(Pattern,Selected).
+result_path([],Value,Value).
+result_path([Key|Rest],Object,Value) :-
+    (string(Key)->is_dict(Object),atom_string(Name,Key),get_dict(Name,Object,Next);
+      integer(Key),is_list(Object),nth0(Key,Object,Next)),
+    result_path(Rest,Next,Value).
 
 valid_fields(Fields) :-
     length(Fields,N),bounded(N,1,32,form_fields),
