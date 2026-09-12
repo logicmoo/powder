@@ -98,7 +98,9 @@ function annotationContextControl(route, signal, onContext) {
 
 function updateClassicContext(panel, route) {
   const context = panel.contextualData;
-  if (context?.term) {
+  if (panel.catalogContext) {
+    classicLayout.setContext(panel.catalogContext);
+  } else if (context?.term) {
     const model = termContextModel(route, context.data, context.term);
     classicLayout.setContext(model);
     addLiteralQueryActions(model);
@@ -695,6 +697,7 @@ async function overview(_route, signal) {
   const panel = element('div', {},
     heading('Knowledge overview', 'Follow a term, inspect its assertions, and trace every claim to its source.'),
     searchForm('search', '', 'Search the active knowledge base…'),
+    link('Search all indexed files and definitions', 'catalog', {}, 'button secondary'),
     stats, diagnosticsPanel(status, { status: true }));
   if (!status.files?.length) {
     panel.append(loadedFiles([]));
@@ -728,12 +731,14 @@ async function searchPage(route, signal) {
     heading(isPredicates ? 'Predicate catalog' : 'Term search',
       isPredicates ? 'Actual semantic arities, without synthetic context arguments.' : 'Search constants and nested predicate or function heads in the active KB.'),
     searchForm(route.name, q, isPredicates ? 'Filter predicate names…' : 'Filter semantic terms…', isPredicates ? 'Search predicates' : 'Search terms'));
+  panel.append(link('Search predicates across all indexed files', 'catalog', { q, group: 'predicates' }, 'button secondary'));
   if (data.items?.length) {
     const table = element('table', { className: 'data-table' },
       element('thead', {}, element('tr', {}, element('th', { scope: 'col' }, isPredicates ? 'Predicate' : 'Term'),
         isPredicates && element('th', { scope: 'col' }, 'Arity'), element('th', { scope: 'col', className: 'numeric' }, 'Assertions'))),
       element('tbody', {}, data.items.map(item => element('tr', {},
-        element('td', {}, link(symbolLabel(item.term), 'term', { term: item.term }, 'term-name')),
+        element('td', {}, link(symbolLabel(item.term), 'term', { term: item.term }, 'term-name'),
+          element('div', {}, link('Definitional Info', 'definitions', { term: item.term }))),
         isPredicates && element('td', {}, item.arity), element('td', { className: 'numeric' }, number(item.count))))));
     panel.append(element('div', { className: 'table-scroll' }, table));
   } else panel.append(empty('No matching results', q ? 'Try a shorter name or clear the search.' : 'Load a source to populate the semantic indexes.',
@@ -752,6 +757,9 @@ async function natsPage(route, signal) {
 }
 
 async function termPage(route, signal) {
+  if (route.name === 'term' && route.params.get('section') === 'definition') {
+    return catalogPage({ ...route, name: 'definitions' }, signal);
+  }
   const isMT = route.name === 'microtheory';
   let value = route.params.get(isMT ? 'mt' : 'term');
   if (!value) throw new APIError(`Choose a ${isMT ? 'microtheory' : 'term'} to browse.`, 'missing_parameter');
@@ -782,7 +790,8 @@ async function termPage(route, signal) {
     : data.expression ? renderExpression(data.expression, { inline: true, pretty: false }) : symbolLabel(value);
   const panel = element('div', {},
     heading(title, isMT ? 'Assertions in this microtheory, in source order.' : 'Assertions containing this semantic term. Follow a symbol to continue exploring.',
-      isMT ? link('Query this context', 'query', { mt: contextKey }, 'button secondary') : null));
+      isMT ? link('Query this context', 'query', { mt: contextKey }, 'button secondary')
+        : link('Definitional Info · all files', 'definitions', { term: value }, 'button secondary')));
   panel.append(annotationContextControl(route, signal));
   const termAnnotations = element('div', { className: 'term-native-annotations' });
   panel.append(termAnnotations);
@@ -1402,7 +1411,7 @@ async function sourcePacksPage(route, signal) {
     api, element, button, link, heading, errorPanel,
     file: path => sourceLink(path, 1, path, null, { compact: false }),
     symbol: name => statisticsSymbol(name), mt: key => mtLink(key),
-    draftFiles: () => state.selection?.selectedFiles() ?? [],
+    draftFiles: () => route.params.has('root') ? [route.params.get('root')] : state.selection?.selectedFiles() ?? [],
     generation: () => state.status.generation,
     isBusy: () => state.mutation, setBusy: setMutation,
     refreshFiles: () => queueMicrotask(() => { refreshFileDisplays(); scheduleFileInformation(); }),
@@ -1416,6 +1425,21 @@ async function sourcePacksPage(route, signal) {
     rememberId: id => history.replaceState(null, '', routeHref('packs', { id })),
     reload: renderRoute,
   }, route, signal);
+}
+
+async function catalogPage(route, signal) {
+  const views = await import('./catalog-index.js');
+  if (!state.catalog) rememberCatalog(await api('kb/catalog', {}, { signal }));
+  const host = {
+    api, element, heading, link, pagination,
+    file: (path, line = 1) => sourceLink(path, line, path, null, { compact: false }),
+    assertions: (items, options) => annotateCards(
+      colorAssertionBalls(assertionView.groups(items, options), items),
+      items.filter(item => item.loaded), options),
+  };
+  const render = route.name === 'definitions' ? views.catalogTermPage
+    : route.name === 'catalog-assertion' ? views.catalogAssertionPage : views.catalogSearchPage;
+  return render(host, route, signal);
 }
 
 async function sourcesPage(_route, signal) {
@@ -2009,6 +2033,7 @@ function applicationReloadControls() {
 
 const pages = {
   overview, search: searchPage, predicates: searchPage, term: termPage, nats: natsPage,
+  catalog: catalogPage, definitions: catalogPage, 'catalog-assertion': catalogPage,
   microtheory: microtheoryPage, microtheories: microtheoriesPage,
   assertion: assertionPage, source: sourcePage, sources: sourcesPage, packs: sourcePacksPage,
   query: queryPage, mappings: mappingsPage, settings: settingsPage,

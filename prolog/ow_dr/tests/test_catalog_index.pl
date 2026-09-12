@@ -103,6 +103,16 @@ test(warm_reuse_stable_and_empty_source,
     compiled('empty.krf',"; only a comment\n",Source),
     source_catalog(Source,First),source_catalog(Source,Second),
     assertion(First==Second),assertion(First.sentences==[]),assertion(First.terms==[]).
+test(raw_source_sha_is_separate_from_legacy_high_bit_fingerprint,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    kb_root(KBs),directory_file_path(KBs,'latin.krf',Source),
+    setup_call_cleanup(open(Source,write,Out,[type(binary)]),
+      maplist(put_byte(Out),[59,233,10,40,112,32,97,41,10]),close(Out)),
+    repo_root(Root),directory_file_path(Root,state,State),
+    kb_compile:compile_source(Source,[state_dir(State),diagnostics(false)],Compiled),
+    assertion(Compiled.status==generated),source_catalog(Source,Data),
+    crypto_file_hash(Source,Raw,[algorithm(sha256),encoding(octet)]),
+    assertion(Data.rawSourceHash==Raw),assertion(Data.identity.sourceHash\==Raw).
 test(changed_source_rejected,
      [setup(fixture(S)),cleanup(cleanup(S)),throws(error(catalog_stale(compiler_identity),_))]) :-
     compiled('a.krf',"(p a)\n",Source),source_catalog(Source,_),

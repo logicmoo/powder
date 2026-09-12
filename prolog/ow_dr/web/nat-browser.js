@@ -83,6 +83,7 @@ function renderNatRows({ element: el, link }, items) {
     renderExpression(item.expression),
     el('div', { className: 'nat-row-details' },
       link('Term properties and references', 'term', { term: item.identity, view: 'references' }),
+      link('Definitional Info · all files', 'definitions', { term: item.identity }),
       item.constructor.key && link('Same constructor', 'nats', { constructor: item.constructor.key }),
       el('span', { className: 'muted' }, `${item.count} assertion occurrences; reification ${item.representation.status}`)),
     el('div', { className: 'nat-type-labels' }, (item.categories ?? []).map(category =>

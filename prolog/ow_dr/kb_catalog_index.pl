@@ -18,6 +18,7 @@
 :- use_module(library(filesex)).
 :- use_module(library(lists)).
 :- use_module(library(pairs)).
+:- use_module(library(thread)).
 :- dynamic loaded_catalog/3.
 
 /** <module> Persistent catalog of compact per-source semantic locators.
@@ -46,8 +47,13 @@ refresh_catalog(Selection,Report) :-
     setup_call_cleanup(true,refresh_locked(Expected,Absolute,File,Progress,Report),kb_cache:release_lock(Lock)).
 refresh_locked(Expected,Sources,File,Progress,Report) :-
     statistics(walltime,[Start,_]),length(Expected,Total),empty_assoc(Empty),
+    kb_compile:implementation_hash(Implementation),
+    flag(powder_catalog_completed,_,0),
     write_progress(Progress,json{phase:catalog,completed:0,total:Total,expected:Expected}),
-    foldl(refresh_one(Progress,Start,Total),Sources,work([],Empty,0),work(Reversed,Terms,Completed)),
+    maplist(refresh_task(Implementation,Progress,Start,Total),Sources,Results,Goals),
+    current_prolog_flag(stack_limit,StackLimit),
+    (Goals==[]->true;concurrent(4,Goals,[stack_limit(StackLimit)])),
+    foldl(merge_source,Results,work([],Empty,0),work(Reversed,Terms,Completed)),
     reverse(Reversed,Files),findall(P,(member(F,Files),P=F.path),Covered),
     findall(json{path:P,status:pending,message:"Not included in this refresh."},
       (member(P,Expected),\+memberchk(P,Covered)),Pending),
@@ -61,17 +67,28 @@ refresh_locked(Expected,Sources,File,Progress,Report) :-
     Report=Coverage.put(json{completed:Completed,terms:UniqueTerms,seconds:Seconds}),
     write_progress(Progress,Report).
 
-refresh_one(Progress,Start,Total,Source,work(Files,T0,N),work([Result|Files],T,N1)) :-
+refresh_task(Implementation,Progress,Start,Total,Source,Result,
+    kb_catalog_index:refresh_source(Implementation,Progress,Start,Total,Source,Result)).
+refresh_source(Implementation,Progress,Start,Total,Source,result(Result,Terms)) :-
     public_path(Source,Public),
-    catch((once(source_catalog(Source,Data))->source_summary(Public,Data,Result),
-           foldl(add_global(Public),Data.terms,T0,T)
-           ;throw(error(catalog_source_index_failed(Public),_))),
-      Error,(error_source(Public,Error,Result),T=T0)),
-    N1 is N+1,statistics(walltime,[Now,_]),Elapsed is (Now-Start)/1000,
-    write_progress(Progress,json{phase:catalog,completed:N1,total:Total,path:Public,
-      status:Result.status,elapsed:Elapsed}),
+    source_progress(Progress,Start,Total,Public,indexing,false),
+    catch((once(kb_compile:with_prepared_source(Source,Implementation,
+            kb_catalog_index:source_catalog(Source,Data)))->source_summary(Public,Data,Result),
+          findall(t(K,S,O,C,D,R,[]),member(t(K,S,O,C,D,R,_),Data.terms),Terms)
+          ;throw(error(catalog_source_index_failed(Public),_))),
+      Error,(error_source(Public,Error,Result),Terms=[])),
+    source_progress(Progress,Start,Total,Public,Result.status,true),
     (Result.status==fresh->true;
      format(user_error,'CATALOG ~w: ~w: ~w~n',[Result.status,Public,Result.message]),flush_output(user_error)).
+source_progress(Progress,Start,Total,Path,Status,Completed) :-
+    with_mutex(powder_catalog_progress,
+      ((Completed==true->flag(powder_catalog_completed,Before,Before+1),N is Before+1
+       ;flag(powder_catalog_completed,N,N)),
+      statistics(walltime,[Now,_]),Elapsed is (Now-Start)/1000,
+      write_progress(Progress,json{phase:catalog,completed:N,total:Total,path:Path,
+        status:Status,elapsed:Elapsed,workers:4}))).
+merge_source(result(Result,Entries),work(Files,T0,N),work([Result|Files],T,N1)) :-
+    foldl(add_global(Result.path),Entries,T0,T),N1 is N+1.
 
 error_source(Path,error(catalog_source_busy,_),json{path:Path,status:busy,message:"Compiler owns this source."}) :- !.
 error_source(Path,error(catalog_stale(Reason),_),json{path:Path,status:stale,message:Text}) :- !,
@@ -90,6 +107,7 @@ source_catalog_locked(Source,Normal,IndexFile,Data) :-
     (kb_compile:identity_matches(CompilerIdentity,Recorded)->true;
      throw(error(catalog_stale(compiler_identity),_))),
     SourceHash=CompilerIdentity.sourceHash,Size=CompilerIdentity.sizeBytes,time_file(Source,Modified),
+    crypto_file_hash(Source,RawSourceHash,[algorithm(sha256),encoding(octet)]),
     crypto_file_hash(Normal,NormalHash,[algorithm(sha256)]),
     crypto_file_hash(IndexFile,IndexHash,[algorithm(sha256)]),
     source_path(Source,Cache),schema(Schema),
@@ -97,21 +115,21 @@ source_catalog_locked(Source,Normal,IndexFile,Data) :-
       compiler:CompilerIdentity,indexHash:IndexHash,normalizedDigest:Recorded.normalizedDigest},
     file_stamp(Normal,NormalStamp),
     (saved_source(Cache,Identity,Saved)->
-      Data=Saved.put(json{sizeBytes:Size,modified:Modified,normalizedStamp:NormalStamp})
-    ;kb_index:read_index(IndexFile,IndexHeader,Index),
-     kb_cache:read_cache(Normal,Header,Records),
-     (kb_compile:same_absolute_path(IndexHeader.source,Source),
-      kb_compile:identity_matches(CompilerIdentity,Header),
-      IndexHeader.sourceHash==SourceHash,Header.normalizedDigest==IndexHeader.normalizedDigest->true;
+      Data=Saved.put(json{sizeBytes:Size,modified:Modified,normalizedStamp:NormalStamp,
+        rawSourceHash:RawSourceHash})
+    ;kb_cache:read_cache(Normal,Header,Records),
+     (kb_compile:identity_matches(CompilerIdentity,Header),
+      Header.normalizedDigest==Recorded.normalizedDigest->true;
        throw(error(catalog_stale(companion_identity),_))),
      clause_offsets(Normal,Offsets),
      build_source_data(Source,Header,Records,Offsets,Payload),
-     verify_index_entries(Records,Index.entries),
-     Data=Payload.put(json{identity:Identity,sizeBytes:Size,modified:Modified,
+     Data=Payload.put(json{identity:Identity,sizeBytes:Size,modified:Modified,rawSourceHash:RawSourceHash,
        normalized:Normal,normalizedStamp:NormalStamp}),
      crypto_file_hash(Source,After,[algorithm(sha256)]),
      (After==SourceHash->true;throw(error(catalog_stale(source_changed_during_index),_))),
-     atomic_data(Cache,source_catalog(Data))).
+     atomic_data(Cache,source_catalog(Data))),
+    kb_cache:file_digest(Source,FinalHash),
+    (FinalHash==SourceHash->true;throw(error(catalog_stale(source_changed_during_index),_))).
 
 peek_header(File,Header) :-
     setup_call_cleanup(open(File,read,S,[encoding(utf8),newline(posix)]),
@@ -126,11 +144,6 @@ saved_source(File,Identity,Data) :-
       format(user_error,'CATALOG rebuilding invalid artifact ~w: ~w~n',[File,Message]),
       flush_output(user_error),fail)),
     Data.identity==Identity.
-verify_index_entries(Records,Entries) :-
-    findall(Id,member(record(Id,_,_),Records),RecordIds),
-    findall(Id,member(entry(Id,_,_,_,_,_),Entries),IndexIds),
-    (RecordIds==IndexIds->true;throw(error(catalog_stale(assertion_locators),_))).
-
 clause_offsets(File,Offsets) :-
     setup_call_cleanup(open(File,read,S,[encoding(utf8),newline(posix)]),
      read_offsets(S,Pairs),close(S)),keysort(Pairs,Sorted),list_to_assoc(Sorted,Offsets),
@@ -231,6 +244,7 @@ source_summary(Path,Data,Summary) :-
     length(Data.terms,Terms),
     Summary=json{path:Path,status:fresh,identity:Data.identity,cache:Cache,
       assertions:Data.assertionCount,terms:Terms,sizeBytes:Data.sizeBytes,
+      rawSourceHash:Data.rawSourceHash,
       modified:Data.modified,normalized:Data.normalized,normalizedStamp:Data.normalizedStamp}.
 source_path_from_public(Path,Cache) :- repo_root(Root),
     directory_file_path(Root,Path,Source),source_path(Source,Cache).
@@ -282,6 +296,11 @@ validate_payload(Term) :-
     (ground(Term),acyclic_term(Term),valid_payload(Term)->true;
      throw(error(invalid_catalog_payload,_))).
 valid_payload(catalog_progress(Data)) :- is_dict(Data).
+valid_payload(catalog_query(Data)) :-
+    is_dict(Data,query_catalog),Data.schema==catalog_query_v1,
+    is_assoc(Data.terms),is_assoc(Data.postings),is_assoc(Data.files),
+    is_list(Data.ranked),assoc_to_keys(Data.terms,Keys),sort(Data.ranked,Keys),
+    same_length(Keys,Data.ranked),is_dict(Data.coverage).
 valid_payload(catalog_snapshot(Data)) :-
     is_dict(Data,catalog),schema(Data.schema),is_list(Data.expected),
     maplist(atom,Data.expected),is_list(Data.files),is_list(Data.terms),
@@ -354,6 +373,9 @@ current_source(File) :-
     repo_root(Root),directory_file_path(Root,File.path,Path),
     crypto_file_hash(Path,Hash,[algorithm(sha256)]),
     (Hash==File.identity.sourceHash->true;throw(error(catalog_stale(File.path),_))),
+    (get_dict(rawSourceHash,File,ExpectedRaw)->
+       crypto_file_hash(Path,RawHash,[algorithm(sha256),encoding(octet)]),
+       (RawHash==ExpectedRaw->true;throw(error(catalog_stale(File.path),_)));true),
     crypto_file_hash(File.normalized,NormalHash,[algorithm(sha256)]),
     (NormalHash==File.identity.normalizedHash->true;throw(error(catalog_stale(normalized(File.path)),_))).
 

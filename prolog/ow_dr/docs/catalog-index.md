@@ -7,7 +7,9 @@ the active knowledge base. First run the explicit compiler/index job, then:
 swipl --stack-limit=8g prolog\ow_dr\index_catalog.pl -- --all
 ```
 
-This command does not compile, repair or load sources. Missing/stale companions,
+This command does not compile, repair or load sources. Four bounded workers
+enrich sources; each holds only its current source lock. They share one serialized
+progress publisher and inherit the CLI's stack limit. Missing/stale companions,
 active compiler ownership and malformed artifacts appear as individual failures
 or deferred files. Other files continue. Exit 0 means the complete discovered
 eligible set was indexed; exit 1 means incomplete coverage or failure. A subset
@@ -32,8 +34,17 @@ serializes catalog refreshes; another refresh receives an explicit busy error.
 The source identity binds original path and SHA-256, current compiler/options/
 mapping/MT policy, semantic-index bytes, normalized bytes and catalog schema.
 Identical content at different paths cannot borrow assertion IDs.
-Existing compiler/index validation is reused; headers are parsed as data,
-never consulted. Corrupt catalog artifacts are diagnosed before rebuilding.
+`rawSourceHash` is SHA-256 over actual original bytes (`encoding(octet)`).
+It is distinct from the compiler's historical `sourceHash`: SWI's default
+file-hash encoding re-encodes high-bit octet characters as UTF-8. That legacy
+fingerprint is retained for companion compatibility, not mislabeled as raw SHA.
+No original files or compiler identity ledgers are rewritten to add the raw hash.
+The normalized cache's complete structural/digest validation is reused; its
+guarded clauses and metadata are the authority for occurrence counts and IDs.
+The older distinct-constant index is fingerprinted but its large, redundant
+term table is not parsed or used as evidence. This avoids validating unused data
+again while building a richer index. Headers are parsed as data, never consulted.
+Corrupt catalog artifacts are diagnosed before rebuilding.
 
 Compact source data retains:
 
@@ -69,3 +80,29 @@ its name. Type declarations and static rule heads are not proof of executable
 implementation. MeTTa equations remain inert. Additional cross-file taxonomy
 and provider resolution must report their own evidence/coverage rather than
 silently treating these source-local claims as complete inference.
+
+## All-file query projection
+
+After enriching the source catalog, publish the direct-seek query projection:
+
+```powershell
+swipl --stack-limit=8g prolog\ow_dr\index_catalog.pl -- --query
+```
+
+This builds `tmp\catalog\query.data` and versioned, immutable per-source posting
+files. Each term posting has its own validated digest and exact source/MT/ID/
+position locators. Requests seek the selected term rather than parsing entire
+per-source occurrence indexes. Old projections remain usable during publication.
+
+`kb_catalog_schema` combines positive type and hierarchy claims with explicit
+provenance. Multiple categories are retained. MetaRelation schema predicates
+require proven relation-valued target slots; membership alone does not imply
+argument 1. Known schema-role helpers remain available where ontology evidence
+is absent. Type classification is catalog taxonomy, not cross-MT entailment.
+
+The read-only `/api/catalog/status`, `/search`, `/term` and `/assertion`
+endpoints report snapshot coverage and active-generation membership separately.
+Term queries accept `scope=all|loaded|unloaded`, `facet=definition|semantic|context`,
+source/MT filters and pagination. Counts apply before pagination; repeated
+positions and distinct assertion counts are separate. Visible assertion details
+recheck authorized original paths and source/normalized hashes.

@@ -126,8 +126,10 @@ export function termContextModel(route, data, term) {
     sections: [
       { title: 'Index', items: [{ label: 'Index', href: href({}) }, { label: 'Viewpoint Filters', href: href({ viewpoint: 1 }) }] },
       { title: 'Term information', items: sectionLabels.slice(0, 4).map(([key, label]) => ({
-        label, count: navigation.sections.find(section => section.key === key)?.count,
-        href: href({ section: key }), selected: route.params.get('section') === key,
+        label: key === 'definition' ? `${label} · all files` : label,
+        count: key === 'definition' ? undefined : navigation.sections.find(section => section.key === key)?.count,
+        href: key === 'definition' ? routeHref('definitions', { term }) : href({ section: key }),
+        selected: route.params.get('section') === key,
       })) },
       { title: 'Asserted knowledge', items: sectionLabels.slice(4).map(([key, label]) => ({
         label, count: navigation.sections.find(section => section.key === key)?.count,

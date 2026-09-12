@@ -50,6 +50,7 @@ export async function renderTermCategories(host, route, signal) {
   } }, 'Reset category selection');
   choices.append(reset);
   const panel = el('div', {}, heading('Term search', 'Every matching category is retained. These are loaded-data roles and type evidence, not invented local implementations.'),
+    link('Search all indexed files', 'catalog', { q }, 'button secondary'),
     search, choices,
     el('p', { className: 'muted' }, `${data.total} distinct matching identities; ${data.displayedDistinctTotal} shown across category pages. Group counts overlap and must not be summed. Coverage: loaded/indexed active generation only.`));
   if (!groups.length) panel.append(el('p', { className: 'empty-state' }, 'No categories selected. Select a category to show results.'));
@@ -66,7 +67,8 @@ export async function renderTermCategories(host, route, signal) {
         const name = item.atomicity === 'non_atomic' ? renderExpression(item.expression)
           : link(item.label ?? symbolLabel(item.identity), 'term', { term: item.identity });
         return el('tr', {},
-          el('td', {}, name, item.mt && el('div', {}, link('Microtheory view', 'microtheory', { mt: item.mt }), ` · ${item.contextAssertionCount} context assertions`)),
+          el('td', {}, name, el('div', {}, link('Definitional Info · all files', 'definitions', { term: item.identity })),
+            item.mt && el('div', {}, link('Microtheory view', 'microtheory', { mt: item.mt }), ` · ${item.contextAssertionCount} context assertions`)),
           el('td', {}, String(item.semanticAssertionCount ?? item.count ?? 0)), el('td', {}, evidence));
       });
       block.append(el('table', { className: 'data-table' },
