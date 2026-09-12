@@ -46,7 +46,8 @@ admit_locked(Token,Capability,Principal) :-
     retract(context(Token,Principal,Calls,Mutations)),Next is Calls+1,
     assertz(context(Token,Principal,Next,Mutations)).
 authorize(Principal,C) :-
-    (memberchk(C.permission,Principal.permissions)->true;reject(permission_denied,json{permission:C.permission})),
+    forall(member(Permission,C.permissions),
+      (memberchk(Permission,Principal.permissions)->true;reject(permission_denied,json{permission:Permission}))),
     kb_kee_registry:effect_closure(C.name,Effects),
     forall(member(Effect,Effects),
       (memberchk(Effect,Principal.effects)->true;reject(effect_denied,json{effect:Effect}))),

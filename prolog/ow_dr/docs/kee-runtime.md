@@ -1,6 +1,6 @@
 # Shared typed KEE backend
 
-## Implemented stage: authorized reads and bounded inference
+## Implemented stages: reads, inference, and durable application TODOs
 
 `kb_kee.pl` is a local application backend, not an LLM caller, HTTP route,
 coding-agent interface, or permission grant. The generated
@@ -16,10 +16,15 @@ snapshots, existing safe dispatch, and normal proof/observation results. They
 cannot execute arbitrary Prolog, shell, debug, filesystem or network operations.
 Telemetry is an explicitly declared query effect, not a managed KB mutation.
 
-Managed editing, durable TODOs, audit/undo, native annotation writes, dependency
-planning, model operations and symbolic execution are not yet advertised as
-callable tools at this stage. Discovery reports their unavailable categories
-and reasons. Both load modes are unavailable: true assertion-subset loading
+The same registry now also exposes persistent application TODO CRUD, ledger
+status, authorized audit, conflict-safe undo and redo. Authorized changes are
+automatic, not pending an additional approval flag. See
+[the ledger contract](kee-ledger.md) for persistence and exact write semantics.
+
+Managed **KB assertion** editing, native annotation writes, provider dependency
+planning, model operations and symbolic execution are not advertised as callable
+tools. Discovery reports their unavailable categories and reasons. Both load
+modes are unavailable: true assertion-subset loading
 is absent, and whole-file loading has no integrated per-invocation real-user
 A/B choice capability. A tool argument such as `approved:true` cannot grant it.
 
@@ -107,9 +112,9 @@ existing catalog/runtime errors remain typed errors, never an invented empty
 result. Host routes should translate these to structured tool errors.
 No HTTP path is installed or guessed by this stage.
 
-Read call IDs identify host exchanges but are not yet durable receipts. No
-mutation is advertised until its durable idempotence/audit/undo transaction
-exists. Time and UTF-8 result-byte budgets apply. Expired/revoked contexts and
+Read call IDs identify host exchanges. Mutation call IDs are durable receipts
+in the managed ledger: identical retries do not repeat committed changes.
+Time and UTF-8 result-byte budgets apply. Expired/revoked contexts and
 missing grants fail closed. Tool output remains untrusted data; returning local
 KB data does not authorize exporting it to any model or network.
 
@@ -119,7 +124,7 @@ Run only the dedicated unit so the reused catalog fixture definitions do not
 run their separate suite:
 
 ```powershell
-swipl -q -s tests\test_kee.pl -g "run_tests(kee)" -t halt
+swipl -q -s tests\test_kee_ledger.pl -g "run_tests([kee,kee_ledger])" -t halt
 ```
 
 Tests use unique project-local fixture roots, actual compiled/indexed fixture

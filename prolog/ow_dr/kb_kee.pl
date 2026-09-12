@@ -8,6 +8,7 @@
 :- use_module(kb_terms,[context_from_key/2]).
 :- use_module(kb_activity,[]).
 :- use_module(kb_cache,[]).
+:- use_module(kb_kee_todos,[]).
 :- use_module(library(time)).
 
 registry(Token,Reply) :-
@@ -17,7 +18,6 @@ registry(Token,Reply) :-
     Reply=json{registry:powder_kee,schemaVersion:1,revision:Revision,tools:Tools,
       unavailable:[
         json{capability:managed_knowledge_editing,reason:atomic_managed_store_bridge_not_implemented},
-        json{capability:durable_todos,reason:managed_ledger_domain_not_implemented},
         json{capability:annotation_mutation,reason:atomic_existing_store_audit_bridge_not_implemented},
         json{capability:assertion_subset_load,reason:true_subset_backend_not_implemented},
         json{capability:provider_file_load,reason:per_invocation_host_user_choice_bridge_required},
@@ -29,11 +29,12 @@ public_capability(Principal,C,Public) :-
        (var(Denied)->Available=true,Why=null;Available=false,Why=Denied)
     ;Available=false,Why=json{reason:not_authorized}),
     kb_kee_registry:effect_closure(C.name,Effects),
+    (C.mutation==true->Cancellation=before_durable_commit;Cancellation=bounded_read),
     Public=json{name:C.name,schemaVersion:C.schemaVersion,description:C.description,
-      inputSchema:C.inputSchema,permission:C.permission,scope:C.scope,effects:Effects,
+      inputSchema:C.inputSchema,permission:C.permission,permissions:C.permissions,scope:C.scope,effects:Effects,
       dependencies:C.dependencies,mutation:C.mutation,symbolic:C.symbolic,
       available:Available,unavailableReason:Why,
-      cancellation:bounded_read,maximumSeconds:C.seconds}.
+      cancellation:Cancellation,maximumSeconds:C.seconds}.
 invoke_json(Token,JSON,Reply) :- decode_object(JSON,Request),invoke(Token,Request,Reply).
 invoke(Token,Input,Reply) :-
     validate(obj([req(tool,str(1,64)),req(schemaVersion,int(1,1)),
@@ -47,16 +48,23 @@ invoke_checked(Token,Input,Reply) :-
     validate(C.inputSpec,Input.arguments,Arguments),
     kb_kee_auth:admit(Token,C,Principal),check_scope(C.scope,Principal,Arguments),
     Seconds is min(C.seconds,Principal.budgets.seconds),
-    call_with_time_limit(Seconds,kb_kee:execute(C.operation,Arguments,Result)),
-    kb_kee_auth:principal(Token,Current),
-    (Current==Principal->true;reject(context_changed,json{})),
+    call_with_time_limit(Seconds,kb_kee:run_tool(C,Token,Principal,Input,Arguments,Result)),
+    (C.mutation==true->true;
+      kb_kee_auth:principal(Token,Current),
+      (Current==Principal->true;reject(context_changed,json{}))),
     kb_kee_registry:registry_revision(Registry),
     Reply=json{ok:true,tool:Name,schemaVersion:1,callId:Input.callId,
       registryRevision:Registry,result:Result},
     json_size(Reply,Size),
     (Size=<Principal.budgets.resultBytes->true;reject(result_budget,json{maximum:Principal.budgets.resultBytes})).
 check_scope(read_mt,Principal,Arguments) :- !,kb_kee_auth:authorize_mt(Principal,read,Arguments.mt).
+check_scope(write_mt,Principal,Arguments) :- !,kb_kee_auth:authorize_mt(Principal,write,Arguments.mt).
 check_scope(_,_,_).
+run_tool(C,Token,P,Input,Args,Result) :-
+    (C.domain==application_todo->
+      Request=json{tool:Input.tool,schemaVersion:Input.schemaVersion,callId:Input.callId,arguments:Args},
+      kb_kee_todos:run(C.operation,Token,P,Request,Args,Result)
+    ;execute(C.operation,Args,Result)).
 
 option(Args,Key,Default,Value) :- (get_dict(Key,Args,Value)->true;Value=Default).
 catalog_options(Args,Facet,Options) :-

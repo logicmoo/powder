@@ -1,6 +1,7 @@
 :- module(kb_kee_registry,[capability/2,capabilities/1,effect_closure/2,registry_revision/1,write_reference/1]).
 :- use_module(kb_kee_schema).
 :- use_module(kb_cache,[]).
+:- use_module(kb_kee_todo_schema,[]).
 :- use_module(library(lists)).
 :- use_module(library(http/json)).
 
@@ -11,7 +12,17 @@ tool(kee_occurrences,occurrences,'Read semantic occurrences in one explicit MT',
 tool(kee_catalog_assertion,catalog_assertion,'Read one source-verified catalog assertion',[knowledge_read],read_mt).
 tool(kee_assertion,assertion,'Read one loaded assertion at an expected generation',[knowledge_read],read_mt).
 tool(kee_query,query,'Execute bounded KB inference in one explicit MT',[knowledge_read,query,telemetry],read_mt).
+tool(kee_ledger_status,ledger_status,'Inspect managed application ledger revision and counts',[application_read],all_metadata).
+tool(kee_todo_list,todo_list,'List persistent application TODOs in one scope',[application_read],read_mt).
+tool(kee_todo_get,todo_get,'Inspect one persistent application TODO',[application_read],resource_read).
+tool(kee_todo_create,todo_create,'Create an audited application TODO automatically',[application_write],write_mt).
+tool(kee_todo_update,todo_update,'Replace an application TODO at an expected revision',[application_write],write_mt).
+tool(kee_todo_delete,todo_delete,'Tombstone an application TODO without deleting its audit history',[application_write],resource_write).
+tool(kee_audit,ledger_audit,'Read MT-authorized managed application changesets',[application_read],read_mt).
+tool(kee_undo,ledger_undo,'Undo a TODO changeset only when affected versions still match',[application_write],resource_write).
+tool(kee_redo,ledger_redo,'Redo an undo changeset only when affected versions still match',[application_write],resource_write).
 
+input(Operation,Spec) :- kb_kee_todo_schema:input_spec(Operation,Spec),!.
 input(catalog_status,obj([])).
 input(catalog_search,obj([req(q,str(0,256)),opt(scope,enum([all,loaded,unloaded])),
     opt(group,enum([all,predicates,functions,collections,microtheories,external_symbols,
@@ -29,11 +40,23 @@ term_input(obj([req(term,str(1,4096)),req(mt,str(1,4096)),
 
 capability(Name,Capability) :-
     tool(Name,Operation,Description,Effects,Scope),input(Operation,Spec),
-    (Operation==query->Permission='knowledge.query';Permission='knowledge.read'),
+    requirements(Operation,Permission,Extra,Mutation,Domain),
     json_schema(Spec,Schema),
     Capability=capability{name:Name,schemaVersion:1,operation:Operation,description:Description,
-      inputSpec:Spec,inputSchema:Schema,permission:Permission,effects:Effects,dependencies:[],
-      scope:Scope,mutation:false,symbolic:true,seconds:30}.
+      inputSpec:Spec,inputSchema:Schema,permission:Permission,permissions:[Permission|Extra],
+      effects:Effects,dependencies:[],domain:Domain,
+      scope:Scope,mutation:Mutation,symbolic:true,seconds:30}.
+requirements(Operation,Permission,Extra,Mutation,application_todo) :-
+    kb_kee_todo_schema:input_spec(Operation,_),!,
+    (memberchk(Operation,[todo_create,todo_update,todo_delete])->
+      Permission='todo.write',Extra=[],Mutation=true
+    ;memberchk(Operation,[ledger_undo,ledger_redo])->
+      Permission='changeset.undo',Extra=['todo.write'],Mutation=true
+    ;memberchk(Operation,[ledger_status,ledger_audit])->
+      Permission='changeset.read',Extra=[],Mutation=false
+    ;Permission='todo.read',Extra=[],Mutation=false).
+requirements(query,'knowledge.query',[],false,knowledge) :- !.
+requirements(_,'knowledge.read',[],false,knowledge).
 capabilities(Capabilities) :-
     findall(C,capability(_,C),Capabilities),
     findall(N,(member(C,Capabilities),get_dict(name,C,N)),Names),
@@ -54,7 +77,7 @@ write_reference(Path) :-
        forall(member(C,Capabilities),write_capability_schema(S,C))),
       close(S)).
 write_capability_line(S,C) :-
-    format(S,'| `~w` | ~d | `~w` | `~w` | `~w` |~n',[C.name,C.schemaVersion,C.permission,C.scope,C.effects]).
+    format(S,'| `~w` | ~d | `~w` | `~w` | `~w` |~n',[C.name,C.schemaVersion,C.permissions,C.scope,C.effects]).
 write_capability_schema(S,C) :-
     format(S,'~n## `~w`~n~n~w.~n~n```json~n',[C.name,C.description]),
     json_write_dict(S,C.inputSchema,[width(100)]),format(S,'~n```~n',[]).

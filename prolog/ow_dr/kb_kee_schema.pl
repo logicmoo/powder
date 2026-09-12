@@ -1,4 +1,4 @@
-:- module(kb_kee_schema,[validate/3,json_schema/2,decode_object/2,json_size/2,reject/2]).
+:- module(kb_kee_schema,[validate/3,validate_stored/2,json_schema/2,decode_object/2,json_size/2,reject/2]).
 :- use_module(library(http/json)).
 :- use_module(library(error)).
 :- use_module(library(lists)).
@@ -14,6 +14,9 @@ byte_count(Code,N0,N) :-
     (Code<128->Bytes=1;Code<2048->Bytes=2;Code<65536->Bytes=3;Bytes=4),N is N0+Bytes.
 
 validate(Spec,Input,Output) :- checked(Spec,Input,"$",Output).
+validate_stored(Spec,Value) :-
+    atom_json_dict(Text,Value,[width(0)]),atom_json_dict(Text,JSON,[]),
+    validate(Spec,JSON,Canonical),Canonical==Value.
 bad(Path,Reason) :-
     format(string(Text),'~q',[Reason]),reject(invalid_arguments,json{path:Path,reason:Text}).
 checked(object,Input,Path,Input) :- !,
