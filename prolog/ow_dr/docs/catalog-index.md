@@ -137,6 +137,22 @@ the catalog; removed directories cannot be reintroduced as global providers
 from retained artifacts. The CLI reports measured projection time, and progress
 retains its known source denominator through the postings phase.
 
+Exact term and assertion requests use `query.directory`: a small manifest,
+256 immutable key buckets and compact source descriptors. These reference the
+same term entries and per-source postings, not a second semantic index. A request
+reads one bucket rather than the monolithic query model. Query publication builds
+the directory automatically; an existing complete projection can acquire this
+access path without rebuilding sources or postings:
+
+```powershell
+swipl --stack-limit=8g prolog\ow_dr\index_catalog.pl -- --directory
+```
+
+Status reports `lookupDirectory` separately from projection and provider coverage.
+Its native owner lock, progress and atomic manifest publication preserve the old
+directory on failure. Exact lookups reject a directory whose input projection
+has changed. Broad search still uses the larger query model.
+
 `kb_catalog_schema` combines positive type and hierarchy claims with explicit
 provenance. Multiple categories are retained. MetaRelation schema predicates
 require proven relation-valued target slots; membership alone does not imply
@@ -190,3 +206,28 @@ open failures, then explicitly reports an unavailable observation rather than
 claiming a saved worker is alive. Once the owner lock is gone, worker states are
 only unverified last reports. Status caches the small validated coverage summary,
 not a copy of the complete term-to-file table for every polling request.
+
+## Read-only live verification
+
+The opt-in Node test checks real unloaded definitions, distinct/occurrence counts,
+pagination, source-ID details, MT context, positions, linked expressions and desktop/
+mobile layout in an isolated browser. It verifies that live generation, files and
+counts are unchanged. Basic mode does not read the monolithic broad-search model:
+
+```powershell
+$env:OPENWORLD_CATALOG_TEST_URL='http://localhost:3050'
+$env:OPENWORLD_CATALOG_EXPECTED_FILES='978'
+$env:OPENWORLD_CATALOG_BASIC_ONLY='1'
+$env:LOGOS_CHROME='C:\Program Files\Google\Chrome\Application\chrome.exe'
+node --test prolog\ow_dr\tests\catalog-index-ui.test.mjs
+```
+
+The current 978-file publication passed all seven tests: 1,007,236 indexed terms;
+`resultIsa` had 101 defining assertions, including 79 unloaded assertions.
+Provider enrichment remained pending. Under concurrent live-service load the
+measured definition requests took 13.5 seconds cold / 14.5 seconds warm, and
+isolated browser startup took 49.5 seconds. A separate-process exact request took
+3.843 seconds, including 2.258 seconds for full source/normalized hash validation.
+These are working correctness results, **not** a subsecond performance claim.
+Per-request hash cost, broad-search cold reads, incremental subset retention and
+compact inspectable type-support links remain limitations.

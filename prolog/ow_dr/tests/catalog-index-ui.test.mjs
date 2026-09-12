@@ -46,13 +46,15 @@ test('catalog MT navigation includes unloaded context assertions with the select
 });
 
 test('published all-file catalog serves real unloaded evidence without changing the live generation', {
-  skip: !process.env.OPENWORLD_CATALOG_TEST_URL, timeout: 240000,
+  skip: !process.env.OPENWORLD_CATALOG_TEST_URL, timeout: 360000,
 }, async t => {
   const base = new URL(APP_BASE, process.env.OPENWORLD_CATALOG_TEST_URL);
+  const basicOnly = process.env.OPENWORLD_CATALOG_BASIC_ONLY === '1';
   const timings = {};
+  t.after(() => t.diagnostic(JSON.stringify({ basicOnly, timings })));
   const read = async (path, label = path) => {
     const started = performance.now();
-    const response = await fetch(new URL(`api/${path}`, base));
+    const response = await fetch(new URL(`api/${path}`, base), { signal: t.signal });
     const data = await response.json();
     timings[label] = Math.round((performance.now() - started) * 10) / 10;
     assert.equal(response.status, 200, JSON.stringify(data));
@@ -69,16 +71,20 @@ test('published all-file catalog serves real unloaded evidence without changing 
   await read('catalog/status', 'catalogStatusWarmMs');
   const term = process.env.OPENWORLD_CATALOG_TEST_TERM ?? 'x_resultIsa';
   const searchPath = `catalog/search?q=${encodeURIComponent(term)}&limit=100`;
-  const search = await read(searchPath, 'searchColdMs');
-  await read(searchPath, 'searchWarmMs');
-  const found = search.items.find(item => item.term === term);
-  assert.ok(found, `Indexed ${term}`);
-  assert.ok(found.typeEntries.length, 'Recorded types are inspectable');
+  let found;
+  if (!basicOnly) {
+    const search = await read(searchPath, 'searchColdMs');
+    await read(searchPath, 'searchWarmMs');
+    found = search.items.find(item => item.term === term);
+    assert.ok(found, `Indexed ${term}`);
+    assert.ok(found.typeEntries.length, 'Recorded types are inspectable');
+  }
   const path = `catalog/term?term=${encodeURIComponent(term)}&limit=2`;
   const all = await read(`${path}&scope=all`, 'definitionsAllMs');
+  await read(`${path}&scope=all`, 'definitionsWarmMs');
   const loaded = await read(`${path}&scope=loaded`, 'definitionsLoadedMs');
   const unloaded = await read(`${path}&scope=unloaded`, 'definitionsUnloadedMs');
-  assert.equal(all.total, found.definitions);
+  if (found) assert.equal(all.total, found.definitions);
   assert.equal(all.total, loaded.total + unloaded.total);
   assert.equal(all.occurrences, loaded.occurrences + unloaded.occurrences);
   assert.ok(unloaded.total > 2, 'Unloaded definition evidence spans pages');
@@ -95,17 +101,34 @@ test('published all-file catalog serves real unloaded evidence without changing 
   assert.ok(mt.items.length && mt.items.every(entry => entry.mt === item.mt && !entry.loaded));
   if (process.env.LOGOS_CHROME) {
     const browser = await launchChromium(process.env.LOGOS_CHROME);
+    const waitForPage = async title => {
+      const deadline = performance.now() + 90000;
+      while (performance.now() < deadline) {
+        t.signal.throwIfAborted();
+        if (await browser.evaluate(`document.querySelector("h1")?.textContent === ${JSON.stringify(title)} && document.querySelector("main").getAttribute("aria-busy") === "false"`)) return;
+        if (browser.exceptions.length) throw new Error(JSON.stringify(browser.exceptions));
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      throw new Error(`Catalog page did not settle: ${await browser.evaluate('document.querySelector("main").innerText')}`);
+    };
     try {
+      const browserStarted = performance.now();
       await browser.send('Emulation.setDeviceMetricsOverride', { width: 1360, height: 950, deviceScaleFactor: 1, mobile: false });
-      await browser.send('Page.navigate', { url: new URL(`#/catalog?q=${encodeURIComponent(term)}`, base).href });
-      await browser.wait('document.querySelector("h1")?.textContent === "All-file term index" && document.querySelector("main").getAttribute("aria-busy") === "false"');
-      assert.ok(await browser.evaluate('document.querySelector(".data-table tbody a") !== null'));
-      await browser.route(`#/definitions?${new URLSearchParams({ term, scope: 'unloaded', limit: '2' })}`);
+      const initial = basicOnly ? `#/definitions?${new URLSearchParams({ term, scope: 'unloaded', limit: '2' })}`
+        : `#/catalog?q=${encodeURIComponent(term)}`;
+      await browser.send('Page.navigate', { url: new URL(initial, base).href });
+      const title = basicOnly ? 'Definitional Info' : 'All-file term index';
+      await waitForPage(title);
+      timings.browserStartupMs = Math.round(performance.now() - browserStarted);
+      if (!basicOnly) assert.ok(await browser.evaluate('document.querySelector(".data-table tbody a") !== null'));
+      await browser.evaluate(`location.hash = ${JSON.stringify(`#/definitions?${new URLSearchParams({ term, scope: 'unloaded', limit: '2' })}`)}`);
+      await waitForPage('Definitional Info');
       assert.ok(await browser.evaluate('document.querySelectorAll(".assertion-view").length === 2'));
       assert.ok(await browser.evaluate('document.querySelector(".catalog-positions summary")?.textContent.includes("Matching structural positions")'));
       assert.ok(await browser.evaluate('document.querySelector(".assertion-group-heading").textContent.includes("All indexed MT assertions")'));
       assert.match(await browser.evaluate('document.querySelector(".assertion-ball").getAttribute("href")'), /^#\/catalog-assertion/u);
-      await browser.route(catalogAssertionHref(item, term));
+      await browser.evaluate(`location.hash = ${JSON.stringify(catalogAssertionHref(item, term))}`);
+      await waitForPage('Catalog assertion');
       assert.ok(await browser.evaluate('document.querySelector(".assertion-view .expression a") !== null'));
       assert.equal(await browser.evaluate('document.querySelector("main").textContent.includes("x_cid")'), false);
       for (const [width, height, mobile] of [[1360, 950, false], [390, 844, true]]) {
@@ -121,5 +144,5 @@ test('published all-file catalog serves real unloaded evidence without changing 
   assert.equal(after.generation, before.generation);
   assert.deepEqual(after.files, before.files);
   assert.deepEqual(after.counts, before.counts);
-  t.diagnostic(JSON.stringify({ term, coverage: status.freshFiles, definitions: all.total, unloaded: unloaded.total, timings }));
+  t.diagnostic(JSON.stringify({ basicOnly, term, coverage: status.freshFiles, definitions: all.total, unloaded: unloaded.total, timings }));
 });
