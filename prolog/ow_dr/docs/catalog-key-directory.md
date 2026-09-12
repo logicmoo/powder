@@ -39,3 +39,24 @@ fails. No original sources or existing postings are deleted on cancellation.
 This fixes the exact lookup path first. Broad substring/ranked catalog search
 retains its separate existing projection path; the directory does not claim that
 all broad searches are already optimized.
+
+## Contextual loaded/unloaded file menu
+
+`GET /api/catalog/files` reads only the selected term's compact membership/count
+posting. It does not decode sentences, hash every source or read the full model.
+Responses separate distinct matching assertions, semantic positions and
+definition/declaration assertions, with current loaded membership and the
+catalog revision/coverage. They do not infer executable availability.
+
+The existing contextual left pane offers **UNLOADED occurrences**, **Loaded
+occurrences** and **All indexed scope**. Each group is lazy and file-paginated.
+Filename links keep the canonical selected term and filter the right-hand
+sentences to that source; Properties retains the shared file renderer.
+Browsing, expansion and Properties never load a KB. SourcePack navigation opens
+the explicit existing review flow rather than submitting a load.
+
+A generation-change event refreshes loaded/unloaded groups without deleting
+disk memberships. Source selection, canonical term/NAT identity, file filters
+and left-page offsets remain represented in links/history. Actual source
+identity validation happens when sentence details are opened; a snapshot file
+count is not a promise that the source cannot later change.

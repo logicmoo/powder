@@ -1,6 +1,6 @@
 :- module(kb_catalog_query,
     [build_query_catalog/1,build_query_catalog/2,catalog_query_status/1,catalog_query_search/2,
-     catalog_query_term/2,catalog_query_assertion/4,source_pack_snapshot/1]).
+     catalog_query_term/2,catalog_query_assertion/4,source_pack_snapshot/1,catalog_query_files/2]).
 :- use_module(kb_catalog_index,[]).
 :- use_module(kb_catalog_schema).
 :- use_module(kb_catalog_providers,[source_provider_extensions/4]).
@@ -266,7 +266,9 @@ model(Model) :-
     (nb_current(powder_catalog_query,cache(File,Stamp,Model))->true
     ;catalog_read_capacity,
      kb_catalog_index:read_data(File,catalog_query(Read)),
-     nb_linkval(powder_catalog_query,cache(File,Stamp,Read)),Model=Read).
+     nb_linkval(powder_catalog_query,cache(File,Stamp,Read)),Model=Read),
+    (kb_catalog_directory:current_catalog_revision(Model.revision)->true;
+      throw(error(catalog_stale(query_revision),_))).
 catalog_read_capacity :-
     current_prolog_flag(stack_limit,Current),Required is 8*1024*1024*1024,
     (Current<Required->set_prolog_flag(stack_limit,Required);true).
@@ -345,6 +347,40 @@ search_json(Model,Active,Scope,Key,entry(_,StoredGroups,Types,Roles,_,_),Row) :-
 key_expression(Key,Expression) :-
     (atom_concat('nat:',_,Key)->non_atomic_from_key(Key,Term),annotated_context_ast(Term,Expression)
     ;Expression=json{type:symbol,value:Key}).
+
+catalog_query_files(Input,Reply) :-
+    options(Input,Options),canonical_key(Options.term,Key),
+    kb_catalog_directory:lookup_term(Key,Model,_),active(Generation,Active),
+    (Options.mt==''->true;domain_error(file_summary_mt_filter,Options.mt)),
+    (get_assoc(Key,Model.postings,Posts)->true;Posts=[]),
+    findall(Source-Row,
+      (member(Post,Posts),Post=p(Source,_,Semantic,Occurrences,Definitions,Contexts),
+       relevant_posting(Options.facet,Post),loaded(Source,Active,Loaded),
+       file_matching_count(Options.facet,Post,Count),
+       Row=json{source:Source,loaded:Loaded,indexed:true,matchingAssertions:Count,
+         semanticAssertions:Semantic,semanticOccurrences:Occurrences,
+         definitionAssertions:Definitions,contextAssertions:Contexts,
+         indexFreshness:verified_snapshot,executableAvailability:not_determined}),Pairs),
+    keysort(Pairs,Sorted),pairs_values(Sorted,All),
+    include(file_scope_row(Options.scope),All,Scoped),
+    kb_catalog_index:page(Scoped,Options.offset,Options.limit,Items,Total),
+    length(All,AllCount),include(loaded_file_row,All,LoadedRows),length(LoadedRows,LoadedCount),
+    UnloadedCount is AllCount-LoadedCount,
+    findall(N,(member(R,Scoped),N=R.matchingAssertions),Counts),sum_list(Counts,Assertions),
+    provider_coverage(Model,ProviderCoverage),
+    Reply=json{term:Key,facet:Options.facet,scope:Options.scope,items:Items,total:Total,
+      counts:json{all:AllCount,loaded:LoadedCount,unloaded:UnloadedCount},
+      matchingAssertions:Assertions,offset:Options.offset,limit:Options.limit,
+      generation:Generation,revision:Model.revision,verifiedAt:Model.verifiedAt,
+      coverage:Model.coverage,providerCoverage:ProviderCoverage,
+      freshnessMeaning:"Counts come from the validated catalog snapshot; opening sentences rechecks source identity."}.
+loaded_file_row(Row) :- Row.loaded==true.
+file_scope_row(all,_).
+file_scope_row(loaded,Row) :- Row.loaded==true.
+file_scope_row(unloaded,Row) :- Row.loaded==false.
+file_matching_count(semantic,p(_,_,N,_,_,_),N).
+file_matching_count(definition,p(_,_,_,_,N,_),N).
+file_matching_count(context,p(_,_,_,_,_,N),N).
 
 catalog_query_term(Input,Reply) :-
     options(Input,Options),canonical_key(Options.term,Key),

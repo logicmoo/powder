@@ -7,6 +7,7 @@
 :- http_handler(openworld_dr(api/catalog/status),catalog_endpoint(status),[method(get)]).
 :- http_handler(openworld_dr(api/catalog/search),catalog_endpoint(search),[method(get)]).
 :- http_handler(openworld_dr(api/catalog/term),catalog_endpoint(term),[method(get)]).
+:- http_handler(openworld_dr(api/catalog/files),catalog_endpoint(files),[method(get)]).
 :- http_handler(openworld_dr(api/catalog/assertion),catalog_endpoint(assertion),[method(get)]).
 :- http_handler(openworld_dr(api/catalog/cancel),catalog_endpoint(cancel),[method(post)]).
 
@@ -42,6 +43,11 @@ catalog_action(term,Request,Reply) :-
       limit(Limit,[integer,default(25)])]),
     catalog_query_term(json{term:Term,scope:Scope,facet:Facet,source:Source,mt:Mt,
       offset:Offset,limit:Limit},Reply).
+catalog_action(files,Request,Reply) :-
+    http_parameters(Request,[term(Term,[atom]),scope(Scope,[atom,default(all)]),
+      facet(Facet,[atom,default(semantic)]),offset(Offset,[integer,default(0)]),
+      limit(Limit,[integer,default(20)])]),
+    catalog_query_files(json{term:Term,scope:Scope,facet:Facet,offset:Offset,limit:Limit},Reply).
 catalog_action(assertion,Request,Reply) :-
     http_parameters(Request,[term(Term,[atom]),source(Source,[atom]),id(Id,[atom])]),
     catalog_query_assertion(Term,Source,Id,Reply).

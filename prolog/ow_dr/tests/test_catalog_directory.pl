@@ -46,4 +46,28 @@ test(distinct_symbol_and_nat_keys_share_the_same_directory,
     Constructor.items=[C],Full.items=[F],assertion(C.id\==F.id),
     directory_status(Status),assertion(Status.available==true).
 
+test(file_summary_uses_counts_without_reading_postings_or_sources,
+     [setup(plunit_catalog_query:fixture(S)),cleanup(plunit_catalog_query:cleanup(S))]) :-
+    plunit_catalog_query:compiled('a.krf',"(onlyUnloaded a a)\n(arity onlyUnloaded 2)\n",_),
+    plunit_catalog_query:build,
+    setup_call_cleanup(
+      wrap_predicate(kb_catalog_query:read_posting(_,_,_,_),no_summary_payload,_,throw(unexpected_posting_read)),
+      (catalog_query_files(json{term:x_onlyUnloaded,scope:unloaded,facet:semantic},R),
+       assertion(R.total==1),assertion(R.counts.unloaded==1),
+       R.items=[File],assertion(File.loaded==false),
+       assertion(File.matchingAssertions==2),assertion(File.definitionAssertions==1)),
+      unwrap_predicate(kb_catalog_query:read_posting(_,_,_,_),no_summary_payload)).
+test(explicit_load_transition_changes_groups_not_disk_membership,
+     [setup(plunit_catalog_query:fixture(S)),cleanup(plunit_catalog_query:cleanup(S))]) :-
+    plunit_catalog_query:compiled('a.krf',"(onlyUnloaded a)\n",Source),
+    plunit_catalog_query:build,
+    kb_store:generation(Before),
+    catalog_query_files(json{term:x_onlyUnloaded,facet:semantic},Initial),
+    assertion(Initial.counts.unloaded==1),kb_store:generation(Before),
+    setup_call_cleanup(kb_store:load_sources([Source],Before,Loaded),
+      (catalog_query_files(json{term:x_onlyUnloaded,facet:semantic},After),
+       assertion(After.counts.loaded==1),assertion(After.counts.unloaded==0),
+       assertion(After.total==Initial.total),assertion(After.revision==Initial.revision)),
+      kb_store:unload_source(Source,Loaded.generation,_)).
+
 :- end_tests(catalog_directory).

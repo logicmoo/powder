@@ -13,6 +13,7 @@ import { colorAssertionBalls } from './assertion-markers.js';
 import { createAnnotationHost } from './annotation-host.js';
 import { renderTVASettings, renderAssertionAnnotationEditor } from './native-tva.js';
 import { loadedMTTree } from './mt-inheritance.js';
+import { createTermFileContext } from './term-file-context.js';
 
 const $ = selector => document.querySelector(selector);
 const content = $('#content');
@@ -113,6 +114,19 @@ function updateClassicContext(panel, route) {
       sections: [{ title: 'On this page', items: entries }],
       emptyMessage: 'No sections in the current view.',
     });
+  }
+  const selectedTerm = panel.catalogTerm ?? context?.term ?? context?.mt;
+  if (selectedTerm) {
+    const fileContext = createTermFileContext({
+      api, element, link, button,
+      file: (item, href) => {
+        const path = canonicalPath(item.source);
+        const label = () => element('a', { href, className: 'source-link', title: item.source,
+          'aria-label': `View occurrences in ${item.source}` }, item.source.split('/').at(-1));
+        return sourceFileDisplay(path, label, { compact: true, displayPath: item.source });
+      },
+    }, { term: selectedTerm, route, signal: state.routeController.signal });
+    classicLayout.index.append(fileContext);
   }
   classicLayout.resize();
 }
@@ -614,6 +628,7 @@ function setStatus(status) {
   state.status = status;
   if (changed) annotations.invalidate({ generation: status.generation });
   state.fileMetadata.status(status);
+  if (changed) window.dispatchEvent(new CustomEvent('powder-generation-change', { detail: { generation: status.generation } }));
   for (const file of status.files ?? []) {
     const path = canonicalPath(file.path);
     if (path) state.knownSources.add(path);

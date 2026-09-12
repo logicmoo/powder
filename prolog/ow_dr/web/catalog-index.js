@@ -141,6 +141,7 @@ export async function catalogTermPage(host, route, signal) {
     heading('Definitional Info', 'Recorded type and schema assertions about the selected term, across indexed original files. No KB load is performed.'));
   if (!await available(host, signal, page, true)) return page;
   const data = await api('catalog/term', params, { signal });
+  page.catalogTerm = data.term;
   page.catalogContext = {
     title: expressionText(data.expression, { pretty: false }),
     description: 'All-file catalog evidence. Loaded state is separate from file coverage.',
