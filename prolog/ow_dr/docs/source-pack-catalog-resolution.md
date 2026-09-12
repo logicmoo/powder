@@ -28,8 +28,11 @@ variable names, MT, per-occurrence arity, executable kind or the original total
 evidence count. Those values remain null/unknown; only the sample count is
 reported. Current paths carry `sourcePathKind:catalog_source`. Static heads
 remain `kind:static_head, implementation:unknown`, never inferred executable
-rules. Extension evidence retains actual variable names, MT and complete
-type/target-slot provenance.
+rules. Extension evidence retains each local support ID, variable names, MT and
+type/target-slot location, with representative taxonomy justifications explicitly
+marked `proofAlternativesExhaustive:false`. It does not enumerate all global proof
+paths. See the authoritative [compact provider evidence
+contract](catalog-provider-evidence.md).
 
 `rolePresentation.doInvocation` uses the shared literal `^do[A-Z]` helper plus
 static predicate-head, explicit schema relation-declaration or predicate-type

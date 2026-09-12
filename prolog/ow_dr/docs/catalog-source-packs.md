@@ -56,6 +56,10 @@ diamond paths do not multiply local evidence. This avoids a cross-file
 proof-count × local-occurrence allocation while preserving distinct local
 assertions and MTs.
 
+The authoritative [compact provider justification
+contract](catalog-provider-evidence.md) describes this evidence policy and its
+bounded-join regressions.
+
 Entries are grouped by canonical symbol, never split by observed arity. Unknown
 arity remains unknown; a predicate type name is not converted to an arity here.
 Existing semantic rule-head and explicit schema declaration helpers remain the
