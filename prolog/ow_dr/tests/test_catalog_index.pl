@@ -173,7 +173,16 @@ test(status_caches_only_coverage_not_all_term_postings,
     assertion(First.freshFiles==1),assertion(Second.freshFiles==1),
     assertion(\+kb_catalog_index:loaded_catalog(_,_,_)),
     kb_catalog_index:loaded_catalog_status(_,_,Cached),
-    assertion(\+get_dict(terms,Cached,_)).
+    assertion(integer(Cached.terms)).
+test(missing_summary_is_explicit_and_rebuilt_without_source_refresh,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(p a)\n",_),refresh_catalog(all,_),
+    catalog_paths(File,_),atom_concat(File,'.summary',Summary),delete_file(Summary),
+    kb_cache:file_digest(File,Before),catalog_status(Missing),
+    assertion(Missing.freshness==summary_unavailable),assertion(Missing.complete==false),
+    rebuild_catalog_summary(_),catalog_status(Ready),
+    assertion(Ready.freshFiles==1),assertion(Ready.complete==true),
+    kb_cache:file_digest(File,Before).
 test(overlapping_external_status_reads_keep_advisory_progress,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     catalog_paths(Target,Progress),progress_record(Progress,0),

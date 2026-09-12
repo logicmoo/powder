@@ -25,6 +25,15 @@ it is not a promise that files cannot subsequently change.
 
 `tmp\KBs\<relative-source>.catalog.data` contains one validated source snapshot.
 `tmp\catalog\terms.data` contains the aggregate inverted term-to-files index.
+Its small `terms.data.summary` companion binds coverage to that aggregate's
+path/size/mtime. Status reads this validated summary, never the million-term
+payload. Normal refresh publishes both. To add or repair just the summary for
+an existing aggregate (without indexing any source or rebuilding the query):
+
+```powershell
+swipl --stack-limit=8g prolog\ow_dr\index_catalog.pl -- --summary
+```
+
 `tmp\catalog\progress.data` reports the current/final refresh. These are disposable
 derived artifacts, not assertion-ID ledgers or native annotations.
 
@@ -117,6 +126,15 @@ recheck authorized original paths and source/normalized hashes.
 Catalog assertion cards expose exact matching structural paths. MT blocks offer
 an all-indexed context view, including unloaded sources; this does not load the
 MT or change the active generation.
+
+Blank all-term pages slice the persisted rank order directly. Other searches
+scan once and retain only the last result-key list per request worker, keyed by
+catalog revision, taxonomy, active generation, scope and category; pagination
+reuses those keys. A worker reading the large validated query model has an
+8-GiB **thread-local** stack ceiling (or retains a higher configured ceiling).
+This is a limit, not a reservation, and does not change other threads, native
+annotations, or the active KB. The default 1-GiB HTTP limit was insufficient for
+digest validation of the actual million-term aggregate.
 
 ## External job visibility
 

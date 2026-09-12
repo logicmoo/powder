@@ -2,7 +2,7 @@
     [refresh_catalog/2,catalog_status/1,catalog_search/4,catalog_term/5,
      catalog_assertion/3,catalog_paths/2,source_catalog/2,build_source_data/5,
      catalog_worker/3,external_job_status/3,request_catalog_cancel/3,
-     begin_catalog_run/2,fail_catalog_run/2,check_catalog_cancel/1]).
+     begin_catalog_run/2,fail_catalog_run/2,check_catalog_cancel/1,rebuild_catalog_summary/1]).
 :- use_module(kb_paths).
 :- use_module(kb_catalog,[directory_manifest/3,authorize_sources/2]).
 :- use_module(kb_cache,[]).
@@ -71,6 +71,7 @@ refresh_locked(Expected,Sources,File,Progress,Report) :-
       coverage:Coverage,verifiedAt:At,sourcePolicy:original_sha256,normalizedPolicy:validated_payload_digest},
     atomic_data(File,catalog_snapshot(Snapshot)),retractall(loaded_catalog(_,_,_)),
     retractall(loaded_catalog_status(_,_,_)),
+    publish_catalog_summary(File,Snapshot,_),
     length(TermPairs,UniqueTerms),
     statistics(walltime,[End,_]),Seconds is (End-Start)/1000,
     Report=Coverage.put(json{completed:Completed,terms:UniqueTerms,seconds:Seconds}),
@@ -468,6 +469,10 @@ valid_payload(catalog_cancellation(Run)) :- atom(Run).
 valid_payload(catalog_work(Implementation,App,Sources)) :-
     atom(Implementation),atom(App),is_absolute_file_name(App),is_list(Sources),maplist(atom,Sources).
 valid_payload(catalog_work_result(Results)) :- is_list(Results).
+valid_payload(catalog_summary(Data)) :-
+    is_dict(Data,catalog_summary),atom(Data.catalog),Data.stamp=stamp(Size,Time),
+    integer(Size),Size>=0,number(Time),is_dict(Data.coverage),
+    integer(Data.terms),Data.terms>=0,number(Data.verifiedAt).
 valid_payload(catalog_query(Data)) :-
     is_dict(Data,query_catalog),Data.schema==catalog_query_v1,
     is_assoc(Data.terms),is_assoc(Data.postings),is_assoc(Data.files),
@@ -506,14 +511,32 @@ catalog_status(Reply) :-
     catalog_paths(File,ProgressFile),
     (exists_file(File)->file_stamp(File,Stamp),
       (loaded_catalog_status(File,Stamp,Base)->true;
-       read_data(File,catalog_snapshot(Catalog)),
-       Base=Catalog.coverage.put(json{verifiedAt:Catalog.verifiedAt,
-         freshness:explicit_refresh_snapshot}),
-       retractall(loaded_catalog_status(_,_,_)),
-       assertz(loaded_catalog_status(File,Stamp,Base)));
+       (read_catalog_summary(File,Stamp,Base)->
+         retractall(loaded_catalog_status(_,_,_)),
+         assertz(loaded_catalog_status(File,Stamp,Base))
+       ;Base=json{complete:false,freshFiles:0,expectedFiles:null,issues:[],
+         freshness:summary_unavailable,
+         message:"Refresh the compact catalog coverage summary with index_catalog.pl -- --summary."}));
       Base=json{complete:false,freshFiles:0,expectedFiles:null,issues:[]}),
     external_job_status(File,ProgressFile,P),
     Reply=Base.put(progress,P).
+read_catalog_summary(File,Stamp,Base) :-
+    atom_concat(File,'.summary',Summary),exists_file(Summary),
+    read_data(Summary,catalog_summary(Data)),Data.catalog==File,Data.stamp==Stamp,
+    Base=Data.coverage.put(json{verifiedAt:Data.verifiedAt,terms:Data.terms,
+      freshness:explicit_refresh_snapshot}).
+publish_catalog_summary(File,Catalog,Base) :-
+    file_stamp(File,Stamp),length(Catalog.terms,Count),
+    Data=catalog_summary{catalog:File,stamp:Stamp,coverage:Catalog.coverage,
+      verifiedAt:Catalog.verifiedAt,terms:Count},
+    atom_concat(File,'.summary',Summary),atomic_data(Summary,catalog_summary(Data)),
+    read_catalog_summary(File,Stamp,Base).
+rebuild_catalog_summary(Report) :-
+    catalog_paths(File,_),atom_concat(File,'.lock',LockFile),kb_cache:try_lock(LockFile,Lock),
+    (Lock==busy->throw(error(catalog_busy,_));true),
+    setup_call_cleanup(true,
+      (read_data(File,catalog_snapshot(Catalog)),publish_catalog_summary(File,Catalog,Report)),
+      kb_cache:release_lock(Lock)).
 read_catalog(Catalog) :-
     catalog_paths(File,_),file_stamp(File,Stamp),
     (loaded_catalog(File,Stamp,Catalog)->true;

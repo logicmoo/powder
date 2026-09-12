@@ -71,6 +71,15 @@ test(empty_query_does_not_repeat_terms,
     catalog_query_search(json{},R),
     findall(Key,(member(Item,R.items),Key=Item.term),Keys),sort(Keys,Unique),
     assertion(same_length(Keys,Unique)),length(Keys,N),assertion(R.total==N).
+test(search_cache_keeps_filters_and_pages_distinct,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(p aaa bbb)\n(arity p 2)\n",_),build,
+    catalog_query_search(json{q:x_,limit:1},First),
+    catalog_query_search(json{q:x_,offset:1,limit:1},Second),
+    assertion(First.total==Second.total),
+    First.items=[A],Second.items=[B],assertion(A.term\==B.term),
+    catalog_query_search(json{q:x_,scope:loaded},Loaded),assertion(Loaded.total==0),
+    catalog_query_search(json{q:x_p},Only),Only.items=[P],assertion(P.term==x_p).
 test(readers_do_not_leave_native_file_handles,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('a.krf',"(arity p 1)\n",_),build,
@@ -125,5 +134,11 @@ test(query_publication_has_measured_elapsed_and_known_denominator,
     assertion(Status.projectionProgress.total==1),
     assertion(Status.projectionProgress.completed==1),
     assertion(Status.projectionProgress.state==succeeded).
+test(large_catalog_read_capacity_is_thread_local) :-
+    current_prolog_flag(stack_limit,Before),
+    thread_create((kb_catalog_query:catalog_read_capacity,current_prolog_flag(stack_limit,Limit),
+      thread_exit(Limit)),Reader,[]),
+    thread_join(Reader,exited(Allocated)),assertion(Allocated>=8589934592),
+    current_prolog_flag(stack_limit,After),assertion(After==Before).
 
 :- end_tests(catalog_query).

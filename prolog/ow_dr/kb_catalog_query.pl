@@ -11,7 +11,6 @@
 :- use_module(kb_term_resolver,[term_input/3]).
 :- use_module(kb_non_atomic).
 :- use_module(kb_terms,[context_from_key/2,metadata_json/2]).
-:- use_module(library(aggregate)).
 :- use_module(library(apply)).
 :- use_module(library(assoc)).
 :- use_module(library(crypto)).
@@ -19,7 +18,6 @@
 :- use_module(library(filesex)).
 :- use_module(library(lists)).
 :- use_module(library(pairs)).
-:- use_module(library(solution_sequences)).
 
 /** <module> Catalog query projection with direct-seek term postings.
 
@@ -205,8 +203,12 @@ file_stats_current(File) :-
 model(Model) :-
     query_file(File),kb_catalog_index:file_stamp(File,Stamp),
     (nb_current(powder_catalog_query,cache(File,Stamp,Model))->true
-    ;kb_catalog_index:read_data(File,catalog_query(Read)),
+    ;catalog_read_capacity,
+     kb_catalog_index:read_data(File,catalog_query(Read)),
      nb_linkval(powder_catalog_query,cache(File,Stamp,Read)),Model=Read).
+catalog_read_capacity :-
+    current_prolog_flag(stack_limit,Current),Required is 8*1024*1024*1024,
+    (Current<Required->set_prolog_flag(stack_limit,Required);true).
 active(Generation,Active) :-
     with_mutex(openworld_store,
       (kb_store:generation(Generation),
@@ -236,19 +238,30 @@ text_option(Dict,Key) :- get_dict(Key,Dict,Value),must_be(atom,Value).
 catalog_query_search(Input,Reply) :-
     options(Input,Options),model(Model),active(Generation,Active),
     downcase_atom(Options.q,Query),
-    aggregate_all(count,search_entry(Model,Options,Active,Query,_,_),Total),
-    findall(Row,limit(Options.limit,offset(Options.offset,
-      (search_entry(Model,Options,Active,Query,Key,Entry),
-       search_json(Model,Active,Options.scope,Key,Entry,Row)))),Items),
+    search_keys(Model,Options,Active,Generation,Query,Keys),
+    kb_catalog_index:page(Keys,Options.offset,Options.limit,Selected,Total),
+    maplist(search_key_json(Model,Active,Options.scope),Selected,Items),
     Reply=json{items:Items,total:Total,offset:Options.offset,limit:Options.limit,
       generation:Generation,coverage:Model.coverage,verifiedAt:Model.verifiedAt,
       revision:Model.revision,scope:Options.scope}.
-search_entry(Model,Options,Active,Query,Key,Entry) :-
-    member(Key,Model.ranked),downcase_atom(Key,Lower),once(sub_atom(Lower,_,_,_,Query)),
-    get_assoc(Key,Model.terms,Entry),Entry=entry(_,Groups,_,_,_,_),
-    (Options.group==all;memberchk(Options.group,Groups)),
+search_keys(Model,Options,_,_,'',Keys) :-
+    Options.scope==all,Options.group==all,!,Keys=Model.ranked.
+search_keys(Model,Options,Active,Generation,Query,Keys) :-
+    CacheKey=search(Model.revision,Model.taxonomy,Generation,Options.scope,Options.group,Query),
+    (nb_current(powder_catalog_search,cache(CacheKey,Keys))->true;
+     findall(Key,search_entry(Model,Options,Active,Query,Key),Keys),
+     nb_linkval(powder_catalog_search,cache(CacheKey,Keys))).
+search_entry(Model,Options,Active,Query,Key) :-
+    member(Key,Model.ranked),
+    (Query==''->true;downcase_atom(Key,Lower),once(sub_atom(Lower,_,_,_,Query))),
+    (Options.group==all->true;
+     get_assoc(Key,Model.terms,entry(_,Groups,_,_,_,_)),memberchk(Options.group,Groups)),
+    (Options.scope==all->true;key_in_scope(Model,Options.scope,Active,Key)).
+key_in_scope(Model,Scope,Active,Key) :-
     get_assoc(Key,Model.postings,Posts),
-    once((member(p(Source,_,_,_,_,_),Posts),scope_file(Options.scope,Source,Active))).
+    once((member(p(Source,_,_,_,_,_),Posts),scope_file(Scope,Source,Active))).
+search_key_json(Model,Active,Scope,Key,Row) :-
+    get_assoc(Key,Model.terms,Entry),search_json(Model,Active,Scope,Key,Entry,Row).
 search_json(Model,Active,Scope,Key,entry(_,Groups,Types,Roles,_,_),Row) :-
     get_assoc(Key,Model.postings,Posts),
     findall(p(S,O,N,C,D,M),(member(p(S,O,N,C,D,M),Posts),scope_file(Scope,S,Active)),Selected),
