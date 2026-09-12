@@ -246,12 +246,12 @@ invocation proves the adapter, not a publicly available capability.
 ## Remaining integration boundary
 
 Persistent agent runs/state, events, actions, cases and todos must use the shared
-KEE ledger. Its current resource validation supports todos, not symbolic runs.
-No parallel mutable run authority or disguised todo resource has been created.
-Durable Run/Stop/Interrupt/status/logs, authenticated human approval receipts,
-knowledge-changing teaching transactions and app/server/UI wiring are therefore
-**not yet available**; callers must report `dependency_unavailable`, not bootstrap
-examples, execute a hidden fallback, or expose the pure host-control input directly.
+KEE ledger. Its `agent_run` domain is now available and the prepared-state client
+below uses it. No parallel mutable run authority or disguised todo resource exists.
+The automatic source-capture/execution worker, authenticated human approval receipts,
+knowledge-changing teaching transactions and app/server/UI wiring are still
+**not available**; callers must report `dependency_unavailable`, not bootstrap
+examples, execute a hidden fallback, or expose host-control inputs directly.
 No source-load operation is currently permitted, so load A/B selection cannot be
 invented or treated as automatically approved.
 
@@ -263,10 +263,68 @@ audited open tasks with the same program and interpreter process. These are
 genuine application TODOs, **not** persisted agent runs, taught KB assertions,
 verified acceptance results or automatic completed tasks.
 
+## Prepared durable cursor and step client
+
+`kb_symbolic_agent_control.pl` uses only public KEE registry/invocation operations
+for lifecycle data. Its **host-only** control context is separate from action
+authority; all lifecycle tools and `agent_state_control` remain forbidden to
+KB-authored action plans.
+
+```prolog
+open_control(TrustedHostSpec,Control).
+create_prepared(Control,VerifiedProgram,Generation,Limits,CallId,Run).
+get(Control,RunId,Run).
+advance_prepared(Control,VerifiedProgram,RunId,Input,CallId,Run,Effects).
+record_outcome(Control,VerifiedProgram,RunId,ActualToolReply,CallId,Run).
+events(Control,RunId,Offset,Limit,Reply).
+close_control(Control).
+```
+
+Prepared programs must come from a source snapshot independently verified by the
+trusted host. This is an explicit isolated-fixture/integration boundary, **not a
+web endpoint accepting programs or permission manifests from clients**. Immutable
+source data records the canonical knowledge-agent identity separately from the
+host audit-agent identity, definition MT, generation claim, semantic program hash,
+host/ceiling versions and fixed limits. The client checks the program hash and
+identities on advancement; it does not pretend to verify a generation merely
+because it appears in JSON. Registered native source capture/repinning remains
+required before production execution.
+
+`create_prepared` creates an actual `agent_run` record in the declared state MT;
+it starts no thread. `advance_prepared` executes the bounded pure interpreter
+synchronously and atomically stores its cursor/event before returning any action
+intents. `resume` on a newly created record marks it ready for input. Actions are
+not automatically dispatched. Only verified `record_outcome` input acknowledges
+their completion, with actual committed receipts independently checked by KEE.
+The generic advance entry rejects raw `action_result` and `host_approval` inputs.
+Callers must use distinct stable input/action/outcome call IDs.
+
+Stop state is durable, future advancement is rejected, and a late outcome retains
+the stopped phase. This client is **not yet an interruptible execution worker**:
+it does not cancel an external caller's in-flight query or automatically dispatch
+continuations. It cannot be advertised as complete Run/Stop worker integration.
+
+`kb_symbolic_agent_state.pl` encodes `powder.symbolic-cursor.v1` as a compact
+postorder JSON node table. This accommodates shared variables and ordinary deep
+continuations without exceeding KEE's JSON-depth limit. Cursor text is capped at
+65,536 characters, 8,192 nodes and bounded expanded size. Forward/cyclic references
+and exponential DAG expansion are rejected. No Prolog term strings, credentials,
+native handles, whole program copies or accumulated conversation arrays are stored.
+Semantic event deltas and compact action links live in the same ledger history.
+
+**Known protocol blocker, reproduced against the actual shared API:** logging a
+cursor/outcome/intent advances the global ledger revision. Consequently a TODO
+revision read by the previous step becomes stale before its write can be
+dispatched. A published domain-revision or atomic protocol is needed. The client
+does not silently rebase an agent's planned arguments, and does not claim that
+automatic durable TODO workflows currently work across these cursor commits.
+The earlier standalone TODO workflow tests have no cursor commits between actions;
+the dedicated control regression exposes the difference explicitly.
+
 ## Focused validation
 
 ```powershell
-swipl -q -s prolog\ow_dr\tests\test_symbolic_agent_language.pl -s prolog\ow_dr\tests\test_symbolic_agent_engine.pl -s prolog\ow_dr\tests\test_symbolic_agent_kee.pl -s prolog\ow_dr\tests\test_symbolic_agent_todos.pl -g "run_tests([symbolic_agent_language,symbolic_agent_engine,symbolic_agent_kee,symbolic_agent_todos])" -t halt
+swipl -q -s prolog\ow_dr\tests\test_symbolic_agent_language.pl -s prolog\ow_dr\tests\test_symbolic_agent_engine.pl -s prolog\ow_dr\tests\test_symbolic_agent_kee.pl -s prolog\ow_dr\tests\test_symbolic_agent_todos.pl -s prolog\ow_dr\tests\test_symbolic_agent_control.pl -g "run_tests([symbolic_agent_language,symbolic_agent_engine,symbolic_agent_kee,symbolic_agent_todos,symbolic_agent_control])" -t halt
 ```
 
 The existing grammar tests demonstrate one learned production and held-out
