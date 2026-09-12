@@ -22,12 +22,15 @@ Resolution reports ready, state, unresolved, changes, coverage, and separate
 microtheoryDependencies. Declared-only support is explicitly identified.
 
 refresh_provider_index(all|Paths,Reply) is an EXPLICIT potentially expensive
-action: read existing cache metadata, verify source hashes, and persist a
-reusable provider index. No refresh occurs while listing/getting/rendering.
+action. A current shared query projection is captured once and reused without
+duplicating its provider index. Only an absent projection permits the explicitly
+labeled legacy cache-analysis fallback. Stale/corrupt/old projections require
+refresh and never supply old provider candidates.
 A selected subset, missing cache, unsupported definition semantics, or changed
 catalogue cannot establish global uniqueness. Such candidates require choice.
 resolve_graph(Pack,Index,[analysis{path,info},...],Resolution) is filesystem-free.
 Intrinsic logical-form operators are not external predicate dependencies.
+See docs/source-pack-catalog-resolution.md for the pure bridge and hash policy.
 
 Persistence is .logos-state/source-packs.json plus its .providers.json sibling.
 POWDER_SOURCE_PACKS overrides the first path (also isolating the provider index).
@@ -42,6 +45,8 @@ checks. Source files, adjacent statistics and corpus caches are never written.
 :- use_module(kb_cache,[read_cache/3,file_digest/2,terms_digest/2,try_lock/2,release_lock/1,
                         stage_path/2,install_stage/2,remove_if_exists/1]).
 :- use_module(kb_store,[]).
+:- use_module(kb_catalog_query,[source_pack_snapshot/1]).
+:- use_module(kb_source_pack_catalog).
 :- use_module(library(apply)).
 :- use_module(library(assoc)).
 :- use_module(library(error)).
@@ -51,6 +56,7 @@ checks. Source files, adjacent statistics and corpus caches are never written.
 :- use_module(library(ordsets)).
 :- use_module(library(pairs)).
 :- use_module(library(uuid)).
+:- use_module(library(crypto),[crypto_file_hash/3]).
 
 :- dynamic provider_memory/3.
 
@@ -178,6 +184,17 @@ json_ground(Input,Output) :-
 json_pair(Key-In,Key-Out) :- json_ground(In,Out).
 
 refresh_provider_index(Selection,Reply) :-
+    capture_catalog(Snapshot),
+    (legacy_fallback(Snapshot)->
+       refresh_legacy_provider_index(Selection,Legacy),
+       Reply=Legacy.put(providerSource,legacy_cache_fallback)
+    ;(Selection==all->Chosen=all;normalize_paths(Selection,Chosen)),
+     catalog_provider_index(Snapshot,Chosen,Index,SourceCount),
+     assoc_to_values(Index.providerLookup,Rows),maplist(length,Rows,Sizes),sum_list(Sizes,ProviderCount),
+     Reply=provider_index_reply{revision:Snapshot.revision,sources:SourceCount,
+       providers:ProviderCount,coverage:Index.coverage,
+       providerSource:catalog_snapshot,persisted:false}).
+refresh_legacy_provider_index(Selection,Reply) :-
     providers_file(File),document_revision(File,Expected),
     directory_manifest('KBs',_,Manifest),manifest_paths(Manifest,All),
     (Selection==all->Paths=All,Scope=all
@@ -234,7 +251,9 @@ analysis_provider(A,Provider) :-
     A.info.status\==unavailable,
     (Kind=defined,Entries=A.info.symbols.defined;Kind=declared,Entries=A.info.symbols.declared),
     is_list(Entries),member(Entry,Entries),\+logical_operator(Entry.symbol),
-    Provider=provider{symbol:Entry.symbol,path:A.path,kind:Kind,evidence:Entry.evidence}.
+    Base=provider{symbol:Entry.symbol,path:A.path,kind:Kind,evidence:Entry.evidence},
+    (get_dict(rolePresentation,Entry,Presentation)->Provider=Base.put(rolePresentation,Presentation)
+    ;Provider=Base).
 
 provider_index(Index) :-
     providers_file(File),
@@ -245,8 +264,8 @@ provider_index(Index) :-
        retractall(provider_memory(_,_,_)),assertz(provider_memory(File,Stamp,Saved))),
       directory_manifest('KBs',_,Manifest),catalogue_stamp(Manifest,Current),
       (Saved.stamp==Current->Index=Saved;
-       Index=Saved.put(coverage,coverage{complete:false,scope:stale,
-         issues:[issue{reason:provider_catalogue_changed}]}))
+       Index=provider_index{coverage:coverage{complete:false,scope:stale,
+         issues:[issue{reason:provider_catalogue_changed}]},providers:[]})
     ;Index=provider_index{coverage:coverage{complete:false,scope:absent,
                            issues:[issue{reason:provider_index_missing}]},providers:[]}).
 validate_provider_index(Raw,Index) :-
@@ -261,10 +280,28 @@ validate_provider_index(Raw,Index) :-
 resolve_pack(Id,Expected,Choices,Resolution) :-
     get_pack(Id,Saved),check_revision(Expected,Saved.revision),
     normalize_choices(Choices,Overrides),merge_choices(Saved.pack.choices,Overrides,Merged),
-    Pack=Saved.pack.put(choices,Merged),provider_index(Index),
-    pack_paths(Pack,Seeds),read_analyses(Seeds,Initial),
-    resolve_live(Pack,Index,Initial,Plan),
+    Pack=Saved.pack.put(choices,Merged),capture_catalog(Snapshot),pack_paths(Pack,Seeds),
+    (legacy_fallback(Snapshot)->
+       provider_index(Index),read_analyses(Seeds,Initial),resolve_live(Pack,Index,Initial,Legacy),
+       Coverage=Legacy.coverage.put(coverage{providerSource:legacy_cache_fallback,
+         catalogUnavailable:Snapshot.coverage}),
+       Summary=Legacy.pack.resolution.put(coverage,Coverage),
+       UpdatedPack=Legacy.pack.put(resolution,Summary),
+       Plan=Legacy.put(source_pack_resolution{coverage:Coverage,pack:UpdatedPack})
+    ;catalog_provider_index(Snapshot,all,Index,_),
+     maplist(catalog_analysis(Snapshot),Seeds,Initial),
+     resolve_catalog(Pack,Index,Snapshot,Initial,Plan)),
     Resolution=Plan.put(revision,Saved.revision).
+capture_catalog(Snapshot) :-
+    catch((source_pack_snapshot(Found)->Snapshot=Found
+          ;failed_catalog(snapshot_failed,"The catalog accessor returned no result.",Snapshot)),
+      Error,(message_to_string(Error,Message),failed_catalog(snapshot_read_error,Message,Snapshot))).
+failed_catalog(Code,Message,Snapshot) :-
+    empty_assoc(Files),
+    Snapshot=source_pack_catalog{status:unavailable,revision:none,taxonomy:none,verifiedAt:null,
+      coverage:coverage{complete:false,reason:Code,message:Message},files:Files}.
+legacy_fallback(Snapshot) :-
+    Snapshot.status==unavailable,get_dict(reason,Snapshot.coverage,query_projection_unavailable).
 merge_choices(Old,Overrides,Merged) :-
     exclude(overridden(Overrides),Old,Kept),append(Kept,Overrides,Merged).
 overridden(Overrides,C) :- member(New,Overrides),New.symbol==C.symbol,!.
@@ -290,6 +327,12 @@ resolve_live(Pack,Index,Analyses,Plan) :-
     findall(Path,(member(M,Next.pack.members),Path=M.path,\+analysis_at(Analyses,Path,_)),Needed),
     (Needed==[]->Plan=Next
     ;read_analyses(Needed,More),append(Analyses,More,All),resolve_live(Pack,Index,All,Plan)).
+resolve_catalog(Pack,Index,Snapshot,Analyses,Plan) :-
+    resolve_graph(Pack,Index,Analyses,Next),
+    findall(Path,(member(M,Next.pack.members),Path=M.path,\+analysis_at(Analyses,Path,_)),Needed),
+    (Needed==[]->Plan=Next
+    ;maplist(catalog_analysis(Snapshot),Needed,More),append(Analyses,More,All),
+     resolve_catalog(Pack,Index,Snapshot,All,Plan)).
 
 resolve_graph(Input,Index,Analyses,Resolution) :-
     normalize_pack(Input,Pack),provider_lookup(Index,Indexed),
@@ -306,7 +349,7 @@ resolve_graph(Input,Index,Analyses,Resolution) :-
        json_ground(Old.identity,Before),json_ground(M.identity,After),Before\==After,
        Change=change{path:M.path,reason:member_snapshot_changed}),Changes),
     findall(support{symbol:S,providers:Ps},
-      (member(S,References),\+member(provider{symbol:S,kind:defined,path:_,evidence:_},Providers),
+      (member(S,References),\+defined_provider(Providers,S),
        findall(P,(member(P,Providers),P.symbol==S,P.kind==declared),Ps),Ps\=[]),DeclaredOnly),
     findall(mt_dependencies{path:P,outbound:MT},
       (member(P,Paths),analysis_at(Analyses,P,A),MT=A.info.microtheories.outbound),MTDependencies),
@@ -332,6 +375,7 @@ pack_references(Paths,Analyses,References) :-
       Entries=A.info.symbols.referenced,is_list(Entries),member(E,Entries),
       S=E.symbol,\+logical_operator(S)),Ss),sort(Ss,References).
 provider_symbol(Providers,S) :- member(P,Providers),P.symbol==S,!.
+defined_provider(Providers,S) :- member(P,Providers),P.symbol==S,P.kind==defined,!.
 closure(Paths,Pack,Index,Analyses,Final) :-
     pack_providers(Paths,Analyses,Providers),pack_references(Paths,Analyses,References),
     (forall(member(P,Paths),(analysis_at(Analyses,P,A),analysis_complete(A)))->Known=true;Known=false),
@@ -343,7 +387,8 @@ closure(Paths,Pack,Index,Analyses,Final) :-
     (Next==Paths->Final=Paths;closure(Next,Pack,Index,Analyses,Final)).
 member_choice(Pack,S,C) :- member(C,Pack.choices),C.symbol==S,!.
 candidates(Index,S,Candidates) :-
-    (get_assoc(S,Index.providerLookup,Providers)->true;Providers=[]),
+    (get_assoc(S,Index.providerLookup,Rows)->true;Rows=[]),
+    (get_dict(mode,Index,catalog)->maplist(catalog_provider,Rows,Providers);Providers=Rows),
     findall(Path-P,(member(P,Providers),Path=P.path),Pairs),
     keysort(Pairs,Sorted),group_pairs_by_key(Sorted,Groups),
     findall(candidate{path:Path,providers:Evidence},member(Path-Evidence,Groups),Candidates).
@@ -371,9 +416,14 @@ composition_member(Pack,Providers,References,Analyses,Path,Member) :-
       (member(P,Providers),P.path==Path,memberchk(P.symbol,References),
        Reason=why{symbol:P.symbol,kind:P.kind,evidence:P.evidence}),Why),
     (analysis_at(Analyses,Path,A),A.info.status\==unavailable->
-      Identity=identity{sourceHash:A.info.source.sha256,normalizedDigest:A.info.cache.normalizedDigest}
+      Base=identity{sourceHash:A.info.source.sha256,normalizedDigest:A.info.cache.normalizedDigest},
+      optional_identity(A.info.source,rawSha256,rawSourceHash,Base,One),
+      optional_identity(A.info.cache,fileHash,normalizedHash,One,Two),
+      optional_identity(A.info.cache,indexHash,indexHash,Two,Identity)
     ;Identity=null),
     Member=member{path:Path,role:Role,why:Why,identity:Identity}.
+optional_identity(Dict,From,To,Before,After) :-
+    (get_dict(From,Dict,Value),Value\==null->put_dict(To,Before,Value,After);After=Before).
 
 load_pack(Id,ExpectedRevision,ExpectedGeneration,Reply) :-
     get_pack(Id,Saved),check_revision(ExpectedRevision,Saved.revision),
@@ -403,9 +453,19 @@ verified_snapshot(Pack,Source,Snapshot) :-
     pack_public(Source,Path),member(M,Pack.members),M.path==Path,!,
     file_digest(Source,Hash),
     (Hash==M.identity.sourceHash->true;throw(error(source_pack_source_changed(Path),_))),
-    cache_paths(Source,Cache,_),file_digest(Cache,OutputHash),read_cache(Cache,Header,_),
+    (get_dict(rawSourceHash,M.identity,RawExpected)->
+       crypto_file_hash(Source,Raw,[algorithm(sha256),encoding(octet)]),
+       (Raw==RawExpected->true;throw(error(source_pack_source_changed(Path),_)));true),
+    cache_paths(Source,Cache,IndexFile),file_digest(Cache,OutputHash),
+    verify_optional_hash(M.identity,normalizedHash,OutputHash,Path),
+    (get_dict(indexHash,M.identity,ExpectedIndex)->
+       file_digest(IndexFile,ActualIndex),
+       (ExpectedIndex==ActualIndex->true;throw(error(source_pack_cache_changed(Path),_)));true),
+    read_cache(Cache,Header,_),
     (Header.normalizedDigest==M.identity.normalizedDigest,Header.sourceHash==Hash->true;
      throw(error(source_pack_cache_changed(Path),_))),
     file_digest(Cache,After),
     (After==OutputHash->true;throw(error(source_pack_cache_changed(Path),_))),
     Snapshot=snapshot{source:Source,sourceHash:Hash,outputHash:OutputHash}.
+verify_optional_hash(Identity,Key,Actual,Path) :-
+    (get_dict(Key,Identity,Expected),Expected\==Actual->throw(error(source_pack_cache_changed(Path),_));true).

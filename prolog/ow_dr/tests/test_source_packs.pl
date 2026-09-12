@@ -7,6 +7,12 @@
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
 :- use_module(library(http/json)).
+:- use_module(library(assoc)).
+:- use_module(library(crypto)).
+:- use_module(library(prolog_wrap)).
+:- use_module('../kb_catalog_index',[]).
+:- use_module('../kb_catalog_schema',[]).
+:- use_module('../kb_catalog_providers',[]).
 
 empty_pack(Roots,pack{id:'pack-test',name:'Example',roots:Roots,choices:[],members:[]}).
 records(Terms,Start,Source,Records) :- records_(Terms,Start,Source,Records).
@@ -320,5 +326,149 @@ test(paths_and_ids_are_data_not_executable_input,
       (catch(create_pack('Test',[Path],none,_),E,true),assertion(nonvar(E)))),
     catch(get_pack('../bad',_),IdError,true),assertion(nonvar(IdError)),
     list_packs(Empty),assertion(Empty.packs==[]).
+
+catalog_fixture_file(Source,File-Data) :-
+    kb_source_packs:pack_public(Source,Path),cache_paths(Source,Cache,_),
+    read_cache(Cache,H,Records),
+    findall(Id-0,member(record(Id,_,_),Records),Pairs),list_to_assoc(Pairs,Offsets),
+    kb_catalog_index:build_source_data(Source,H,Records,Offsets,Data),
+    file_digest(Source,Hash),crypto_file_hash(Source,Raw,[algorithm(sha256),encoding(octet)]),
+    file_digest(Cache,FileHash),size_file(Source,Size),time_file(Source,Time),
+    kb_catalog_index:file_stamp(Cache,Stamp),
+    File=file{path:Path,status:fresh,rawSourceHash:Raw,normalized:Cache,
+      sizeBytes:Size,modified:Time,normalizedStamp:Stamp,
+      identity:identity{sourceHash:Hash,normalizedDigest:H.normalizedDigest,normalizedHash:FileHash},
+      dependencySummary:Data.dependencies}.
+publish_catalog(Sources,Files) :-
+    maplist(catalog_fixture_file,Sources,Pairs),
+    findall(Claim,(member(File-Data,Pairs),
+      kb_catalog_schema:source_schema_evidence(File.path,Data,Claims),member(Claim,Claims)),Evidence),
+    kb_catalog_schema:build_catalog_schema(Evidence,Taxonomy),
+    findall(Full,(member(File-Data,Pairs),
+      kb_catalog_providers:source_provider_extensions(File.path,Data,Taxonomy,Extensions),
+      Full=File.put(providerExtensions,Extensions)),Files),
+    publish_catalog_files(Files).
+publish_catalog_files(Files) :-
+    findall(Key-File,(member(File,Files),kb_catalog_query:path_key(File.path,Key)),Pairs),list_to_assoc(Pairs,Map),
+    findall(Path,(member(F,Files),Path=F.path),Expected),empty_assoc(Empty),
+    length(Files,N),
+    Model=query_catalog{schema:catalog_query_v1,revision:fixture_revision,taxonomy:fixture_taxonomy,
+      verifiedAt:1,coverage:coverage{complete:true,expectedFiles:N,freshFiles:N,issues:[]},
+      files:Map,expected:Expected,terms:Empty,postings:Empty,ranked:[]},
+    kb_catalog_query:query_file(Path),kb_catalog_index:atomic_data(Path,catalog_query(Model)),
+    (nb_current(powder_catalog_query,_)->nb_delete(powder_catalog_query);true).
+blocked_catalog_goal(kb_cache:read_cache(_,_,_)).
+blocked_catalog_goal(kb_file_dependencies:file_dependencies(_,_)).
+blocked_catalog_goal(kb_compile:compile_source(_,_,_)).
+guard_catalog_reads :-
+    forall(blocked_catalog_goal(Head),
+      wrap_predicate(Head,source_pack_no_full_reads,_,throw(error(unexpected_full_cache_or_compile_read,_)))),
+    nb_setval(pack_snapshot_calls,0),nb_setval(pack_manifest_calls,0),
+    wrap_predicate(kb_catalog_query:source_pack_snapshot(_),source_pack_count,Snap,
+      (nb_getval(pack_snapshot_calls,N),Next is N+1,nb_setval(pack_snapshot_calls,Next),call(Snap))),
+    wrap_predicate(kb_catalog:directory_manifest(_,_,_),source_pack_count,Manifest,
+      (nb_getval(pack_manifest_calls,N),Next is N+1,nb_setval(pack_manifest_calls,Next),call(Manifest))).
+unguard_catalog_reads :-
+    forall(blocked_catalog_goal(Head),unwrap_predicate(Head,source_pack_no_full_reads)),
+    unwrap_predicate(kb_catalog_query:source_pack_snapshot(_),source_pack_count),
+    unwrap_predicate(kb_catalog:directory_manifest(_,_,_),source_pack_count).
+
+test(catalog_resolution_captures_once_without_full_reads_or_writes,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    real_graph(Root,Provider),publish_catalog([Root,Provider],_),create_example(Saved),
+    packs_file(File),file_digest(File,Before),kb_store:generation(G),
+    setup_call_cleanup(guard_catalog_reads(),
+      (resolve_pack(Saved.pack.id,Saved.revision,[],R),
+       assertion(R.ready==true),nb_getval(pack_snapshot_calls,1),nb_getval(pack_manifest_calls,1)),
+      unguard_catalog_reads()),
+    member_paths(R,['KBs/provider.krf','KBs/root.krf']),
+    file_digest(File,Before),kb_store:generation(G),
+    assertion(R.coverage.globalProviders.scope==catalog_snapshot).
+test(catalog_index_operation_reuses_one_snapshot_and_does_not_persist_duplicate_index,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    real_graph(Root,Provider),publish_catalog([Root,Provider],_),
+    setup_call_cleanup(guard_catalog_reads(),
+      (refresh_provider_index(all,I),assertion(I.coverage.complete==true),
+       assertion(I.persisted==false),nb_getval(pack_snapshot_calls,1),nb_getval(pack_manifest_calls,1)),
+      unguard_catalog_reads()),
+    kb_source_packs:providers_file(File),assertion(\+exists_file(File)).
+test(catalog_typed_subject_supplies_declaration_without_claiming_implementation,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    source_cache('KBs/root.krf',100,[(x_root:-and(x_doWork)),
+      (x_isa(_,_):-and),(x_genls(_,_):-and),x_genls(x_BinaryPredicate,x_Predicate)],Root),
+    source_cache('KBs/provider.krf',200,[x_isa(x_doWork,x_BinaryPredicate)],Provider),
+    publish_catalog([Root,Provider],_),create_example(Saved),
+    resolve_pack(Saved.pack.id,Saved.revision,[],R),assertion(R.ready==true),
+    once((member(Support,R.coverage.declaredOnly),Support.symbol==x_doWork)),
+    Support.providers=[P],assertion(P.rolePresentation.doInvocation==true),
+    assertion(P.kind==declared),assertion(P.evidence=[_]),
+    P.evidence=[Proof],assertion(Proof.variableNames==[]),assertion(Proof.implementation==unknown).
+test(catalog_ambiguity_is_preserved_outside_reviewed_pack,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    real_graph(Root,Provider),source_cache('KBs/other.krf',300,[(x_need:-and)],Other),
+    publish_catalog([Root,Provider,Other],_),create_example(Saved),
+    resolve_pack(Saved.pack.id,Saved.revision,[],R),assertion(R.ready==false),
+    assertion(issue(R,ambiguous_providers)),member_paths(R,['KBs/root.krf']).
+test(catalog_ontology_target_slot_two_is_a_declaration_not_operator_use,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    source_cache('KBs/root.krf',100,[(x_root:-and(x_doneBy(x_event,x_actor))),
+      (x_isa(_,_):-and),(x_genls(_,_):-and),(x_arg2Isa(_,_):-and),
+      (x_rolesForEventType(_,_):-and),
+      x_genls(x_MetaPredicate,x_MetaRelation),x_genls(x_BinaryPredicate,x_Predicate),
+      x_isa(x_rolesForEventType,x_MetaPredicate),
+      x_arg2Isa(x_rolesForEventType,x_BinaryPredicate)],Root),
+    source_cache('KBs/provider.krf',200,[x_rolesForEventType(x_Event,x_doneBy)],Provider),
+    publish_catalog([Root,Provider],_),create_example(Saved),
+    resolve_pack(Saved.pack.id,Saved.revision,[],R),assertion(R.ready==true),
+    once((member(Support,R.coverage.declaredOnly),Support.symbol==x_doneBy)),
+    Support.providers=[P],P.evidence=[Proof],
+    assertion(Proof.kind==ontology_schema_declaration),assertion(Proof.targetPosition==2),
+    assertion(Proof.targetSlotEvidence\==[]),assertion(Proof.implementation==unknown).
+test(stale_catalog_removed_provider_is_never_replaced_or_offered,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    real_graph(Root,Provider),publish_catalog([Root,Provider],_),create_example(Saved),
+    Chosen=[choice{symbol:x_need,files:['KBs/provider.krf']}],delete_file(Provider),
+    setup_call_cleanup(guard_catalog_reads(),
+      resolve_pack(Saved.pack.id,Saved.revision,Chosen,R),unguard_catalog_reads()),
+    assertion(R.ready==false),assertion(R.coverage.globalProviders.status==stale),
+    member_paths(R,['KBs/provider.krf','KBs/root.krf']),
+    assertion(issue(R,chosen_file_no_longer_provides_symbol)).
+test(pre_extension_catalog_requires_refresh_instead_of_silent_legacy_fallback,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    real_graph(Root,Provider),publish_catalog([Root,Provider],[First,Second]),
+    del_dict(providerExtensions,First,_,Old),publish_catalog_files([Old,Second]),create_example(Saved),
+    setup_call_cleanup(guard_catalog_reads(),
+      resolve_pack(Saved.pack.id,Saved.revision,[],R),unguard_catalog_reads()),
+    assertion(R.ready==false),
+    assertion(R.coverage.globalProviders.catalog.reason==projection_requires_refresh).
+test(rebuilt_current_catalog_preserves_a_missing_saved_choice_without_replacement,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    real_graph(Root,Provider),source_cache('KBs/other.krf',300,[(x_need:-and)],Other),
+    create_example(Saved),delete_file(Provider),publish_catalog([Root,Other],_),
+    resolve_pack(Saved.pack.id,Saved.revision,
+      [choice{symbol:x_need,files:['KBs/provider.krf']}],R),
+    assertion(R.coverage.globalProviders.status==available),assertion(R.ready==false),
+    assertion(issue(R,chosen_file_no_longer_provides_symbol)),
+    member_paths(R,['KBs/provider.krf','KBs/root.krf']).
+test(catalog_projection_corruption_is_typed_unavailable_and_does_not_fallback,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    real_graph(Root,Provider),publish_catalog([Root,Provider],_),create_example(Saved),
+    kb_catalog_query:query_file(Path),write_text(Path,"corrupt"),
+    setup_call_cleanup(guard_catalog_reads(),
+      resolve_pack(Saved.pack.id,Saved.revision,[],R),unguard_catalog_reads()),
+    assertion(R.ready==false),
+    assertion(R.coverage.globalProviders.catalog.reason==snapshot_read_error).
+test(catalog_load_retains_raw_and_normalized_hash_guards,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    real_graph(Root,Provider),publish_catalog([Root,Provider],_),create_example(Saved),
+    resolve_pack(Saved.pack.id,Saved.revision,[],R),assertion(R.ready==true),
+    save_pack(R.pack,Saved.revision,Ready),kb_store:generation(G),
+    load_pack(Ready.pack.id,Ready.revision,G,Loaded),assertion(Loaded.status.counts.assertions==2),
+    once((member(M,R.pack.members),M.path=='KBs/provider.krf')),
+    assertion(get_dict(rawSourceHash,M.identity,_)),assertion(get_dict(normalizedHash,M.identity,_)),
+    Bad=M.put(identity,M.identity.put(rawSourceHash,bad_hash)),
+    BadPack=R.pack.put(members,[Bad]),
+    catch(kb_source_packs:verified_snapshot(BadPack,Provider,_),Error,true),
+    assertion(Error=error(source_pack_source_changed(_),_)).
 
 :- end_tests(source_packs).
