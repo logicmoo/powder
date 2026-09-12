@@ -1,6 +1,6 @@
 # KEE callable reference
 
-Generated from `kb_kee_registry.pl`; revision `7c07acc9ad281714ead7fc4c80940b6d7ff00fb339373d405436a5168329f81c`.
+Generated from `kb_kee_registry.pl`; revision `14c7df881491e49bb48355f00dc1b6429cf338effeaa383197d28391a02b0b6d`.
 
 | Tool | Schema | Permission | Scope | Effects |
 |---|---|---|---|---|
@@ -317,7 +317,7 @@ Raw provider export: **not allowed**. Requires a separate approved host projecti
       "type":"object"
     },
     "mt": {"anyOf": [ {"type":"null"},  {"maxLength":4096,"minLength":1,"type":"string"} ]},
-    "revision": {"maxLength":64,"minLength":64,"type":"string"}
+    "revision": {"maxLength":96,"minLength":64,"type":"string"}
   },
   "required": ["revision", "mt", "data" ],
   "type":"object"
@@ -409,7 +409,7 @@ Raw provider export: **not allowed**. Requires a separate approved host projecti
     "id": {"maxLength":128,"minLength":1,"type":"string"},
     "mt": {"anyOf": [ {"type":"null"},  {"maxLength":4096,"minLength":1,"type":"string"} ]},
     "resourceRevision": {"maxLength":64,"minLength":64,"type":"string"},
-    "revision": {"maxLength":64,"minLength":64,"type":"string"}
+    "revision": {"maxLength":96,"minLength":64,"type":"string"}
   },
   "required": ["revision", "id", "resourceRevision", "mt", "data" ],
   "type":"object"
@@ -428,7 +428,7 @@ Raw provider export: **not allowed**. Requires a separate approved host projecti
   "properties": {
     "id": {"maxLength":128,"minLength":1,"type":"string"},
     "resourceRevision": {"maxLength":64,"minLength":64,"type":"string"},
-    "revision": {"maxLength":64,"minLength":64,"type":"string"}
+    "revision": {"maxLength":96,"minLength":64,"type":"string"}
   },
   "required": ["revision", "id", "resourceRevision" ],
   "type":"object"
@@ -465,7 +465,7 @@ Raw provider export: **not allowed**. Requires a separate approved host projecti
   "additionalProperties":false,
   "properties": {
     "changeset": {"maxLength":128,"minLength":1,"type":"string"},
-    "revision": {"maxLength":64,"minLength":64,"type":"string"}
+    "revision": {"maxLength":96,"minLength":64,"type":"string"}
   },
   "required": ["revision", "changeset" ],
   "type":"object"
@@ -483,7 +483,7 @@ Raw provider export: **not allowed**. Requires a separate approved host projecti
   "additionalProperties":false,
   "properties": {
     "changeset": {"maxLength":128,"minLength":1,"type":"string"},
-    "revision": {"maxLength":64,"minLength":64,"type":"string"}
+    "revision": {"maxLength":96,"minLength":64,"type":"string"}
   },
   "required": ["revision", "changeset" ],
   "type":"object"
@@ -501,7 +501,7 @@ Raw provider export: **not allowed**. Requires a separate approved host projecti
   "additionalProperties":false,
   "properties": {
     "mt": {"maxLength":4096,"minLength":1,"type":"string"},
-    "revision": {"maxLength":64,"minLength":64,"type":"string"},
+    "revision": {"maxLength":96,"minLength":64,"type":"string"},
     "sourceJson": {"maxLength":16384,"minLength":2,"type":"string"},
     "stateJson": {"maxLength":65536,"minLength":2,"type":"string"}
   },
@@ -591,7 +591,7 @@ Raw provider export: **not allowed**. Requires a separate approved host projecti
     "expectedEvent": {"maximum":10000000,"minimum":0,"type":"integer"},
     "id": {"maxLength":128,"minLength":1,"type":"string"},
     "resourceRevision": {"maxLength":64,"minLength":64,"type":"string"},
-    "revision": {"maxLength":64,"minLength":64,"type":"string"},
+    "revision": {"maxLength":96,"minLength":64,"type":"string"},
     "stateJson": {"maxLength":65536,"minLength":2,"type":"string"},
     "status": {"enum": ["created", "running", "paused", "stopped", "completed", "failed" ],"type":"string"},
     "step": {"maximum":10000000,"minimum":0,"type":"integer"}

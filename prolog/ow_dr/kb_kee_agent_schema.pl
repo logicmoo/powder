@@ -5,12 +5,12 @@
 :- use_module(library(lists)).
 
 status_spec(enum([created,running,paused,stopped,completed,failed])).
-input_spec(agent_run_create,obj([req(revision,str(64,64)),req(mt,str(1,4096)),
+input_spec(agent_run_create,obj([req(revision,str(64,96)),req(mt,str(1,4096)),
     req(sourceJson,str(2,16384)),req(stateJson,str(2,65536))])).
 input_spec(agent_run_get,obj([req(id,str(1,128))])).
 input_spec(agent_run_list,obj([req(mt,str(1,4096)),opt(offset,int(0,1000000)),opt(limit,int(1,100))])).
 input_spec(agent_run_events,obj([req(id,str(1,128)),opt(offset,int(0,1000000)),opt(limit,int(1,100))])).
-input_spec(agent_run_event,obj([req(revision,str(64,64)),req(id,str(1,128)),
+input_spec(agent_run_event,obj([req(revision,str(64,96)),req(id,str(1,128)),
     req(resourceRevision,str(64,64)),req(expectedEvent,int(0,10000000)),
     req(status,Status),req(step,int(0,10000000)),req(stateJson,str(2,65536)),
     req(eventKind,enum([transition,dialogue,goal,plan,action_intent,action_outcome,log,stop,error])),

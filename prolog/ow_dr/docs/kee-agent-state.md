@@ -88,7 +88,10 @@ Every field is required. Status is `created`, `running`, `paused`, `stopped`,
 `dialogue`, `goal`, `plan`, `action_intent`, `action_outcome`, `log`, `stop`,
 or `error`. Each commit increments the run event sequence exactly once.
 Global ledger revision, resource revision and expected event sequence all
-participate in CAS. Identical envelope `callId` retries return the original
+participate in CAS when a global revision is supplied. An explicitly selected
+`agent_control` [domain token](kee-ledger.md#explicit-domain-revision-tokens)
+may replace the global precondition, without weakening resource or event CAS.
+Identical envelope `callId` retries return the original
 durable receipt without advancing again.
 
 Terminal phases cannot silently resume. They may accept late log/outcome events
@@ -127,6 +130,30 @@ is needed; never serialize credentials or authority tokens. If it cannot fit,
 stop before dispatch rather than execute an unrecoverable operation. Probe
 `kee_call_status` after an ambiguous outcome; unknown is not proof of failure.
 Reconstruct current host authority, never permissions from a stored manifest.
+
+### Avoiding self-conflict during cursor journaling
+
+An action plan must explicitly bind `kee_ledger_status`'s
+`domainRevisions.application_todo` (or a TODO read's `domainRevision`) as the
+TODO call's `arguments.revision` before preparation. The host persists that
+**unchanged** request and audit snapshot in its pending cursor event, then
+dispatches the exact envelope. Intervening cursor writes do not invalidate the
+TODO precondition. Another TODO write does: stop on that conflict rather than
+silently rebase the action.
+
+The host may similarly capture `domainRevisions.agent_control` for its outcome
+journal, with the exact run resource revision and event sequence. A committed
+TODO action does not invalidate that host-domain precondition; another cursor
+event still does. Persist and verify the actual committed receipt before
+continuing. Unknown outcome remains unresolved, including after Stop.
+
+Legacy plans using the global `revision` still receive whole-ledger conflicts.
+The host cannot silently reinterpret those plans as domain-scoped ones.
+Run kind remains **`agent_run`**, ID `run:<UUID>`, registry domain `agent_control`;
+there is no second `symbolic_run` authority. A typed symbolic host can place its
+immutable knowledge-root/MT/generation/program/limits manifest in `sourceJson`
+and validate its bounded lossless cursor/events inside `stateJson`/`eventJson`.
+The executable knowledge root need not equal the host's audit-agent ID.
 
 ## Reads and durability
 

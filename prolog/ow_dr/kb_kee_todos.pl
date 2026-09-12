@@ -10,7 +10,10 @@
 
 run(ledger_status,_,_,_,_,Reply) :- !,
     kb_kee_ledger:snapshot(State),length(State.resources,Count),
-    Reply=json{revision:State.revision,sequence:State.sequence,resources:Count,changesets:State.sequence}.
+    kb_kee_ledger:domain_revision(State,application_todo,TodoRevision),
+    kb_kee_ledger:domain_revision(State,agent_control,AgentRevision),
+    Reply=json{revision:State.revision,sequence:State.sequence,resources:Count,changesets:State.sequence,
+      domainRevisions:json{application_todo:TodoRevision,agent_control:AgentRevision}}.
 run(ledger_call_status,_,P,_,Args,Reply) :- !,
     kb_kee_ledger:snapshot(State),
     (kb_kee_ledger:call_receipt(P,Args.callId,State,Event)->
@@ -23,20 +26,22 @@ run(ledger_call_status,_,P,_,Args,Reply) :- !,
 run(todo_get,_,P,_,Args,Reply) :- !,
     kb_kee_ledger:snapshot(State),active_resource(State,Args.id,Resource),
     kb_kee_auth:authorize_mt(P,read,Resource.mt),
-    Reply=json{revision:State.revision,resource:Resource}.
+    kb_kee_ledger:domain_revision(State,application_todo,DomainRevision),
+    Reply=json{revision:State.revision,domainRevision:DomainRevision,resource:Resource}.
 run(todo_list,_,P,_,Args,Reply) :- !,
     kb_kee_ledger:snapshot(State),mt_key(Args.mt,MT),kb_kee_auth:authorize_mt(P,read,MT),
     findall(Key-R,(member(R,State.resources),R.kind==todo,R.deleted==false,R.mt==MT,
       matches_status(Args,R),Priority is -R.data.priority,Key=Priority-R.id),Pairs),
     keysort(Pairs,Sorted),pairs_values(Sorted,Rows),page(Args,Rows,Page,Total),
-    Reply=json{revision:State.revision,items:Page,total:Total}.
+    kb_kee_ledger:domain_revision(State,application_todo,DomainRevision),
+    Reply=json{revision:State.revision,domainRevision:DomainRevision,items:Page,total:Total}.
 run(ledger_audit,_,P,_,Args,Reply) :- !,
     kb_kee_ledger:snapshot(State),mt_key(Args.mt,MT),kb_kee_auth:authorize_mt(P,read,MT),
     reverse(State.events,Events),
     include(visible_event(P,MT),Events,Rows),page(Args,Rows,Page,Total),
     Reply=json{revision:State.revision,items:Page,total:Total}.
 run(Operation,Token,P,Request,Args,Reply) :-
-    kb_kee_ledger:commit(Token,P,Request,Args.revision,
+    kb_kee_ledger:commit(Token,P,Request,scoped(application_todo,Args.revision),
       kb_kee_todos:plan(Operation,P,Args),kb_kee_todos:validate_transition,Reply).
 
 mt_key(null,null) :- !.

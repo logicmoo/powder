@@ -10,21 +10,24 @@
 
 run(agent_run_get,_,P,_,Args,Reply) :- !,
     kb_kee_ledger:snapshot(State),owned_run(P,read,State,Args.id,R),
-    Reply=json{revision:State.revision,resource:R}.
+    kb_kee_ledger:domain_revision(State,agent_control,DomainRevision),
+    Reply=json{revision:State.revision,domainRevision:DomainRevision,resource:R}.
 run(agent_run_list,_,P,_,Args,Reply) :- !,
     kb_kee_auth:canonical_mt(Args.mt,MT),kb_kee_auth:authorize_mt(P,read,MT),
     kb_kee_ledger:snapshot(State),
     findall(Summary,(member(R,State.resources),R.kind==agent_run,R.mt==MT,
       visible(P,R),run_summary(R,Summary)),Rows),
-    page(Args,Rows,Items,Total),Reply=json{revision:State.revision,items:Items,total:Total}.
+    page(Args,Rows,Items,Total),kb_kee_ledger:domain_revision(State,agent_control,DomainRevision),
+    Reply=json{revision:State.revision,domainRevision:DomainRevision,items:Items,total:Total}.
 run(agent_run_events,_,P,_,Args,Reply) :- !,
     kb_kee_ledger:snapshot(State),owned_run(P,read,State,Args.id,_),
     findall(Item,(member(E,State.events),member(Entry,E.entries),Entry.key==Args.id,
       event_item(E,Entry,Item)),Rows),
-    page(Args,Rows,Items,Total),Reply=json{revision:State.revision,items:Items,total:Total}.
+    page(Args,Rows,Items,Total),kb_kee_ledger:domain_revision(State,agent_control,DomainRevision),
+    Reply=json{revision:State.revision,domainRevision:DomainRevision,items:Items,total:Total}.
 run(Operation,Token,P,Request,Args,Reply) :-
     (P.kind==llm->reject(agent_control_host_only,json{});true),
-    kb_kee_ledger:commit(Token,P,Request,Args.revision,
+    kb_kee_ledger:commit(Token,P,Request,scoped(agent_control,Args.revision),
       kb_kee_agent_runs:plan(Operation,P,Request,Args),
       kb_kee_agent_runs:validate_transition,Reply).
 visible(P,R) :- catch(kb_kee_ledger:authorize_image(P,read,R),error(kee(_,_),_),fail).

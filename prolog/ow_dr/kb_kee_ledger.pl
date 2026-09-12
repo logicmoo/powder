@@ -1,4 +1,4 @@
-:- module(kb_kee_ledger,[snapshot/1,resource/3,event/3,commit/7,inverse/4,call_receipt/4]).
+:- module(kb_kee_ledger,[snapshot/1,resource/3,event/3,commit/7,inverse/4,call_receipt/4,domain_revision/3]).
 :- use_module(kb_cache,[]).
 :- use_module(kb_paths,[]).
 :- use_module(kb_activity,[]).
@@ -87,6 +87,16 @@ call_receipt(Principal,CallId,State,Event) :-
     call_key(Principal,CallId,Key),member(Event,State.events),Event.callKey==Key,!.
 call_key(P,CallId,Key) :-
     kb_cache:terms_digest([P.actor,P.agent,P.conversation,CallId],Key).
+domain_kind(application_todo,todo).
+domain_kind(agent_control,agent_run).
+domain_revision(State,Domain,Token) :-
+    domain_kind(Domain,Kind),
+    foldl(last_domain_sequence(Kind),State.resources,0,Sequence),
+    (Sequence==0->kb_cache:terms_digest([kee_domain_v1,Domain],Head);
+      nth1(Sequence,State.events,Event),Head=Event.revision),
+    format(string(Token),'kee:~w:~w',[Domain,Head]).
+last_domain_sequence(Kind,R,Previous,Sequence) :-
+    (R.kind==Kind->Sequence is max(Previous,R.sequence);Sequence=Previous).
 resource_revision(Record,Revision) :-
     (del_dict(revision,Record,_,Body)->true;Body=Record),
     kb_cache:terms_digest([kee_resource_v1,Body],Revision).
@@ -155,14 +165,15 @@ commit_owned(Token,P,Request,Expected,Planner,Validator,Path,Reply) :-
     (member(Old,Before.events),Old.callKey==CallKey->
       (Old.requestHash==RequestHash->true;reject(idempotency_conflict,json{})),
       authorize_entries(P,write,Old.entries),reply(Old,Before.revision,true,Reply)
-    ;same_revision(Expected,Before.revision),
+    ;check_revision(Expected,Before),
       kb_kee_auth:reserve_mutation(Token),
       call(Planner,Before,Changes,Payload),
       (ground(Payload),is_dict(Payload,json),safe_data(Payload),is_list(Changes),
        Changes\==[],length(Changes,Count),Count=<100->true;reject(invalid_changeset,json{})),
       Sequence is Before.sequence+1,
       (Sequence=<10000->true;reject(ledger_capacity,json{})),
-      maplist(make_entry(Before,Sequence),Changes,Entries),authorize_entries(P,write,Entries),
+      maplist(make_entry(Before,Sequence),Changes,Entries),
+      check_domain_entries(Expected,Entries),authorize_entries(P,write,Entries),
       uuid(UUID),atom_string(UUID,Id),get_time(Time),
       Draft=json{id:Id,schemaVersion:1,sequence:Sequence,parent:Before.revision,
         callId:Request.callId,callKey:CallKey,requestHash:RequestHash,actor:Actor,tool:Request.tool,time:Time,
@@ -175,6 +186,20 @@ commit_owned(Token,P,Request,Expected,Planner,Validator,Path,Reply) :-
       stage_commit(Token,P,Path,After)).
 same_revision(Expected,Actual) :-
     (atom_string(Actual,Expected)->true;reject(ledger_conflict,json{actual:Actual})).
+check_revision(scoped(Domain,Expected),State) :- !,
+    (sub_string(Expected,0,4,_,"kee:")->
+      format(string(Prefix),'kee:~w:',[Domain]),
+      (string_concat(Prefix,_,Expected)->true;reject(domain_revision_scope,json{domain:Domain})),
+      domain_revision(State,Domain,Actual),
+      (Expected==Actual->true;reject(domain_conflict,json{domain:Domain,actual:Actual}))
+    ;same_revision(Expected,State.revision)).
+check_revision(Expected,State) :- same_revision(Expected,State.revision).
+check_domain_entries(scoped(Domain,_),Entries) :- !,
+    domain_kind(Domain,Kind),
+    (forall(member(E,Entries),
+      (E.after.kind==Kind,(E.before==null;E.before.kind==Kind)))->true;
+      reject(invalid_changeset,json{reason:domain_mismatch})).
+check_domain_entries(_,_).
 actor(P,json{actor:P.actor,kind:P.kind,agent:P.agent,conversation:P.conversation,
     model:P.model,promptVersion:P.promptVersion,promptHash:P.promptHash,policyVersion:P.policyVersion}).
 make_entry(State,Sequence,change(Key,Expected,Desired),json{key:Key,before:Before,after:After}) :-

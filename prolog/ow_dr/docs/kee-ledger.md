@@ -81,11 +81,56 @@ Graph validation covers the proposed complete state before publication.
 
 ## Revisions, results and retries
 
-Every mutation requires the exact ledger `revision`. Update/delete additionally
+Every mutation requires an explicit optimistic `revision`. A global ledger hash
+retains its exact whole-ledger meaning. Update/delete additionally
 require the resource revision. Undo/redo also compare every affected current
 resource against the target event's after-image. Even an ABA edit that restores
 the same text has a new version and causes a conflict. Unrelated edits can be
 retained by obtaining a fresh ledger revision before undoing an untouched item.
+
+### Explicit domain revision tokens
+
+`kee_ledger_status` additionally returns:
+
+```text
+domainRevisions:{
+  application_todo:"kee:application_todo:<64-hex-head>",
+  agent_control:"kee:agent_control:<64-hex-head>"
+}
+```
+
+TODO get/list and agent-run get/list/events also return the corresponding
+`domainRevision` from the **same validated snapshot** as their data. Tokens are
+opaque optimistic identities, not permissions, per-owner scopes or exports.
+They cover the entire named domain, including other authorized or unauthorized
+MTs; a change in another MT may therefore cause a conservative conflict.
+
+TODO create/update/delete/undo/redo accept either a global hash or an
+`application_todo` token in their existing `revision` argument. Agent-run
+create/event similarly accept a global hash or an `agent_control` token.
+No tool rewrites an argument, rebases a planned call or substitutes a current
+token. Clients explicitly bind `domainRevisions.application_todo` when a plan
+must tolerate intervening cursor-only events. Legacy global-hash calls remain
+strict and will conflict after **any** intervening event.
+
+Each token changes on every event touching its resource kind, including
+tombstones, identical-data rewrites and undo/redo (ABA). Cursor-only events leave
+the TODO token unchanged; TODO-only events leave the agent-control token
+unchanged. Tokens are reconstructed from the last domain-changing event in the
+validated audit history, with a deterministic domain-specific empty identity.
+No new file, mutable counter, checkpoint state or duplicated authority is added.
+
+Checking occurs under the existing native writer lock. A wrong-domain token
+raises `domain_revision_scope`; a stale own-domain token raises `domain_conflict`.
+Both preserve the ledger. Existing resource/event sequence checks, permissions,
+dependency validation and undo before-images still apply. All before/after
+images must belong to the compiled adapter's domain.
+
+The global hash chain, sequence, resource hashes, mutation receipts, call-status
+response and idempotency namespace are unchanged. A receipt's `revision` is
+still its **global event hash**, never a replacement domain token. Exact replay
+is checked before optimistic revisions; preserve the original token and every
+other argument when retrying the same call ID.
 
 The ordinary KEE response envelope contains this mutation result:
 
