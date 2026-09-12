@@ -4,6 +4,28 @@
 implements the real serving/console adapter, and `kb_checkpoint_http.pl` exposes
 the local Settings interface. No listener is contacted or created on module load.
 
+## Integrated entry and policy boundary
+
+`app.pl` delegates its existing `run/1` entry to
+`kb_checkpoint_host:run_application/1`. The normal CLI source/port/debug options
+and independent Prolog/Shell console callbacks are retained. Runtime Settings
+(`#/settings`) renders the checkpoint component; the native-annotation
+`#/ui-settings` page is unchanged.
+
+The parent's existing production execution pause remains fail-closed. Ordinary
+cold startup still starts its requested KB, owned HTTP pools and optional debug
+service, but does not create a checkpoint control listener while paused. Settings
+shows the policy reason and disables checkpoint creation/selection/trials.
+Selected images do not override this pause. No production policy was unpaused
+by the integration.
+
+`kb_server` installs SWI's supported `http_request_expansion/2` guard at the
+application API mount. It blocks trial mutations even in separately registered
+catalog/annotation handlers, while permitting explicitly read-only POST queries
+and inspectors. The fence covers candidate startup before its listener is
+published, and the interval between commit and final activation. It uses a
+memory-only role check, not a potentially failing status/profile expansion.
+
 ## Settings HTTP interface
 
 Routes are below the canonical `/swish/openworld_dr/api/checkpoint/` mount.
@@ -13,7 +35,7 @@ Use JSON bodies, not filesystem paths or executable goals.
 | Method / route | Input | Result |
 |---|---|---|
 | GET `catalog` | none | Image catalog/revision, generation, redacted instance, operations and trials |
-| GET `configuration` | none | Effective settings/SourcePacks, including immutable image fallback for absent sidecars |
+| GET `configuration` | none | Effective settings/SourcePacks, using module-owned imported fallback only for absent sidecars |
 | GET `inspect` | `?id=s-UUID` | Full image metadata, without control credentials |
 | POST `create` | `{name,generation,revision}` | Accepted operation; poll until completed/failed/cancelled |
 | POST `select` | `{id,revision}`; `id:"none"` clears selection | Updated next-start catalog; does not start or promote |
@@ -121,6 +143,9 @@ accepted work. Lease-owned snapshots are allowed only from their owner thread.
 Consequently the private control listener intentionally has one worker:
 candidate prepare, proof, bind, commit, and activate requests must share the
 same thread. Do not attach an autoscaling HTTP pool to this private listener.
+Material verification now checks the complete SourcePack authority/revision DTO
+under that lease, not just the semantic selections. Candidate prepare acquires
+its lease before this verification and releases it on failure.
 
 Candidate startup uses `swipl -q -f none -x IMAGE -- --checkpoint-candidate REQUEST`.
 This enters the controlled `resume_entry/0`, rebuilds native handles/index
@@ -181,10 +206,10 @@ only after confirmed exit and successful owned-artifact removal, atomically
 clearing the run's PID so repeated cancellation cannot release another process.
 For ordinary SWI-owned children release is a no-op after their terminal wait.
 Promoted candidates are never killed by this cleanup path. After verified
-promotion and a successful `retire_old` callback, the coordinator releases its
-candidate process handle without stopping the replacement, retaining the PID
-only as instance-identity metadata. Parent retirement hooks must not release
-that same handle themselves. Old-process shutdown remains parent-owned.
+activation, the coordinator releases its candidate process handle **before**
+requesting old-instance retirement, without stopping the replacement. The PID
+remains instance-identity metadata only. Retirement hooks must not release that
+same handle themselves.
 The clean-builder guard also calls the launcher's read-only
 `launcher_snapshot_safe/0` when loaded, without forcing DLL initialization.
 
@@ -236,12 +261,19 @@ owned process before successful verification.
 ## Isolated integration proof
 
 ```powershell
+$env:LOGOS_CHROME='C:\Program Files\Google\Chrome\Application\chrome.exe'
 python prolog\ow_dr\tests\checkpoint_native_integration.py
 python prolog\ow_dr\tests\saved_state_integration.py
+swipl -q -f none -s prolog\ow_dr\tests\test_checkpoint_wiring.pl -s prolog\ow_dr\tests\test_checkpoint_pause.pl -g "run_tests([checkpoint_wiring,checkpoint_pause]),halt" -t "halt(1)"
+node --test prolog\ow_dr\tests\checkpoints-ui.test.mjs
 ```
 
 Only disposable copied backend code, tiny fixtures, owned children, and ephemeral
 loopback ports are used. No production checkpoint is created or tried.
+The two Python harnesses explicitly authorize the c06 workflow only in their
+copied policy module, with a checked test-directory boundary. The primary module
+and policy document remain untouched; there is no production HTTP, environment
+or saved-image opt-out. The separate pause tests retain the real production gate.
 
 Native coverage includes two loaded files, actual qsave/new-process restore after
 deleting original/cache/native inputs, busy-save refusal, an actual fresh Windows
@@ -252,22 +284,38 @@ next-start restore with explicit primary-port override and restored extra port.
 Fault injection modifies only the disposable adapter copy; the launcher, native
 listeners, process handles and rollback protocol are real.
 Configured debug restoration is also exercised: custom limits survive, a trial
-gets a separate debug port, original-port activation generates another fresh
-credential, rollback recreates the old service, and `--debug-off` is honored on
+starts no debug listener or credentials, original-port activation generates fresh
+credentials only after the old owner releases its listener, rollback recreates
+the old service with its saved options and new credentials, and `--debug-off` is honored on
 selected-image startup. Only the copied credential script's storage root is
 redirected under the fixture; its private Windows ACL implementation is unchanged.
+The harness requires one exact root-assignment anchor, substitutes a pre-created
+absolute scratch directory using PowerShell single-quote escaping, and refuses
+launch if that anchor changes. The copied script remains beside its source-module
+path and uses a UTF-8 BOM for Windows PowerShell; production script bytes are untouched.
 No token is returned by the test HTTP endpoint or serialized into image metadata.
+
+The actual SWI controller is assigned to an owned kill-on-close job with
+breakaway permission after its readiness handshake. Each native SWI candidate
+must be outside that explicit job (other Windows compatibility jobs are allowed).
+After takeover, closing the controller's job must leave the candidate serving.
+Exact child process handles are retained for terminal cleanup.
 
 The PL-Unit tests independently cover metadata/IDs/sharing/mutability, corrupt or
 incomplete images, catalog revisions/native locks, selection/CLI overrides,
 empty KB, cancellation, utility integrity, annotation drift, retention integrity,
 SUMO/dialect exclusions, source-free origin classification, imported metadata
 helper exclusion, HTTP origin/consent checks and operation admission.
-The Chrome fixture exercises the standalone Settings helper on desktop/mobile,
-including escaped names and default-off promotion consent.
-The latest extended native run passed, including missing-sidecar repeat save and
-selected startup. Earlier intermittent missing-thread shutdown failures remain
-documented in saved-application-state.md rather than being declared fixed.
+The native harness drives the actual full application's Runtime Settings page in
+Chrome to create its first image through the real HTTP API. It verifies desktop/
+mobile navigation, permits a real trial query, rejects trial mutations across
+mounted handlers, and rejects a same-content SourcePack revision change. The
+standalone Chrome fixture additionally covers escaped names, paused controls,
+operation-specific status and default-off promotion consent.
+The complete native run passed in **216.506 seconds**, including missing-sidecar
+repeat save and selected restart through `app.pl`. Earlier native shutdown
+failures remain historical observations, not a claimed diagnosis of every
+Windows termination path.
 
 The older `checkpoint_integration.py` is a diagnostic surrogate harness; its
 historical results are not evidence of native-console or current full-app wiring.

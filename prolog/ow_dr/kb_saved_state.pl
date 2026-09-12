@@ -28,6 +28,7 @@
 :- use_module(library(readutil)).
 :- use_module(library(uuid)).
 :- use_module(kb_checkpoint, []).
+:- use_module(kb_checkpoint_policy, []).
 :- dynamic image_manifest/1, image_builder_root/1, restored/0, resume_started/0.
 :- volatile restored/0, resume_started/0.
 :- thread_local building/0.
@@ -141,12 +142,14 @@ select_saved_state(Input,Expected,Result) :-
 startup_saved_state(ExplicitSources,Choice) :-
     must_be(list,ExplicitSources),
     (ExplicitSources\=[]->Choice=sources(ExplicitSources)
+    ;kb_checkpoint_policy:checkpoint_policy(Policy),Policy.executionPaused==true->Choice=none
     ;read_catalog(Catalog,_),text_atom(Catalog.selected,Id),
      (Id==none->Choice=none;
        member(M,Catalog.states),text_atom(M.id,Id),
        validate_artifact(M,true,Path),Choice=saved(Path,M))).
 
 run_saved_state(Id,Args,Exit) :-
+    kb_checkpoint_policy:require_checkpoint_execution(resume),
     must_be(list,Args),maplist(must_be(atom),Args),
     saved_state_metadata(Id,Metadata),validate_artifact(Metadata,true,Path),
     current_prolog_flag(executable,SWI),working_directory(Directory,Directory),
@@ -157,6 +160,7 @@ run_saved_state(Id,Args,Exit) :-
       kb_console_launch:release_process(PID)).
 
 create_saved_state(Name0,ExpectedGeneration,ExpectedRevision,Metadata) :-
+    kb_checkpoint_policy:require_checkpoint_execution(save),
     atom_string(Name,Name0),atom_length(Name,N),between(1,100,N),
     must_be(integer,ExpectedGeneration),
     with_catalog_lock(create_locked(Name,ExpectedGeneration,ExpectedRevision,Metadata)), !.
@@ -400,6 +404,7 @@ builder_main :-
 child_failure(unwind(Reason),_) :- !,throw(unwind(Reason)).
 child_failure(Error,1) :- print_message(error,Error).
 build_image(Snapshot,Image) :-
+    kb_checkpoint_policy:require_checkpoint_execution(build),
     file_directory_name(Image,Work),
     app_dir(App),directory_file_path(App,'app.pl',Application),
     directory_file_path(App,'kb_checkpoint_host.pl',HostApplication),
@@ -589,7 +594,8 @@ snapshot_count(Count) :-
     length(Ids,Count),sort(Ids,Unique),same_length(Ids,Unique).
 
 resume_entry :-
-    catch(((restore_saved_data(Metadata)->true;throw(error(saved_state_restore_failed,_))),
+    catch((kb_checkpoint_policy:require_checkpoint_execution(restore),
+           (restore_saved_data(Metadata)->true;throw(error(saved_state_restore_failed,_))),
            current_prolog_flag(argv,Args),
            (Args=['--saved-state-verify',Report]->
              verification_report(Metadata,Report)
@@ -599,6 +605,7 @@ resume_entry :-
       Error,child_failure(Error,Code)),
     halt(Code).
 start_resumed_application(Args,Metadata) :-
+    kb_checkpoint_policy:require_checkpoint_execution(resume),
     with_mutex(powder_saved_resume,
       (resume_started->throw(error(saved_state_already_resumed,_));assertz(resume_started))),
     (clause(resume_application(_,_),_)->
@@ -739,6 +746,7 @@ validate_artifact_data(Metadata,HashImage,Image) :-
     ;true).
 
 run_child(Program,Args,Log,Seconds) :-
+    kb_checkpoint_policy:require_checkpoint_execution(child),
     setup_call_cleanup(open(Log,append,Output,[encoding(utf8)]),
       setup_call_cleanup(
          process_create(Program,Args,

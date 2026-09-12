@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 test('checkpoint links stay on a local canonical application address', () => {
   assert.equal(checkpointAddress(4050, 'http://localhost:3050/swish/openworld_dr/?old=1#old'),
-    'http://localhost:4050/swish/openworld_dr/#/ui-settings');
+    'http://localhost:4050/swish/openworld_dr/#/settings');
   for (const port of [0, 65536, '4050', NaN]) assert.equal(checkpointAddress(port, 'http://localhost/'), null);
   assert.equal(checkpointAddress(4050, 'http://evil.invalid/'), null);
 });
@@ -90,9 +90,10 @@ test('real browser keeps create, select, trial, cancel and explicit takeover sep
             stateHash: 'a'.repeat(64), path: '.logos-state/saved-states/s-fixture/image.state',
             configuration: { settings: { startupConfigured: true, startupFiles: ['KBs/fixture.krf'] },
               sourcePacks: [{ name: 'Saved composition', roots: ['KBs/fixture.krf'] }] },
+            checkpoint: { runtime: { debug: { enabled: true, port: 4053 } } },
             available: true, selectedNextStart: false }];
         } else {
-          catalog.runs = [{ id: `trial-${sequence}`, phase: 'trial_ready', revision: 1,
+          catalog.runs = [{ id: `trial-${sequence}`, checkpoint: 's-fixture', phase: 'trial_ready', revision: 1,
             primary: 4050, temporary: 4052, targets: [{ port: 4050 }, { port: 4051 }],
             message: 'Candidate verified; original instance remains untouched.' }];
         }
@@ -120,6 +121,8 @@ test('real browser keeps create, select, trial, cancel and explicit takeover sep
     await click('Try in a new console');
     await wait(`document.querySelector('.checkpoint-consent') !== null`);
     assert.equal(await evaluate(`document.querySelector('.checkpoint-consent input').checked`), false);
+    assert.equal(await evaluate(`document.querySelector('.checkpoint-consent').textContent.includes('debug port 4053')`), true);
+    assert.equal(await evaluate(`document.querySelector('.checkpoint-trial').textContent.includes('Debug port 4053 is deferred')`), true);
     assert.equal(await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Take over original ports').disabled`), true);
     assert.equal(requests.some(item => item.action === 'promote'), false);
     await click('Close trial');
@@ -148,6 +151,13 @@ test('real browser keeps create, select, trial, cancel and explicit takeover sep
     await click('Refresh');
     await wait(`document.body.textContent.includes('Read-only until explicitly promoted')`);
     assert.equal(await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Try in a new console').disabled`), true);
+    catalog = { ...catalog, instance: null,
+      automation: { executionPaused: true, reason: 'Checkpoint execution is paused in this fixture.' } };
+    await click('Refresh');
+    await wait(`document.body.textContent.includes('Normal configured source startup is unchanged')`);
+    for (const label of ['Create saved state', 'Select for next launch', 'Try in a new console']) {
+      assert.equal(await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(label)}).disabled`), true);
+    }
     await evaluate('controller.abort()');
   } finally {
     await browser.close();

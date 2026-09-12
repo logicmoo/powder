@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import uuid
+from checkpoint_fixture_policy import authorize_copied_checkpoint_fixture
 
 APP = Path(__file__).resolve().parents[1]
 
@@ -19,6 +20,7 @@ def main():
         for directory in ["docs", "web"]:
             shutil.copytree(APP / directory, app / directory,
                             ignore=shutil.ignore_patterns("node_modules", ".git"))
+        authorize_copied_checkpoint_fixture(app)
         (app / "tests").mkdir()
         for name in ["test_saved_state.pl", "test_checkpoint_http.pl"]:
             shutil.copy2(APP / "tests" / name, app / "tests" / name)

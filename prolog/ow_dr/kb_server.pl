@@ -5,6 +5,7 @@
 :- use_module(kb_catalog).
 :- use_module(kb_catalog_http).
 :- use_module(kb_debug_admin,[]).
+:- use_module(kb_checkpoint_http,[]).
 :- use_module(kb_statistics).
 :- use_module(kb_source_packs, []).
 :- use_module(kb_mt_graph, []).
@@ -101,6 +102,20 @@
 :- http_handler(openworld_dr('api/'), unknown_api, [prefix]).
 :- http_handler(openworld_dr(.), static, [prefix]).
 :- initialization(register_mount_redirect).
+:- http_request_expansion(checkpoint_trial_guard,90).
+
+checkpoint_trial_guard(Request,Request,_) :-
+    memberchk(method(Method),Request),\+memberchk(Method,[get,head,options]),
+    memberchk(path(Path),Request),app_base(Base),atom_concat(Base,'api/',Prefix),
+    atom_concat(Prefix,Action,Path),\+trial_read_only_post(Action),
+    kb_checkpoint:checkpoint_read_only,
+    throw(http_reply(bytes('application/json',
+      "{\"error\":{\"code\":\"trial_read_only\",\"message\":\"Trials are read-only until explicitly promoted from the original instance.\"}}"),
+      [status(409),cache_control('no-store')])).
+trial_read_only_post(Action) :-
+    memberchk(Action,[query,'assertions/annotations','tva/summary','tva/detail',
+      'tva/assertion','tva/interpretation','tva/interpretations','terms/sections',
+      'kb/statistics/selected','kb/packs/resolve']).
 
 register_mount_redirect :-
     kb_urls:reload_base,

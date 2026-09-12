@@ -1978,7 +1978,8 @@ async function mappingsPage(route, signal) {
   return panel;
 }
 
-function settingsPage() {
+async function settingsPage(_route, signal) {
+  const { renderCheckpointSettings } = await import('./checkpoints.js');
   const inputs = {};
   const feedback = element('div', { className: 'settings-feedback', 'aria-live': 'polite' });
   const apply = values => {
@@ -1998,7 +1999,7 @@ function settingsPage() {
     inputs[key] = input;
     return inputField(`${label} (1–${MAXIMUMS[key]})`, input);
   });
-  return element('div', {}, heading('Settings', 'Persisted preferences for this browser; changing them does not reload KB sources.'),
+  return element('div', {}, heading('Settings', 'Browser preferences, saved application states and application controls.'),
     element('form', { className: 'settings-form', novalidate: true, onsubmit: event => {
       event.preventDefault();
       apply(Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value])));
@@ -2006,6 +2007,7 @@ function settingsPage() {
       element('button', { type: 'submit', className: 'button' }, 'Save settings'),
       button('Restore defaults', () => apply(DEFAULT_SETTINGS), 'button secondary')), feedback),
     element('p', { className: 'muted' }, 'Page size applies to terms, predicates, assertions and mappings. Explicit URL limits still override defaults. Query timeouts remain unchanged. All microtheories are always listed, without a cap.'),
+    renderCheckpointSettings({ api, signal }),
     element('section', { className: 'settings-section' }, element('h2', {}, 'Task pools'),
       link('Worker profiles and task contents', 'tasks', {}, 'button secondary')),
     element('section', { className: 'settings-section' }, element('h2', {}, 'SUMO → CycL mappings'),

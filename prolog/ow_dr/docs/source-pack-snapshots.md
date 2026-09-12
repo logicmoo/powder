@@ -65,9 +65,9 @@ view and must match the DTO's packs. Configuration hashes do not conflate the
 document revision with semantic selections.
 
 **Restored-data integrity is not live authority verification.** It must work
-without a sidecar. Before any future manual activation/promotion, the coordinator
-must separately call `verify_source_pack_snapshot_authority/1` under its existing
-checkpoint lease. That check rejects repository/sidecar configuration changes,
+without a sidecar. The integrated coordinator separately calls
+`verify_source_pack_snapshot_authority/1` under its checkpoint lease before
+trial/takeover material checks. That check rejects repository/sidecar configuration changes,
 changed revisions (including removal), or changed content. It reads the current
 document but does not write or adopt it.
 

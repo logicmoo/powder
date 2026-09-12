@@ -305,8 +305,8 @@ before authorization/publication, retaining native locking and revision checks.
 Runtime data schema 7 stores the full authority/revision/packs DTO separately as
 `Metadata.sourcePackSnapshot`. Its volatile fallback is explicitly reimported
 on restore, without source/cache reads. Semantic configuration identity remains
-separate from document authority. Before future activation the coordinator must
-verify the captured DTO against live SourcePack authority under its lease.
+separate from document authority. The integrated coordinator verifies the
+captured DTO against live SourcePack authority under its lease.
 
 An earlier extended actual-native Windows test passed in 319.270 seconds:
 trial, busy refusal, cancel, injected-bind-failure rollback, successful takeover,
@@ -319,9 +319,19 @@ Earlier native runs exposed intermittent old-host
 The latest run did not reproduce them; this is not proof that the underlying
 shutdown race is fixed. Cleanup stages now identify debug/HTTP/control/pools
 failures. A subsequent expanded native test also exposed an unresolved candidate
-exit `0xC000013A`; no cause or fix is claimed. Parent app/Settings wiring, the
-manual-only non-serving workflow and native shutdown review remain release
-considerations. Existing checkpoint-policy execution guards remain in force.
+exit `0xC000013A`; no root cause is claimed. App/API/Settings wiring is now
+integrated and the complete copied-app native workflow passed in 216.506 seconds,
+including real browser-created qsave, source/cache removal, read-only trial
+queries, cancellation, failed-bind rollback, fresh debug credentials, original
+port takeover, survival after old-owner/job retirement, sidecar-free repeat save,
+and selected restart through `app.pl` with explicit CLI overrides.
+
+Production checkpoint-policy guards remain in force. The integration test
+authorizes c06 actions only by replacing the policy module in its own disposable
+copied application. It never unpauses production through HTTP, environment
+variables or image data. The production-pause/cold-start tests run against the
+unchanged real policy. The parent's manual-only non-serving policy decision is
+separate from the now-complete host wiring.
 
 ## Focused verification
 

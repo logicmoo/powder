@@ -15,7 +15,7 @@ export function checkpointAddress(port, current = location.href) {
   if (!['localhost', '127.0.0.1'].includes(url.hostname)) return null;
   url.port = String(port);
   url.search = '';
-  url.hash = '#/ui-settings';
+  url.hash = '#/settings';
   return url.href;
 }
 
@@ -40,7 +40,7 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
   const runs = node('div', undefined, { 'aria-label': 'Checkpoint trials' });
   section.append(node('h2', 'Saved application states'),
     node('p', 'A saved state contains the loaded KB, native annotations, configuration and executable backend code. The next launch resumes that data without re-reading KB sources. Keep these files private.'),
-    node('p', 'Create, select for next launch, and try are separate actions. A trial never takes over the original ports automatically.'),
+    node('p', 'Create, select for next launch, and try are separate actions. A trial never takes over the original ports automatically. Its debug listener stays off until authorized takeover releases the original listener.'),
     notice, form, selection, files, operations, runs);
   let catalog, busy = false, timer, polling = false, stopped = false;
   let operationRows = [], runRows = [];
@@ -54,9 +54,10 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
   };
   function controls() {
     const active = operationRows.some(pendingOperation);
-    create.disabled = busy || !catalog || active || catalog?.instance?.role === 'candidate';
+    const paused = catalog?.automation?.executionPaused === true;
+    create.disabled = busy || !catalog || active || paused || catalog?.instance?.role === 'candidate';
     refresh.disabled = busy;
-    cold.disabled = busy || !catalog || catalog.selected === 'none' || catalog?.instance?.role === 'candidate';
+    cold.disabled = busy || !catalog || paused || catalog.selected === 'none' || catalog?.instance?.role === 'candidate';
   }
   async function action(work) {
     if (busy || !alive()) return;
@@ -76,7 +77,9 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
     return address ? node('a', text, { href: address, target: '_blank', rel: 'noopener' }) : node('span', text);
   }
   function renderCatalog() {
-    selection.textContent = catalog.selected === 'none'
+    selection.textContent = catalog.automation?.executionPaused
+      ? `${catalog.automation.reason} Existing saved states remain available for inspection. Normal configured source startup is unchanged.`
+      : catalog.selected === 'none'
       ? 'Next launch: normal configured sources (no saved state selected).'
       : `Next launch: ${catalog.items.find(item => item.id === catalog.selected)?.name || catalog.selected}. Explicit CLI sources override this selection.`;
     files.replaceChildren();
@@ -104,6 +107,10 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
         }
         detailsBody.append(node('h4', 'Captured SourcePacks'), packs);
       }
+      const debug = item.checkpoint?.runtime?.debug;
+      if (debug) detailsBody.append(node('p', debug.enabled
+        ? `Captured debug listener: port ${debug.port}. Deferred during trial; takeover creates fresh credentials.`
+        : 'Captured debug listener: off.'));
       details.append(detailsBody);
       row.append(details);
       const actions = node('div', undefined, { class: 'checkpoint-actions' });
@@ -111,12 +118,12 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
         await post('select', { id: item.id, revision: catalog.revision });
         await load(); onChanged();
       });
-      select.disabled = !item.available || item.selectedNextStart || catalog.instance?.role === 'candidate';
+      select.disabled = !item.available || item.selectedNextStart || catalog.automation?.executionPaused || catalog.instance?.role === 'candidate';
       const trial = button('Try in a new console', async () => {
         const operation = await post('try', { id: item.id, generation: catalog.generation });
         operationRows.push(operation); renderOperations(); schedule();
       });
-      trial.disabled = !item.available || !catalog.instance || catalog.instance.role === 'candidate' || operationRows.some(pendingOperation);
+      trial.disabled = !item.available || !catalog.instance || catalog.automation?.executionPaused || catalog.instance.role === 'candidate' || operationRows.some(pendingOperation);
       actions.append(select, trial);
       row.append(actions);
       if (!item.available) row.append(node('p', item.issue || 'Unavailable. Recreate this state with the current backend.', { role: 'note' }));
@@ -126,7 +133,8 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
   function renderOperations() {
     operations.replaceChildren();
     for (const item of operationRows) {
-      const row = node('p', `${item.action}: ${item.phase}. ${item.message} `);
+      const row = node('p', `${item.action}: ${item.phase}. ${item.message} `,
+        { 'data-operation-id': item.id });
       if (item.phase === 'running') row.append(button('Cancel operation', async () => {
         const updated = await post('cancel', { kind: 'operation', id: item.id });
         operationRows = operationRows.map(old => old.id === updated.id ? updated : old);
@@ -141,6 +149,11 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
     for (const item of runRows) {
       const row = node('article', undefined, { class: 'checkpoint-trial' });
       row.append(node('h3', `Trial: ${item.phase.replaceAll('_', ' ')}`), node('p', item.message));
+      const debug = catalog?.items.find(image => image.id === item.checkpoint)?.checkpoint?.runtime?.debug;
+      const debugPort = debug?.enabled && Number.isInteger(debug.port) && debug.port > 0 && debug.port <= 65535
+        ? debug.port : null;
+      if (debugPort && ['starting', 'trial_ready'].includes(item.phase)) row.append(node('p',
+        `Debug port ${debugPort} is deferred. The original listener remains untouched until you authorize takeover.`));
       if (item.cleanup === 'deferred_empty_directory') row.append(node('p',
         'The candidate has stopped. Windows still holds its empty runtime directory; payload files have been removed.'));
       if (item.recovery) row.append(node('p', item.recovery, { role: 'alert' }));
@@ -150,7 +163,7 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
         const ports = item.targets.map(target => target.port).join(', ');
         const consent = node('input', undefined, { type: 'checkbox' });
         const label = node('label', undefined, { class: 'checkpoint-consent' });
-        label.append(consent, document.createTextNode(` I authorize takeover of original port(s) ${ports} and retirement of this old instance after verification.`));
+        label.append(consent, document.createTextNode(` I authorize takeover of original port(s) ${ports}${debugPort ? ` and debug port ${debugPort}` : ''}, fresh debug credentials if enabled, and retirement of this old instance after verification.`));
         const promote = button('Take over original ports', async () => {
           if (!consent.checked) return;
           const updated = await post('promote', { run: item.id, revision: item.revision, confirm: 'take-over-original-ports' });

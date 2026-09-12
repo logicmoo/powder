@@ -13,6 +13,8 @@
 :- use_module(kb_listener_control).
 :- use_module(kb_interactive_control).
 :- use_module(kb_jobs,[]).
+:- use_module(kb_checkpoint_host,[]).
+:- use_module(kb_checkpoint_policy,[]).
 :- use_module(kb_messages).
 :- initialization(kb_reload:remember_loaded_code).
 :- initialization(main, main).
@@ -20,13 +22,7 @@
 main(Args) :-
     catch(run(Args),Error,(print_message(error,Error),halt(1))).
 run(Args) :-
-    debug_cli_options(Args,AppArgs,DebugOptions),
-    arguments(AppArgs,3050,Port,[],Selected),
-    server_settings(Settings),
-    (Selected=[]->startup_selection([],Settings,Sources);
-     reverse(Selected,Sources)),
-    setup_call_cleanup(kb_jobs:start_pools(Settings),
-      serve_sources(Sources,Port,DebugOptions),kb_jobs:stop_pools).
+    kb_checkpoint_host:run_application(Args).
 serve_sources(Sources,Port) :-
     serve_sources(Sources,Port,[enabled(false)]).
 serve_sources(Sources,Port,DebugOptions) :-

@@ -3,9 +3,11 @@
            try_checkpoint/3, promote_checkpoint/3, checkpoint_status/2,
            await_checkpoint/3, cancel_checkpoint/2, candidate_entry/2,
            snapshot_safe/0, control_call/5, checkpoint_identity_http/1,
-           runtime_hook/3, launch_hook/4, process_hook/4, checkpoint_runs/1]).
+           runtime_hook/3, launch_hook/4, process_hook/4, checkpoint_runs/1,
+           checkpoint_read_only/0]).
 :- use_module(kb_paths).
 :- use_module(kb_store, []).
+:- use_module(kb_checkpoint_policy, []).
 :- use_module(kb_urls, [app_base/1]).
 :- use_module(library(crypto)).
 :- use_module(library(error)).
@@ -26,8 +28,10 @@
 :- dynamic instance/1, control_secret/1, control_replay/4, run/3, peer/2.
 :- dynamic candidate_context/1, candidate_lease/1, adopted/2, transition_thread/2.
 :- dynamic old_lease/2.
+:- dynamic candidate_starting/0.
 :- volatile instance/1, control_secret/1, control_replay/4, run/3, peer/2,
-            candidate_context/1, candidate_lease/1, adopted/2, transition_thread/2, old_lease/2.
+            candidate_context/1, candidate_lease/1, adopted/2, transition_thread/2, old_lease/2,
+            candidate_starting/0.
 :- multifile runtime_hook/3, launch_hook/4, process_hook/4, kb_saved_state:checkpoint_stamp/1.
 
 % Hooks are trusted application integration, never clauses supplied over HTTP.
@@ -43,7 +47,7 @@ default_process(wait,PID,Seconds,Result) :- process_wait(PID,Result,[timeout(Sec
 default_process(terminate,PID,_,done) :- process_kill(PID,term).
 default_process(release,_,_,done).
 snapshot_safe :-
-    ((instance(_);run(_,_,_);candidate_context(_);transition_thread(_,_))->
+    ((instance(_);run(_,_,_);candidate_context(_);candidate_starting;transition_thread(_,_))->
       throw(error(checkpoint_runtime_is_not_savable,_));true).
 kb_saved_state:checkpoint_stamp(Stamp) :-
     kb_checkpoint:instance(I),
@@ -53,6 +57,7 @@ kb_saved_state:checkpoint_stamp(Stamp) :-
       Stamp=Base.put(runtime,Configuration);Stamp=Base).
 
 start_managed_instance(Primary,Credentials) :-
+    kb_checkpoint_policy:require_checkpoint_execution(control_listener),
     must_be(integer,Primary),between(1,65535,Primary),
     with_mutex(powder_checkpoint_instance,
       (instance(_)->throw(error(checkpoint_instance_already_started,_));
@@ -77,6 +82,8 @@ checkpoint_instance(Info) :-
       Checkpoint=none,Run=none),
     Info=instance{id:I.id,role:I.role,primary:I.primary,profiles:Profiles,
       checkpoint:Checkpoint,run:Run,generation:Status.generation,counts:Status.counts}.
+checkpoint_read_only :-
+    (candidate_starting;candidate_lease(_);instance(I),memberchk(I.role,[candidate,retired])), !.
 checkpoint_runs(Runs) :-
     with_mutex(powder_checkpoint_data,
       (findall(Id-Data,run(Id,Data,_),Owned),
@@ -164,8 +171,11 @@ local_url(Port,Path,URL) :-
 control_action(proof,Payload,Proof) :- !,
     must_be(dict,Payload),checkpoint_proof(Payload.nonce,Proof).
 control_action(prepare,_,_{prepared:true}) :- !,
-    candidate_context(C),ensure_material(C.metadata,false),
-    (candidate_lease(_)->true;host(drain,checkpoint,Lease),assertz(candidate_lease(Lease))).
+    candidate_context(C),
+    (candidate_lease(_)->ensure_material(C.metadata,false)
+    ;setup_call_catcher_cleanup(host(drain,checkpoint,Lease),
+       (ensure_material(C.metadata,false),assertz(candidate_lease(Lease))),
+       Catcher,(Catcher==exit->true;host(resume_admissions,Lease,_)))).
 control_action(bind,Payload,_{bound:Profiles}) :- !,
     candidate_context(C),same_json(Payload.profiles,C.targets),
     candidate_lease(_),owned_profiles(Before),
@@ -219,6 +229,7 @@ checkpoint_proof(Nonce,Proof) :-
       coldSourceLoad:false}.
 
 try_checkpoint(Id0,Expected,Reply) :-
+    kb_checkpoint_policy:require_checkpoint_execution(start_candidate),
     text_atom(Id0,Id),must_be(integer,Expected),
     instance(Owner),Owner.role==active,
     kb_saved_state:saved_state_metadata(Id,Metadata),
@@ -285,6 +296,9 @@ fail_trial(Id,Error,Reply) :-
     update_run(Id,_{phase:failed,message:Details},Reply).
 
 ensure_material(Metadata,CheckPorts) :-
+    kb_saved_state:with_snapshot_lock(kb_checkpoint:ensure_material_locked(Metadata,CheckPorts)).
+ensure_material_locked(Metadata,CheckPorts) :-
+    kb_source_packs:verify_source_pack_snapshot_authority(Metadata.sourcePackSnapshot),
     kb_saved_state:current_snapshot_identity(Current),
     kb_saved_state:saved_snapshot_digest(Metadata,ExpectedDigest),
     (Current.generation=:=Metadata.generation,
@@ -365,6 +379,7 @@ asset_type(css,Type) :- sub_atom(Type,0,_,_,'text/css').
 asset_type(js,Type) :- (sub_atom(Type,0,_,_,'text/javascript');sub_atom(Type,0,_,_,'application/javascript')).
 
 promote_checkpoint(Id0,ExpectedRevision,Reply) :-
+    kb_checkpoint_policy:require_checkpoint_execution(promote),
     text_atom(Id0,Id),must_be(integer,ExpectedRevision),
     with_mutex(powder_checkpoint_runs,
       (run(Id,Data,_),
@@ -416,12 +431,12 @@ finish_candidate(Id,Data,Owned) :-
     (\+ (member(P,Proof.profiles),P.port=:=Data.temporary)->true;
       throw(error(checkpoint_temporary_listener_not_retired,_))),
     peer_action(Id,activate,_{},_),
+    release_process_ownership(Id,false),
     update_run(Id,_{phase:promoted,recovery:null,
       message:"Replacement verified on the original ports; temporary listener retired."},_),
     instance(I),retract(instance(I)),assertz(instance(I.put(role,retired))),
     release_old_lease(Id),
-    host(retire_old,Id,_),
-    release_process_ownership(Id,false).
+    host(retire_old,Id,_).
 recover_promotion(Id,Error) :-
     message_to_string(Error,Message),run(Id,Data,Owned),
     (catch(primary_candidate_verified(Id),_,fail)->
@@ -516,6 +531,7 @@ release_process_ownership(Id,ClearPID) :-
         retract(run(Id,Data,Owned)),assertz(run(Id,Data,Updated))))).
 
 candidate_entry(RequestFile,Metadata) :-
+    kb_checkpoint_policy:require_checkpoint_execution(candidate),
     kb_saved_state:read_json(RequestFile,Request),
     run_directory(Request.run,Directory),directory_file_path(Directory,'request.json',Expected),
     absolute_file_name(RequestFile,Actual,[access(read)]),Actual==Expected,
@@ -526,9 +542,10 @@ candidate_entry(RequestFile,Metadata) :-
     kb_cache:remove_if_exists(RequestFile),
     maplist(valid_profile,Request.targets),
     message_queue_create(Stop),
-    setup_call_cleanup(true,
+    setup_call_cleanup(assertz(candidate_starting),
       (host(start_candidate,_{metadata:Metadata,stopQueue:Stop},Temporary),
        must_be(integer,Temporary),start_candidate_control(Request,Temporary,Stop,Metadata,Credentials),
+       retractall(candidate_starting),
        checkpoint_proof(startup,Proof),
        Ready=ready{instance:Credentials.instance,control:Credentials.port,
          pid:Proof.pid,temporary:Temporary},
@@ -536,7 +553,7 @@ candidate_entry(RequestFile,Metadata) :-
        kb_cache:stage_path(ReadyFile,Stage),kb_saved_state:write_json(Stage,Ready),
        rename_file(Stage,ReadyFile),
        host(wait_candidate,Stop,_)),
-      (catch(host(stop_candidate,none,_),_,true),
+      (retractall(candidate_starting),catch(host(stop_candidate,none,_),_,true),
        catch(stop_managed_instance,_,true),
        retractall(candidate_context(_)),message_queue_destroy(Stop))).
 start_candidate_control(Request,Temporary,Stop,Metadata,Credentials) :-

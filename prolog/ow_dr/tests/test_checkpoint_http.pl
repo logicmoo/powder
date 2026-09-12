@@ -100,6 +100,20 @@ test(only_empty_runtime_directory_cleanup_can_be_deferred,
     setup_call_cleanup(open(Payload,write,S),write(S,retained),close(S)),
     catch(kb_checkpoint:empty_directory_cleanup(Error,Empty,_),Failure,true),
     assertion(Failure==Error),assertion(exists_file(Payload)).
+test(candidate_defers_debug_without_losing_the_saved_profile,
+     [setup(fixture(D,P)),cleanup((kb_checkpoint_host:stop_host,cleanup(D,P)))]) :-
+    kb_config:server_settings(Settings),
+    kb_debug_telnet:debug_resume_profile(Default),
+    Debug=Default.put(_{enabled:true,port:3051,max_sessions:3}),
+    Runtime=runtime{schema:1,primary:P,debug:Debug},
+    Metadata=_{checkpoint:_{runtime:Runtime},configuration:_{settings:Settings}},
+    kb_checkpoint:runtime_hook(start_candidate,_{metadata:Metadata,stopQueue:main},_),
+    kb_checkpoint_host:host_configuration(Captured),
+    assertion(Captured.debug==Debug),
+    kb_debug_telnet:debug_telnet_status(Actual),
+    assertion(Actual.enabled==false),
+    assertion(\+kb_debug_telnet:debug_credentials_file(_)).
+
 test(host_resource_start_is_single_owned_generation,
      [setup(fixture(D,P)),cleanup((kb_checkpoint_host:stop_host,cleanup(D,P)))]) :-
     kb_config:server_settings(Settings),

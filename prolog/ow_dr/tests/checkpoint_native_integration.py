@@ -11,8 +11,22 @@ import unittest
 import urllib.error
 import urllib.request
 import uuid
+from checkpoint_fixture_policy import authorize_copied_checkpoint_fixture
+
+if os.name == "nt":
+    from windows_console_launcher import JOB_LIMIT, check as win_check, k as job_api
 
 APP = Path(__file__).resolve().parents[1]
+
+
+def fixture_credentials_script(script, base):
+    original = "$base = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)"
+    if not base.is_absolute() or not base.is_dir():
+        raise ValueError("Credential fixture base must already exist and be absolute")
+    if script.count(original) != 1:
+        raise ValueError("Credential root adapter changed; refusing an unsafe fixture launch")
+    literal = str(base).replace("'", "''")
+    return script.replace(original, f"$base = '{literal}'", 1)
 
 
 def wait_json(path, seconds=60):
@@ -35,15 +49,17 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         self.case.mkdir()
         self.ports = set()
         self.child_handles = {}
+        self.controller_job = None
         for path in APP.iterdir():
             if path.is_file() and path.suffix.lower() in {".pl", ".ps1", ".dll", ".json"}:
                 shutil.copy2(path, self.app / path.name)
         for directory in ["docs", "web"]:
             shutil.copytree(APP / directory, self.app / directory,
                             ignore=shutil.ignore_patterns("node_modules", ".git"))
+        authorize_copied_checkpoint_fixture(self.app)
         (self.app / "tests").mkdir()
-        shutil.copy2(APP / "tests" / "checkpoint_native_host.pl",
-                     self.app / "tests" / "checkpoint_native_host.pl")
+        for name in ["checkpoint_native_host.pl", "test_checkpoint_http.pl", "test_checkpoint_wiring.pl"]:
+            shutil.copy2(APP / "tests" / name, self.app / "tests" / name)
         with (self.app / "app.pl").open("a", encoding="utf-8") as stream:
             stream.write("\n:- use_module('tests/checkpoint_native_host').\n")
         # Fault injection is confined to this copied adapter; all listeners,
@@ -52,6 +68,9 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         adapter.write_text(adapter.read_text(encoding="utf-8").replace(
             "kb_checkpoint:runtime_hook(bind_ports,Profiles,done) :-",
             "kb_checkpoint:runtime_hook(bind_ports,Profiles,done) :-\n    checkpoint_native_fixture:allow_bind,",
+            1).replace(
+            "kb_checkpoint:runtime_hook(retire_old,_,done) :-",
+            "kb_checkpoint:runtime_hook(retire_old,_,done) :-\n    checkpoint_native_fixture:allow_retire,",
             1), encoding="utf-8")
         http_adapter = self.app / "kb_checkpoint_http.pl"
         http_adapter.write_text(http_adapter.read_text(encoding="utf-8").replace(
@@ -60,16 +79,22 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         # Preserve the real private ACL/credential adapter, changing ONLY the
         # copied fixture's storage root so tests never write a user profile.
         credentials = self.app / "debug_private_credentials.ps1"
-        credentials.write_text(credentials.read_text(encoding="utf-8").replace(
-            "$base = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
-            "$base = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\\..\\case'))",
-            1), encoding="utf-8")
+        credentials.write_text(fixture_credentials_script(
+            credentials.read_text(encoding="utf-8-sig"), self.case), encoding="utf-8-sig")
         self.base = self.read_base()
         self.log = (self.case / "owner.log").open("w")
         self.env = dict(os.environ, POWDER_CHECKPOINT_FIXTURE=str(self.case),
                    POWDER_SERVER_SETTINGS=str(self.case / "settings.json"),
                    POWDER_NATIVE_TVA_FILE=str(self.case / "native-tva.pl"),
                    POWDER_SOURCE_PACKS=str(self.case / "source-packs.json"))
+        validation = subprocess.run(
+            ["swipl", "-q", "-f", "none", "-s", "tests/test_checkpoint_http.pl",
+             "-s", "tests/test_checkpoint_wiring.pl",
+             "-g", "(run_tests([checkpoint_http,checkpoint_wiring])->halt(0);halt(1))"],
+            cwd=self.app, env=self.env, capture_output=True, text=True, timeout=90)
+        if validation.returncode:
+            self.tearDown()
+            self.fail("Copied host/API integration failed:\n" + validation.stdout + validation.stderr)
         self.owner = subprocess.Popen(
             ["swipl", "-q", "-f", "none", "-s", str(self.app / "tests" / "checkpoint_native_host.pl"),
              "-g", "checkpoint_native_fixture:fixture_main", "-t", "halt(1)"],
@@ -82,6 +107,13 @@ class NativeCheckpointWorkflow(unittest.TestCase):
             self.ports.update([self.primary, self.extra])
             self.info = self.get(self.primary, "/_checkpoint_fixture/info")
             self.baseline = self.info["status"]
+            self.assertEqual(self.ready["pid"], self.owner.pid)
+            self.controller_job = win_check(job_api.CreateJobObjectW(None, None))
+            limits = JOB_LIMIT()
+            limits.flags = 0x2800  # Kill-on-close plus explicit breakaway permission.
+            win_check(job_api.SetInformationJobObject(
+                self.controller_job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+            win_check(job_api.AssignProcessToJobObject(self.controller_job, int(self.owner._handle)))
         except Exception:
             self.tearDown()
             raise
@@ -114,6 +146,25 @@ class NativeCheckpointWorkflow(unittest.TestCase):
                 except Exception:
                     pass
             raise
+        except OSError as error:
+            exits = {}
+            job_api.GetExitCodeProcess.argtypes = [
+                ctypes.wintypes.HANDLE, ctypes.POINTER(ctypes.wintypes.DWORD)]
+            job_api.GetExitCodeProcess.restype = ctypes.wintypes.BOOL
+            for pid, handle in self.child_handles.items():
+                code = ctypes.wintypes.DWORD()
+                if job_api.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    exits[pid] = code.value
+            error.add_note(f"Owned native process exit codes (259 means active): {exits}")
+            if path != "/_checkpoint_fixture/info":
+                for alternative in [getattr(self, "primary", None), getattr(self, "extra", None)]:
+                    if alternative:
+                        try:
+                            details = self.get(alternative, "/_checkpoint_fixture/info")
+                            error.add_note(f"Owned fixture port {alternative}: pid={details['pid']}, errors={details['errors']}")
+                        except (OSError, ValueError):
+                            pass
+            raise
 
     def get(self, port, path):
         return self.request(port, path)
@@ -127,10 +178,26 @@ class NativeCheckpointWorkflow(unittest.TestCase):
             data=json.dumps({**credentials, "request": str(uuid.uuid4()),
                              "action": "status", "payload": {"run": run}}).encode(),
             headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=10) as response:
-            result = json.load(response)
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                result = json.load(response)
+        except OSError as error:
+            return {"controlUnavailable": str(error), "processes": self.process_diagnostics()}
         credentials["token"] = result["token"]
         return {key: value for key, value in result.items() if key != "token"}
+
+    def process_diagnostics(self):
+        job_api.GetExitCodeProcess.argtypes = [
+            ctypes.wintypes.HANDLE, ctypes.POINTER(ctypes.wintypes.DWORD)]
+        job_api.GetExitCodeProcess.restype = ctypes.wintypes.BOOL
+        exits = {"controller": self.owner.poll()}
+        for pid, handle in self.child_handles.items():
+            code = ctypes.wintypes.DWORD()
+            if job_api.GetExitCodeProcess(handle, ctypes.byref(code)):
+                exits[pid] = code.value
+        errors = {path.name: path.read_text(encoding="utf-8", errors="replace")[-4000:]
+                  for path in self.case.glob("errors-*.log")}
+        return {"exits": exits, "errors": errors}
 
     def operation(self, accepted, timeout=300):
         deadline = time.monotonic() + timeout
@@ -150,9 +217,14 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         k.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
         k.OpenProcess.restype = ctypes.c_void_p
         if info["pid"] not in self.child_handles:
-            handle = k.OpenProcess(0x00100001, 0, info["pid"])
+            handle = k.OpenProcess(0x00100401, 0, info["pid"])
             self.assertTrue(handle)
             self.child_handles[info["pid"]] = handle
+        if self.controller_job:
+            in_controller_job = ctypes.wintypes.BOOL()
+            win_check(job_api.IsProcessInJob(self.child_handles[info["pid"]],
+                self.controller_job, ctypes.byref(in_controller_job)))
+            self.assertFalse(in_controller_job.value, "Native SWI candidate must break away from the owned job")
         return info
 
     def test_native_trial_busy_cancel_takeover_and_repeat_save(self):
@@ -163,14 +235,32 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         self.assertEqual(busy["phase"], "failed")
         self.request(self.primary, "/_checkpoint_fixture/busy", {"busy": False})
         self.assertEqual(self.api("catalog")["items"], [])
-        created = self.operation(self.api("create", {
-            "name": "Native fixture", "generation": catalog["generation"], "revision": catalog["revision"]}))
-        self.assertEqual(created["phase"], "completed", created)
-        state = created["result"]
+        ui = subprocess.run(
+            ["node", str(APP / "tests" / "checkpoint_application_ui.mjs"),
+             f"http://127.0.0.1:{self.primary}{self.base}", str(self.owner.pid),
+             str(APP / "tests") if os.environ.get("LOGOS_SCREENSHOTS") else ""],
+            env=self.env, cwd=APP, capture_output=True, text=True, timeout=210)
+        self.assertEqual(ui.returncode, 0, ui.stdout + ui.stderr)
+        print(ui.stdout.strip())
+        completed = self.api("catalog")
+        self.assertEqual(len(completed["items"]), 1)
+        self.assertEqual(completed["selected"], "none")
+        self.assertEqual(completed["runs"], [])
+        state = completed["items"][0]
         self.assertTrue(state["validated"])
         current = self.api("catalog")
         self.api("select", {"id": state["id"], "revision": current["revision"]})
         self.assertIsNone(self.owner.poll())
+        packs_file = Path(self.env["POWDER_SOURCE_PACKS"])
+        original_packs = packs_file.read_bytes()
+        try:
+            packs_file.write_bytes(original_packs + b"\n")
+            drifted = self.operation(self.api("try", {"id": state["id"], "generation": state["generation"]}))
+            self.assertEqual(drifted["phase"], "failed")
+            self.assertEqual(drifted["result"]["error"]["code"], "conflict")
+            self.assertEqual(self.api("catalog")["runs"], [])
+        finally:
+            packs_file.write_bytes(original_packs)
         for source in self.ready["sources"]:
             Path(source).unlink()
         for cache in self.ready["caches"]:
@@ -184,14 +274,21 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         self.assertEqual(candidate["nativeRecords"], self.info["nativeRecords"])
         self.assertEqual(candidate["configuration"]["sourcePacks"]["packs"],
                          self.info["configuration"]["sourcePacks"]["packs"])
-        self.assertTrue(candidate["debug"]["enabled"])
-        self.assertNotEqual(candidate["debug"]["port"], self.info["debug"]["port"])
-        self.assertEqual(candidate["debug"]["max_sessions"], 3)
-        self.assertEqual(candidate["debug"]["query_timeout"], 2)
-        self.assertNotEqual(candidate["credentialHash"], self.info["credentialHash"])
+        self.assertFalse(candidate["debug"]["enabled"])
+        self.assertIsNone(candidate["credentialHash"])
+        self.assertEqual(candidate["runtime"]["debug"], self.info["debug"])
         self.assertTrue(candidate["tty"], "Native launch must create fresh console stdin")
         self.assertEqual(candidate["console"], ["main"])
-        self.assertEqual(self.get(self.primary, "/_checkpoint_fixture/info")["pid"], self.ready["pid"])
+        query = self.request(trial["temporary"], self.base + "api/query",
+                             {"query": "(grandparent ?X ?Y)", "mt": "x_OneMt", "limit": 5, "timeout": 2})
+        self.assertEqual(len(query["solutions"]), 1)
+        for action in ["kb/unload", "tva/reset", "catalog/cancel", "kb/packs/save"]:
+            with self.assertRaises(urllib.error.HTTPError) as refused:
+                self.request(trial["temporary"], self.base + "api/" + action, {})
+            self.assertEqual(refused.exception.code, 409)
+        original = self.get(self.primary, "/_checkpoint_fixture/info")
+        self.assertEqual(original["pid"], self.ready["pid"])
+        self.assertEqual(original["credentialHash"], self.info["credentialHash"])
         cancelled = self.api("cancel", {"kind": "trial", "id": trial["id"]})
         self.assertEqual(cancelled["phase"], "cancelled")
         self.assertIsNone(self.owner.poll())
@@ -217,6 +314,9 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         self.assertIsNone(self.owner.poll())
         for port in [self.primary, self.extra]:
             self.assertEqual(self.get(port, "/_checkpoint_fixture/info")["pid"], self.ready["pid"])
+        restored_owner = self.get(self.primary, "/_checkpoint_fixture/info")
+        self.assertEqual(restored_owner["debug"], self.info["debug"])
+        self.assertNotEqual(restored_owner["credentialHash"], self.info["credentialHash"])
         marker.unlink()
         tried = self.operation(self.api("try", {"id": state["id"], "generation": state["generation"]}))
         trial = tried["result"]
@@ -238,9 +338,14 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         self.assertEqual(self.get(self.extra, "/_checkpoint_fixture/info")["pid"], candidate["pid"])
         promoted = self.get(self.primary, "/_checkpoint_fixture/info")
         self.assertEqual(promoted["debug"], self.info["debug"])
-        self.assertNotEqual(promoted["credentialHash"], candidate["credentialHash"])
+        self.assertIsNotNone(promoted["credentialHash"])
+        self.assertNotEqual(promoted["credentialHash"], restored_owner["credentialHash"])
         self.owner.wait(timeout=15)
         self.assertEqual(self.owner.returncode, 0)
+        win_check(job_api.CloseHandle(self.controller_job))
+        self.controller_job = None
+        self.assertEqual(job_api.WaitForSingleObject(self.child_handles[candidate["pid"]], 0), 258)
+        self.assertEqual(self.get(self.primary, "/_checkpoint_fixture/info")["pid"], candidate["pid"])
         (self.case / "native-tva.pl").unlink()
         (self.case / "settings.json").unlink()
         (self.case / "source-packs.json").unlink()
@@ -268,9 +373,8 @@ class NativeCheckpointWorkflow(unittest.TestCase):
             listener.bind(("127.0.0.1", 0))
             resumed_port = listener.getsockname()[1]
         self.startup = subprocess.Popen(
-            ["swipl", "-q", "-f", "none", "-s", str(self.app / "kb_checkpoint_host.pl"),
-             "-g", "current_prolog_flag(argv,A),kb_checkpoint_host:run_application(A),halt",
-             "-t", "halt(1)", "--", f"--port={resumed_port}", "--debug-off"],
+            ["swipl", "-q", "-f", "none", str(self.app / "app.pl"),
+             "--", f"--port={resumed_port}", "--debug-off"],
             cwd=self.root, env=self.env, stdin=subprocess.DEVNULL, stdout=self.log,
             stderr=self.log, close_fds=True)
         self.ports.add(resumed_port)
@@ -314,6 +418,9 @@ class NativeCheckpointWorkflow(unittest.TestCase):
             except subprocess.TimeoutExpired:
                 self.startup.terminate()
                 self.startup.wait(timeout=8)
+        if getattr(self, "controller_job", None):
+            job_api.CloseHandle(self.controller_job)
+            self.controller_job = None
         if getattr(self, "child_handles", None):
             k = ctypes.WinDLL("kernel32", use_last_error=True)
             k.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]

@@ -1,4 +1,4 @@
-:- module(checkpoint_native_fixture,[fixture_main/0,allow_bind/0,record_error/1]).
+:- module(checkpoint_native_fixture,[fixture_main/0,allow_bind/0,allow_retire/0,record_error/1]).
 :- use_module('../kb_checkpoint_host',[]).
 :- use_module('../kb_checkpoint_http',[]).
 :- use_module('../kb_saved_state',[]).
@@ -16,6 +16,14 @@
 :- dynamic fixture_error/1.
 :- volatile fixture_error/1.
 record_error(Error) :- message_to_string(Error,Text),assertz(fixture_error(Text)).
+:- multifile prolog:message_hook/3.
+prolog:message_hook(Term,error,_) :-
+    catch(checkpoint_native_fixture:record_process_error(Term),_,true),fail.
+record_process_error(Term) :-
+    case_dir(D),current_prolog_flag(pid,PID),
+    format(atom(Name),'errors-~d.log',[PID]),directory_file_path(D,Name,File),
+    message_to_string(Term,Text),
+    setup_call_cleanup(open(File,append,S,[encoding(utf8)]),format(S,'~s~n',[Text]),close(S)).
 
 % Loaded only by a copied, disposable fixture app. Never import from app.pl.
 :- http_handler('/_checkpoint_fixture/info',fixture_info,[]).
@@ -27,6 +35,7 @@ allow_bind :-
     case_dir(D),directory_file_path(D,'reject-candidate-bind',Marker),
     (kb_checkpoint_host:host(H),H.mode==candidate,exists_file(Marker)->
       throw(error(fixture_rejected_candidate_bind,_));true).
+allow_retire :- kb_console_launch:launcher_snapshot_safe.
 fixture_main :-
     catch_with_backtrace(fixture_run,Error,(print_message(error,Error),throw(Error))),halt.
 fixture_run :-
@@ -42,12 +51,16 @@ fixture_run :-
     kb_store:load_sources([One,Two],any,_),
     kb_native_annotations:native_status(Empty),
     kb_native_annotations:initialize_defaults(Empty.revision,Initialized),
+    require_idle_fixture(initialize_native),
     kb_native_annotations:upsert_native(cyc,x_OneMt,utility,0.75,Initialized.revision,_),
+    require_idle_fixture(upsert_native),
     kb_source_packs:create_pack("Native saved composition",['KBs/native-one.krf'],none,CreatedPack),
+    require_idle_fixture(create_pack),
     Composition=CreatedPack.pack.put(_{
       choices:[choice{symbol:x_parent,files:['KBs/native-two.krf'],origin:user}],
       members:[member{path:'KBs/native-one.krf',role:root,why:[],identity:null}]}),
     kb_source_packs:save_pack(Composition,CreatedPack.revision,_),
+    require_idle_fixture(save_pack),
     kb_checkpoint_host:free_loopback_port(DebugPort),
     setup_call_cleanup(kb_checkpoint_host:start_host(Primary,Settings,
       [enabled(true),port(DebugPort),max_sessions(3),query_timeout(2)],main),
@@ -63,7 +76,12 @@ fixture_run :-
       kb_checkpoint_host:stop_host).
 write_source(File,Text) :-
     setup_call_cleanup(open(File,write,S,[encoding(utf8)]),write(S,Text),close(S)).
+require_idle_fixture(Stage) :-
+    kb_activity:activity_status(Activity),
+    (Activity.active=:=0->true;
+      throw(error(fixture_retained_application_admission(Stage,Activity.active),_))).
 fixture_info(_) :-
+    kb_activity:activity_status(Activity),
     case_dir(D),current_prolog_flag(pid,PID),kb_store:status(Status),
     kb_jobs:task_overview(Jobs),
     (stream_property(user_input,tty(true))->TTY=true;TTY=false),
@@ -77,13 +95,15 @@ fixture_info(_) :-
     kb_native_annotations:restored_native_snapshot(Native),kb_saved_state:native_summary(Native,NativeSummary),
     term_string(Native.records,NativeRecords),
     kb_debug_telnet:debug_resume_profile(Debug),
+    kb_checkpoint_host:host_configuration(Runtime),
     (kb_debug_telnet:debug_credentials_file(CredentialsFile)->
       kb_saved_state:read_json(CredentialsFile,Credentials),
       crypto_data_hash(Credentials.token,CredentialHash,[algorithm(sha256),encoding(utf8)])
     ;CredentialHash=null),
     reply_json_dict(_{fixture:D,pid:PID,status:Status,jobs:Jobs,tty:TTY,console:Console,
       instance:Instance,nativeTVA:NativeSummary,nativeRecords:NativeRecords,
-      debug:Debug,credentialHash:CredentialHash,configuration:Configuration,
+      debug:Debug,runtime:Runtime,credentialHash:CredentialHash,configuration:Configuration,
+      activity:_{active:Activity.active,exclusive:Activity.exclusive,leased:Activity.leased},
       errors:Errors,transitions:Transitions}).
 fixture_stop(_) :-
     kb_checkpoint_host:host(H),thread_send_message(H.stopQueue,stop),

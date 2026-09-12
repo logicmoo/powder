@@ -5,6 +5,7 @@
            checkpoint_operations_quiescent/0]).
 :- use_module(kb_saved_state, []).
 :- use_module(kb_checkpoint, []).
+:- use_module(kb_checkpoint_policy, []).
 :- use_module(kb_store, []).
 :- use_module(kb_activity, []).
 :- use_module(kb_urls, []).
@@ -74,6 +75,7 @@ action(create,Request,Reply) :-
 action(try,Request,Reply) :-
     small_body(Request,[id,generation],Body),submit_checkpoint_operation(try,Body,Reply).
 action(select,Request,Reply) :-
+    kb_checkpoint_policy:require_checkpoint_execution(select),
     small_body(Request,[id,revision],Body),text(Body.id),text(Body.revision),
     kb_activity:with_application(kb_saved_state:select_saved_state(Body.id,Body.revision,Reply)).
 action(status,Request,Reply) :-
@@ -94,13 +96,16 @@ action(promote,Request,Reply) :-
     kb_checkpoint:promote_checkpoint(Body.run,Body.revision,Reply).
 
 checkpoint_catalog(Reply) :-
+    kb_checkpoint_policy:checkpoint_policy(Policy),
     kb_saved_state:saved_states(Catalog),kb_store:generation(Generation),
     (kb_checkpoint:checkpoint_instance(Instance)->true;Instance=null),
     kb_checkpoint:checkpoint_runs(Runs),
     with_mutex(powder_checkpoint_operations,findall(Data,operation(_,Data,_),Operations)),
-    Reply=Catalog.put(_{generation:Generation,instance:Instance,runs:Runs,operations:Operations}).
+    Reply=Catalog.put(_{generation:Generation,instance:Instance,runs:Runs,operations:Operations,
+      automation:Policy}).
 
 submit_checkpoint_operation(Action,Body,Reply) :-
+    kb_checkpoint_policy:require_checkpoint_execution(Action),
     validate_operation(Action,Body),
     kb_activity:with_application(kb_checkpoint_http:register_operation(Action,Body,Reply,Thread)),
     thread_send_message(Thread,go).
@@ -177,6 +182,8 @@ endpoint_error(Error) :-
     respond(Status,_{error:_{code:Code,message:Message}}).
 error_description(error(permission_error(access,checkpoint_api,origin),_),403,forbidden,
                   "An owned localhost origin and explicit consent are required.") :- !.
+error_description(error(checkpoint_execution_paused(_),_),409,checkpoint_paused,
+                  "Automatic checkpointing is OFF. Checkpoint execution is paused pending manual-only, non-serving candidate support.") :- !.
 error_description(error(permission_error(promote,checkpoint,explicit_consent_required),_),403,forbidden,
                   "Explicit original-port takeover consent is required.") :- !.
 error_description(error(permission_error(modify,checkpoint_trial,_),_),409,trial_read_only,
@@ -194,6 +201,8 @@ error_description(Error,409,conflict,Message) :-
     memberchk(Name,[saved_state_busy,saved_state_revision_conflict,saved_state_name_exists,
       generation_conflict,checkpoint_operation_busy,checkpoint_busy,application_reload_busy,
       checkpoint_transition_busy,checkpoint_revision_conflict,
+      source_pack_snapshot_authority_changed,source_pack_snapshot_revision_changed,
+      source_pack_snapshot_content_changed,source_packs_changed_during_read,
       checkpoint_loaded_state_or_configuration_changed]), !,
     message_to_string(Error,Message).
 error_description(Error,422,incompatible_state,Message) :-

@@ -4,6 +4,7 @@
            host_configuration/1, require_mutable_instance/0,
            host_snapshot_safe/0]).
 :- use_module(kb_saved_state, []).
+:- use_module(kb_checkpoint_policy, []).
 :- use_module(kb_checkpoint, []).
 :- use_module(kb_checkpoint_http, []).
 :- use_module(kb_console_launch, []).
@@ -41,7 +42,7 @@ run_application(Args) :-
      kb_config:server_settings(Settings),
      setup_call_cleanup(kb_jobs:start_pools(Settings),
        (kb_store:load_sources(Sources,any,_),kb_catalog:remember_startup_sources,
-        setup_call_cleanup(start_host(Port,Settings,Debug,main),
+        setup_call_cleanup(start_cold_host(Port,Settings,Debug),
           wait_host(main),stop_host)),
        kb_jobs:stop_pools)).
 
@@ -87,6 +88,7 @@ launch_selected(Id,Args) :-
 kb_saved_state:resume_application(Args,Metadata) :-
     kb_checkpoint_host:resume_host(Args,Metadata).
 resume_host(Args,Metadata) :-
+    kb_checkpoint_policy:require_checkpoint_execution(resume),
     resume_configuration(Args,Metadata,Port,Debug),
     Settings=Metadata.configuration.settings,
     setup_call_cleanup(start_host(Port,Settings,Debug,main),
@@ -116,7 +118,14 @@ debug_dict(Options,Debug) :-
 debug_option(Option,Before,After) :-
     Option=..[Key,Value],get_dict(Key,Before,_),After=Before.put(Key,Value).
 
-start_host(Port,Settings,DebugInput,StopQueue) :-
+start_cold_host(Port,Settings,Debug) :-
+    kb_checkpoint_policy:checkpoint_policy(Policy),
+    (Policy.executionPaused==true->start_host_owned(Port,Settings,Debug,main);
+      start_host(Port,Settings,Debug,main)).
+start_host(Port,Settings,Debug,StopQueue) :-
+    kb_checkpoint_policy:require_checkpoint_execution(checkpoint_host),
+    start_host_owned(Port,Settings,Debug,StopQueue).
+start_host_owned(Port,Settings,DebugInput,StopQueue) :-
     (is_list(DebugInput)->debug_dict(DebugInput,Debug);Debug=DebugInput),
     with_mutex(powder_checkpoint_host,
       (host(_)->throw(error(checkpoint_host_already_started,_));
@@ -128,9 +137,12 @@ start_host_locked(Port,Settings,Debug,StopQueue) :-
        open_listener(Port,Settings.pools.http),
        assertz(host(host{configuration:Config,settings:Settings,stopQueue:StopQueue,
          primary:Port,mode:active})),
-       kb_checkpoint:start_managed_instance(Port,_),
+       start_checkpoint_control(Port),
        start_debug(Debug)),
       Catcher,(Catcher==exit->true;stop_host)).
+start_checkpoint_control(Port) :-
+    kb_checkpoint_policy:checkpoint_policy(Policy),
+    (Policy.executionPaused==true->true;kb_checkpoint:start_managed_instance(Port,_)).
 wait_host(Queue) :-
     kb_store:status(Status),host(H),app_base(Base),
     format('powder - Paraconsistent Open World Defeasible Epistemic Reasoner~nReady: http://localhost:~d~w~n',
@@ -158,7 +170,7 @@ host_configuration(Config) :-
 host_snapshot_safe :-
     (host(_)->throw(error(saved_state_unexpected_host_resources,_));true).
 require_mutable_instance :-
-    (kb_checkpoint:checkpoint_instance(I),I.role==candidate->
+    (kb_checkpoint:checkpoint_read_only->
       permission_error(modify,checkpoint_trial,read_only_until_promoted);true).
 
 open_listener(Port,Profile) :-
@@ -198,14 +210,13 @@ kb_checkpoint:runtime_hook(capabilities,_,[drain,resume_admissions,release_ports
     bind_ports,recovery_listener,retire_old,activate]) :- host(_).
 kb_checkpoint:runtime_hook(profiles,_,Profiles) :- host(_),listener_profiles(Profiles).
 kb_checkpoint:runtime_hook(start_candidate,Input,Port) :-
+    kb_checkpoint_policy:require_checkpoint_execution(candidate_listener),
     is_dict(Input.metadata.checkpoint),get_dict(runtime,Input.metadata.checkpoint,_),
     saved_configuration(Input.metadata,Config),Settings=Input.metadata.configuration.settings,
     setup_call_catcher_cleanup(true,
       (kb_jobs:start_pools(Settings),open_listener(Port,Settings.pools.http),
        assertz(host(host{configuration:Config,settings:Settings,stopQueue:Input.stopQueue,
-         primary:Port,mode:candidate})),
-       (Config.debug.enabled==true->free_loopback_port(DebugPort),
-         start_debug(Config.debug.put(port,DebugPort));true)),
+         primary:Port,mode:candidate}))),
       Catcher,(Catcher==exit->true;stop_host)).
 kb_checkpoint:runtime_hook(wait_candidate,Queue,done) :- wait_host(Queue).
 kb_checkpoint:runtime_hook(stop_candidate,_,done) :- host(_),stop_host.
@@ -220,7 +231,7 @@ kb_checkpoint:runtime_hook(drain,_,Lease) :-
 kb_checkpoint:runtime_hook(resume_admissions,Lease,done) :- kb_jobs:end_checkpoint_drain(Lease).
 kb_checkpoint:runtime_hook(release_ports,Profiles,done) :-
     host(H),
-    (member(Primary,Profiles),Primary.port=:=H.configuration.primary->kb_debug_admin:stop_debug_for_transfer;true),
+    (member(Primary,Profiles),Primary.port=:=H.configuration.primary->stop_transfer_debug(40);true),
     forall(member(P,Profiles),close_listener(P.port)).
 kb_checkpoint:runtime_hook(bind_ports,Profiles,done) :-
     forall(member(P,Profiles),
@@ -229,7 +240,12 @@ kb_checkpoint:runtime_hook(bind_ports,Profiles,done) :-
         open_listener(P.port,Profile))),
     host(H),
     (member(P,Profiles),P.port=:=H.configuration.primary->
-      kb_debug_admin:stop_debug_for_transfer,start_debug(H.configuration.debug);true).
+      stop_transfer_debug(40),start_debug(H.configuration.debug);true).
+stop_transfer_debug(Attempts) :-
+    catch(kb_debug_admin:stop_debug_for_transfer,
+      error(debug_threads_still_running(N),Context),
+      (Attempts>0->sleep(0.05),Remaining is Attempts-1,stop_transfer_debug(Remaining);
+        throw(error(debug_threads_still_running(N),Context)))).
 kb_checkpoint:runtime_hook(recovery_listener,_,Port) :-
     host(H),open_listener(Port,H.settings.pools.http).
 kb_checkpoint:runtime_hook(activate,_,done) :-
