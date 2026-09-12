@@ -271,3 +271,19 @@ isolated browser startup took 49.5 seconds. A separate-process exact request too
 These are working correctness results, **not** a subsecond performance claim.
 Per-request hash cost, broad-search cold reads, automatic scheduling and
 compact inspectable type-support links remain limitations.
+
+The narrower `diplomaticState` cold-path probe against the real published artifacts
+completed in 834 ms through an isolated HTTP listener: six defining assertions,
+one source, five returned rows. The probe replaces `model/1` with an exception,
+so success proves this exact path never reads the monolithic million-term model.
+It starts/stops only its own ephemeral listener and does not touch the primary:
+
+```powershell
+$env:OPENWORLD_CATALOG_REAL_PROBE='1'
+swipl -q -s prolog\ow_dr\tests\test_catalog_directory.pl -g "run_tests(catalog_directory:real_cold_exact_http_uses_bounded_directory_not_monolithic_model),halt"
+```
+
+This isolated result does not certify a restored/running primary's thread or
+loaded-module state. A reported primary timeout must still be checked there;
+increasing its heap ceiling or rebuilding the validated projection is not justified
+by the measured bounded-directory path.

@@ -4,6 +4,8 @@
 :- use_module('../kb_catalog_query').
 :- use_module('../kb_catalog_index',[]).
 :- use_module(library(prolog_wrap)).
+:- use_module(library(socket)).
+:- use_module(library(http/http_client)).
 
 test(exact_lookup_never_loads_the_monolithic_query_model,
      [setup(plunit_catalog_query:fixture(S)),cleanup(plunit_catalog_query:cleanup(S))]) :-
@@ -80,5 +82,28 @@ test(explicit_load_transition_changes_groups_not_disk_membership,
        assertion(After.counts.loaded==1),assertion(After.counts.unloaded==0),
        assertion(After.total==Initial.total),assertion(After.revision==Initial.revision)),
       kb_store:unload_source(Source,Loaded.generation,_)).
+
+test(real_cold_exact_http_uses_bounded_directory_not_monolithic_model,
+     [condition(getenv('OPENWORLD_CATALOG_REAL_PROBE','1'))]) :-
+    kb_catalog_directory:directory_status(Status),
+    assertion(Status.available==true),
+    tcp_socket(Socket),tcp_bind(Socket,Port),tcp_close_socket(Socket),
+    kb_store:generation(Generation),
+    setup_call_cleanup(
+      wrap_predicate(kb_catalog_query:model(_),forbid_real_monolithic,_,
+        throw(error(monolithic_model_for_exact_lookup,_))),
+      setup_call_cleanup(kb_server:start_server(Port),
+        (format(atom(URL),'http://localhost:~d/swish/openworld_dr/api/catalog/term?term=x_diplomaticState&scope=unloaded&facet=definition&offset=0&limit=5',[Port]),
+         statistics(walltime,[Start,_]),
+         http_get(URL,Reply,[json_object(dict),timeout(20)]),
+         statistics(walltime,[End,_]),Elapsed is End-Start,
+         assertion(Reply.total==6),assertion(Reply.items=[_,_,_,_,_]),
+         forall(member(Item,Reply.items),
+           (assertion(Item.source=="KBs/fire/flat-files/nwu/background-knowledge/combat.krf"),
+            assertion(Item.loaded==false))),
+         format(user_error,'REAL_COLD_EXACT_HTTP_MS ~d~n',[Elapsed])),
+        kb_server:stop_server),
+      unwrap_predicate(kb_catalog_query:model(_),forbid_real_monolithic)),
+    kb_store:generation(Generation).
 
 :- end_tests(catalog_directory).
