@@ -20,9 +20,11 @@ fixture(state(Root,OldApp)) :-
       (directory_file_path(OldApp,Name,From),directory_file_path(App,Name,To),copy_file(From,To))),
     directory_file_path(Root,'KBs',KBs),make_directory_path(KBs),
     retractall(kb_paths:app_directory(_)),assertz(kb_paths:app_directory(App)),
-    retractall(kb_catalog_index:loaded_catalog(_,_,_)).
+    retractall(kb_catalog_index:loaded_catalog(_,_,_)),
+    retractall(kb_catalog_index:loaded_catalog_status(_,_,_)).
 cleanup(state(Root,OldApp)) :-
     retractall(kb_catalog_index:loaded_catalog(_,_,_)),
+    retractall(kb_catalog_index:loaded_catalog_status(_,_,_)),
     retractall(kb_paths:app_directory(_)),assertz(kb_paths:app_directory(OldApp)),
     delete_directory_and_contents(Root).
 write_text(Path,Text) :-
@@ -156,6 +158,33 @@ test(dead_owner_is_interrupted_not_running,
     external_job_status(Target,Progress,Job),
     assertion(Job.state==interrupted),assertion(Job.ownerLockHeld==false),
     assertion(Job.cancelable==false),assertion(Job.completed==488).
+test(dead_workers_have_only_unverified_last_reported_state,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    catalog_paths(Target,Progress),
+    kb_catalog_index:atomic_data(Progress,catalog_progress(json{state:running,completed:12,
+      workerProgress:[json{ownerPid:999999,processState:running,completed:12}]})),
+    external_job_status(Target,Progress,Job),Job.workerProgress=[Worker],
+    assertion(Job.state==interrupted),assertion(Worker.processState==unverified),
+    assertion(Worker.lastReportedState==running).
+test(status_caches_only_coverage_not_all_term_postings,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(p a)\n",_),refresh_catalog(all,_),
+    catalog_status(First),catalog_status(Second),
+    assertion(First.freshFiles==1),assertion(Second.freshFiles==1),
+    assertion(\+kb_catalog_index:loaded_catalog(_,_,_)),
+    kb_catalog_index:loaded_catalog_status(_,_,Cached),
+    assertion(\+get_dict(terms,Cached,_)).
+test(overlapping_external_status_reads_keep_advisory_progress,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    catalog_paths(Target,Progress),progress_record(Progress,0),
+    thread_create(forall(between(1,100,N),progress_record(Progress,N)),Writer,[]),
+    setup_call_cleanup(true,
+      forall(between(1,200,_),
+        (external_job_status(Target,Progress,Job),
+         assertion(Job.ownerLockHeld==false),
+         assertion(memberchk(Job.progressRead,[fresh,unavailable])),sleep(0.001))),
+      thread_join(Writer,Exit)),
+    assertion(Exit==true).
 test(cancellation_is_bound_to_live_owner_and_run,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     catalog_paths(Target,Progress),file_directory_name(Target,Dir),make_directory_path(Dir),

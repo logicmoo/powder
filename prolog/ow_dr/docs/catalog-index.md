@@ -125,3 +125,9 @@ stops only its own worker processes. Projection cancellation is observed
 between source operations. Completed source artifacts are retained. Stale run
 IDs cannot cancel a later invocation. Query projection has its own progress
 record and lock; source completion is not confused with query publication.
+
+Progress-file replacement races are advisory: status retries native transient
+open failures, then explicitly reports an unavailable observation rather than
+claiming a saved worker is alive. Once the owner lock is gone, worker states are
+only unverified last reports. Status caches the small validated coverage summary,
+not a copy of the complete term-to-file table for every polling request.

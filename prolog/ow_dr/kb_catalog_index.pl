@@ -23,6 +23,7 @@
 :- use_module(library(process)).
 :- use_module(library(uuid)).
 :- dynamic loaded_catalog/3.
+:- dynamic loaded_catalog_status/3.
 
 /** <module> Persistent catalog of compact per-source semantic locators.
 
@@ -69,6 +70,7 @@ refresh_locked(Expected,Sources,File,Progress,Report) :-
     Snapshot=catalog{schema:Schema,expected:Expected,files:All,terms:TermPairs,
       coverage:Coverage,verifiedAt:At,sourcePolicy:original_sha256,normalizedPolicy:validated_payload_digest},
     atomic_data(File,catalog_snapshot(Snapshot)),retractall(loaded_catalog(_,_,_)),
+    retractall(loaded_catalog_status(_,_,_)),
     length(TermPairs,UniqueTerms),
     statistics(walltime,[End,_]),Seconds is (End-Start)/1000,
     Report=Coverage.put(json{completed:Completed,terms:UniqueTerms,seconds:Seconds}),
@@ -415,8 +417,7 @@ check_catalog_cancel(File) :-
      read_data(Cancel,catalog_cancellation(Run)),Run==Meta.runId->
        throw(error(catalog_cancelled,_));true).
 external_job_status(Target,Progress,Job) :-
-    (exists_file(Progress)->read_data(Progress,catalog_progress(Data));
-      Data=json{state:not_started,completed:0,total:null}),
+    external_progress(Progress,Data),
     atom_concat(Target,'.lock',LockPath),
     (exists_file(LockPath)->kb_cache:try_lock(LockPath,Lock),
        (Lock==busy->Held=true;kb_cache:release_lock(Lock),Held=false)
@@ -435,6 +436,14 @@ external_job_status(Target,Progress,Job) :-
     Job=Base.put(json{state:State,ownerLockHeld:Held,cancelable:Cancelable,
       heartbeatAge:Age,execution:external,
       scope:"External catalog indexer, separate from app Task Pools and its Prolog heap."}).
+external_progress(Path,Data) :-
+    (exists_file(Path)->
+       read_advisory_progress(Path,0,Read),
+       (Read=ok(Current)->Data=Current.put(json{progressRead:fresh,progressReadError:null})
+       ;Read=error(Error),message_to_string(Error,Message),
+        Data=json{state:unknown,completed:null,total:null,progressRead:unavailable,
+          progressReadError:Message})
+    ;Data=json{state:not_started,completed:0,total:null}).
 worker_observation(true,Row,Row).
 worker_observation(false,Row,Observed) :-
     (get_dict(processState,Row,State)->true;State=unknown),
@@ -495,9 +504,13 @@ valid_hit(Count,h(N,Path,Role,Facet)) :-
 
 catalog_status(Reply) :-
     catalog_paths(File,ProgressFile),
-    (exists_file(File)->read_catalog(Catalog),
+    (exists_file(File)->file_stamp(File,Stamp),
+      (loaded_catalog_status(File,Stamp,Base)->true;
+       read_data(File,catalog_snapshot(Catalog)),
        Base=Catalog.coverage.put(json{verifiedAt:Catalog.verifiedAt,
-         freshness:explicit_refresh_snapshot});
+         freshness:explicit_refresh_snapshot}),
+       retractall(loaded_catalog_status(_,_,_)),
+       assertz(loaded_catalog_status(File,Stamp,Base)));
       Base=json{complete:false,freshFiles:0,expectedFiles:null,issues:[]}),
     external_job_status(File,ProgressFile,P),
     Reply=Base.put(progress,P).
