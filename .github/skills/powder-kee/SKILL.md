@@ -103,7 +103,7 @@ Native TVA remains direct Atom -> explicit current MT -> Default, same
 family/property. Source/default categories, direction, native truth records,
 configured Cyc utility and observed rule utility are not execution policies.
 
-## Keep the three text roles separate
+## Keep the four text roles separate
 
 The planned LLM teacher/explorer/comment writer uses an immutable conversation
 snapshot/hash of the file-backed prompt. Safe application-owned configuration
@@ -115,16 +115,30 @@ dialogue grammar, templates, rules and plans with a generic bounded host.
 No direct/indirect LLM, GenerateComment, delegated teacher or proxy fallback
 is permitted.
 
-The third **Operator/Developer** role is PLANNED: a privileged human code/service
-interface through a resident Python bridge using the native Copilot CLI or
-official SDK, outside Prolog's lifetime. It is **never a KEE capability**.
-Teacher and symbolic agents cannot call, delegate to, impersonate or escalate
-into it; symbolic execution remains LLM-free through every indirect path.
+The **Copilot Operator** and **Codex Operator** are PLANNED privileged human
+code/service interfaces through the same resident Python bridge with pluggable
+adapters, outside Prolog's lifetime. The exact Codex label is
+**Maintain code, inspect failures and manage services**.
+Neither is a **KEE capability**. Teacher and symbolic agents cannot call,
+delegate to, impersonate or escalate into either; symbolic execution remains
+LLM-free through every indirect path.
 Use documented native interfaces/resume only, not reverse-engineered private
 application internals. The teacher model choice does not configure this role.
+Official protocols, authentication and model IDs remain backend-specific.
+Keep sessions, credentials, owned PIDs, history, permissions and cancellation
+isolated; do not substitute an operator or its credentials for the other.
+
+Both installed backends use host-trusted primary checkout
+`C:\snet\PeTTa\repos\openworld_dr`, explicitly supplied to process launch,
+native session/thread creation and resume. Reject browser CWD and cross-repo
+resume; create no branches/worktrees and do not overwrite user edits.
+Warn and recommend one operator at a time in this checkout, but allow explicit
+**Start anyway**. No hard checkout mutex, automatic killing of the peer, or
+race-proof concurrency claim.
 
 Require authenticated localhost WebSocket/recovery access, private credentials
-and native CLI human permission decisions. Fail closed for permissions when
+and native CLI human permission decisions. **Human Start is not automatic edit
+permission.** Fail closed for permissions when
 the human is disconnected. Keep secrets out of URLs, logs, chat/KB and replay.
 Main assets depend on Prolog, so the minimal recovery view must be independently
 served by the surviving bridge; WebSocket alone is not restart persistence.
@@ -133,7 +147,7 @@ model tasks. Use documented resume only; preserve unknown in-flight outcomes
 explicitly and inspect before any human retry. No global installs or automatic
 code/model tasks are authorized.
 
-Teacher, Symbolic and Operator chips retain separate buffers, history, drafts,
+Teacher, Symbolic, Copilot Operator and Codex Operator chips retain separate buffers, history, drafts,
 settings, status, unread indicators, TODO scope, text identity and trace.
 Switching chips must not merge authority, discard drafts or submit work.
 No audio, microphone, STT/TTS, voice, captions or turn-silence UI; textual

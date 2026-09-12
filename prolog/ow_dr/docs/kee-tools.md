@@ -214,23 +214,40 @@ Origin/loopback checks and endpoint-local validation must not be mistaken for
 the future authenticated per-agent permissions and MT ceilings.
 Existing `api/tasks*` operational jobs are not the durable teaching-case todos.
 
-## Operator/Developer boundary — planned, never KEE
+## Copilot/Codex Operator boundary — planned, never KEE
 
-The proposed third chat role is a human-controlled privileged code/service
-interface, not a semantic capability. Its resident Python bridge uses the
-native Copilot CLI or official SDK **outside Prolog's lifetime**. No operator
+The same resident Python bridge has pluggable Copilot and Codex adapters
+**outside Prolog's lifetime**. Each operator is a human-controlled privileged
+code/service interface, not a semantic capability. The Codex label is exactly
+**Maintain code, inspect failures and manage services**. No operator
 WebSocket, recovery route, installation or SDK adapter is claimed implemented
 by this inventory. Do not invent endpoints or reverse-engineer private
 application internals; use documented supported session/resume interfaces only.
+The installed backends have distinct official protocols, authentication and
+model IDs. Do not share credentials, assume interchangeable IDs or automatically
+fall back from one operator to the other.
+
+Both adapters use the host-trusted primary checkout
+`C:\snet\PeTTa\repos\openworld_dr`, supplied explicitly for process launch,
+session/thread creation and resume. Validate the recorded canonical checkout
+identity; reject browser CWD and cross-repository resume. Do not create a branch
+or worktree, rely on inherited CWD, or overwrite user changes.
 
 The authenticated localhost WebSocket and recovery view must bind a real human
 session, validate origin and keep credentials private. Native CLI permissions
-continue to require their normal human decisions and fail closed when that
+continue to require their normal human decisions: **Start does not grant edit
+permission**. They fail closed when that
 human is disconnected. KEE grants cannot authorize these privileged actions.
 Teacher and symbolic tools/workflows cannot call the operator, delegate to it,
 submit its TODOs as commands or acquire its privileges through indirection.
 The symbolic role remains LLM-free; the teacher's emullm model setting is not
-an operator/native CLI model change.
+an operator/native CLI model change. Sessions, authentication, owned PIDs,
+history, permission requests and cancellation stay isolated per backend.
+
+Warn and recommend against running both operators in the same checkout, but
+allow the human's explicit **Start anyway**. Do not enforce a hard checkout
+mutex or automatically kill the other process. This is not race-proof editing
+and never authorizes overwriting user edits or bypassing native permissions.
 
 Main assets are served by Prolog. Therefore a minimal authenticated recovery
 view must be served independently with the Python bridge; an open WebSocket
@@ -242,7 +259,7 @@ native support. Unknown in-flight command/tool outcomes must remain explicitly
 unknown until inspected; do not blindly retry or claim exactly-once execution.
 Secrets must not enter URLs, transcript/replay logs or KB records.
 
-Teacher, Symbolic and Operator chat chips need separate buffers, history,
+Teacher, Symbolic, Copilot Operator and Codex Operator chat chips need separate buffers, history,
 drafts, settings, status, unread indicators and TODO scope. Changing chips must
 not merge authority or submit work. This planned role adds no KEE registry entry,
 global installation authorization or automatic code/model task.

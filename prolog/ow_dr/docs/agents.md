@@ -19,7 +19,7 @@ data/templates, not ready agent execution.
 | Operational task pools, source editor and debug console | Implemented application facilities, not an agent permission grant. Debug is **never a KEE tool**. |
 | Checkpoints | Isolated backend validated; full host/UI publication pending. Do not claim a complete published checkpoint workflow. |
 | emullm Chat, GenerateComment, prompt snapshot loader, symbolic agent runner | **PLANNED; not implemented by these documents.** |
-| Operator/Developer chip, resident Python Copilot bridge and independent recovery view | **PLANNED; implementation assigned separately.** Not a KEE capability or an installed recovery service. |
+| Copilot/Codex Operator chips, shared pluggable Python bridge and independent recovery view | **PLANNED until the actual bridge is implemented and verified.** Neither operator is a KEE capability or an installed recovery service by virtue of these docs. |
 | Central typed KEE registry, automatic general KB CRUD with durable undo, teaching-case todos | **PLANNED.** Existing operational task jobs are not durable teaching cases. |
 | Declarative workflow applications and held-out symbolic learning pipeline | **PLANNED.** |
 
@@ -60,7 +60,7 @@ symbolic language ability. No source filename or assertion IDs were provided
 with that measurement; none are invented here. Registry and agent applications
 remain planned.
 
-## Three distinct text roles — planned
+## Four distinct text roles — planned
 
 ### LLM teacher, explorer and comment writer
 
@@ -87,29 +87,54 @@ The host enforces this ceiling across nested tool/workflow calls, not merely
 through an agent's declaration. Missing language/procedural knowledge produces
 an honest, inspectable capability gap and a teaching-case proposal.
 
-### Operator/Developer: human-controlled, outside KEE
+### Copilot and Codex Operators: human-controlled, outside KEE
 
-The third role is a privileged human code/service interface through a resident
-**Python bridge using the native Copilot CLI or official SDK**, outside the
-Prolog process lifetime. It is not another semantic agent, a Cyc action, an
-emullm tool or an entry in the KEE registry. The teacher and symbolic agent
-cannot invoke, delegate to, impersonate or escalate into Operator/Developer.
+The same resident **Python bridge has pluggable Copilot and Codex adapters**,
+outside the Prolog process lifetime. Each operator is a privileged human
+code/service interface, not a semantic agent, a Cyc action, an emullm tool or
+an entry in the KEE registry. The Codex operator label is exactly:
+**Maintain code, inspect failures and manage services**
+
+The teacher and symbolic agent cannot invoke, delegate to, impersonate or
+escalate into either operator.
 Symbolic runs remain LLM-free even through indirect operator requests.
 
-Use only documented native CLI/official SDK interfaces and supported resume
-mechanisms for the installed version. Do not reverse-engineer private Copilot
-application internals, scrape private credentials or invent session-resume APIs.
-The teacher's selected model does not configure the operator's native session.
-No global installation or automatic code/model task is authorized by this design.
+Use each installed backend's documented official CLI/protocol/SDK interfaces
+and supported resume mechanisms. Copilot and Codex protocols, authentication
+flows and model IDs are distinct; do not translate credentials, assume matching
+model IDs, substitute one backend for the other or invent session-resume APIs.
+Do not reverse-engineer private application internals. The teacher's model does
+not configure either operator. Missing installations are reported, not repaired
+with global installs. No automatic code/model task is authorized.
+
+**Both operators are bound to the trusted installed primary checkout**
+`C:\snet\PeTTa\repos\openworld_dr`. The host, not the browser, supplies this CWD.
+Pass it explicitly at process launch, native session/thread creation and resume;
+record and validate canonical checkout identity before attaching. Do not accept
+browser-supplied CWD, resume across repositories, create branches/worktrees or
+overwrite user edits. Do not rely on a bridge's inherited working directory.
+
+Keep operator sessions, authentication, owned PIDs, histories, permission
+requests and cancellation isolated. Stop/cancel targets only the selected
+backend's owned session/process/thread, never the other operator.
 
 The planned bridge exposes an authenticated localhost WebSocket and a minimal,
 independently served authenticated recovery view. Loopback alone is not
 authentication: validate the browser/session and allowed origin; keep credential
 references private and secrets out of URLs, logs, chat, KB records and replay.
 Privileged operations remain subject to the native CLI's permission system and
-real human decisions. Permission requests fail closed when the human is
+real human decisions. **Human Start is not blanket edit/tool permission**:
+starting a session must not auto-approve edits or service actions. Permission
+requests fail closed when the human is
 disconnected or cannot respond; do not silently approve them or borrow a
 teacher's ordinary KB-mutation grants.
+
+If the other operator is active in the same checkout, show a concurrency
+warning and recommend one at a time, but **allow an explicit “Start anyway.”**
+There is no hard checkout mutex or automatic killing of the other operator.
+The warning does not make concurrent edits race-proof, waive native permissions
+or authorize overwriting user changes. Inspect relevant changes and surface
+conflicts rather than resetting or replacing another actor's edits.
 
 **A WebSocket alone is not restart persistence.** Prolog serves the main
 application assets, so reconnecting to a surviving socket is insufficient if
@@ -127,9 +152,9 @@ outcome**, retain the correlation/audit record and require inspection before a
 human decides whether to retry. Do not promise arbitrary process continuation,
 exactly-once command execution or persistence solely from an open WebSocket.
 
-### Three chat chips, three independent contexts
+### Four chat chips, four independent contexts
 
-The planned **Teacher / Symbolic / Operator** chips retain separate buffers,
+The planned **Teacher / Symbolic / Copilot Operator / Codex Operator** chips retain separate buffers,
 history, drafts, settings, status, unread indicators and TODO scope, as well as
 role/conversation identity and trace. Switching chips must not overwrite a
 draft, merge histories or submit work. No automatic cross-role forwarding or
@@ -289,9 +314,13 @@ rule-use observations, Cyc configured utility and proposed agent policy.
   handling are implemented and tested, not inferred from `/v1/models`.
 - Communication and workflow held-out tests run with the LLM disabled and prove
   zero LLM network calls, inspectable proofs, persistent cases and regression checks.
-- Teacher, Symbolic and Operator expose separate text identities, buffers,
+- Teacher, Symbolic, Copilot Operator and Codex Operator expose separate text identities, buffers,
   history/drafts/settings/status/unread/TODO scope and traces.
 - Operator recovery is tested with Prolog/main assets unavailable: independent
   authenticated recovery view, output-only sequence replay, documented resume
   and explicit unknown in-flight outcomes. Disconnected native permission
   requests fail closed; neither semantic agent can reach this privileged channel.
+- Both adapters explicitly bind process/thread/resume CWD to the trusted primary
+  checkout. Tests cover cross-repository resume rejection, isolated auth/PIDs/
+  permissions/cancellation, preserved user edits and warning-plus-Start-anyway
+  concurrency without claiming race-proof shared-checkout editing.
