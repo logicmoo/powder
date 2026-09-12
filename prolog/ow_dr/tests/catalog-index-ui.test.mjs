@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { catalogParameters, catalogCoverageText, catalogAssertionHref, catalogJobText, catalogContextHref } from '../web/catalog-index.js';
+import { launchChromium } from './chromium.mjs';
+import { APP_BASE } from '../web/paths.js';
 
 test('all indexed files are the default and request scopes are explicit', () => {
   const route = { params: new URLSearchParams('term=x_p'), offset: 0, limit: 200 };
@@ -15,6 +17,10 @@ test('all indexed files are the default and request scopes are explicit', () => 
 test('partial coverage cannot be presented as complete', () => {
   assert.match(catalogCoverageText({ expectedFiles: 1117, freshFiles: 237, complete: false }), /237 of 1117.*Incomplete/u);
   assert.match(catalogCoverageText({ expectedFiles: 1117, freshFiles: 1117, complete: true }), /Complete file coverage/u);
+});
+test('legacy remainder filters do not label unknown types as ontological individuals', () => {
+  const route = { params: new URLSearchParams('group=individuals'), offset: 0, limit: 25 };
+  assert.equal(catalogParameters(route).group, 'typed_other');
 });
 test('unloaded assertion links use catalog detail instead of a broken live ID link', () => {
   const item = { id: 'a123', source: 'KBs/some file.krf', loaded: false };
@@ -37,4 +43,83 @@ test('catalog MT navigation includes unloaded context assertions with the select
   assert.equal(params.get('term'), 'mt:(x_Fn x_A)');
   assert.equal(params.get('scope'), 'unloaded');
   assert.equal(params.get('facet'), 'context');
+});
+
+test('published all-file catalog serves real unloaded evidence without changing the live generation', {
+  skip: !process.env.OPENWORLD_CATALOG_TEST_URL, timeout: 240000,
+}, async t => {
+  const base = new URL(APP_BASE, process.env.OPENWORLD_CATALOG_TEST_URL);
+  const timings = {};
+  const read = async (path, label = path) => {
+    const started = performance.now();
+    const response = await fetch(new URL(`api/${path}`, base));
+    const data = await response.json();
+    timings[label] = Math.round((performance.now() - started) * 10) / 10;
+    assert.equal(response.status, 200, JSON.stringify(data));
+    return data;
+  };
+  const before = await read('status');
+  const status = await read('catalog/status', 'catalogStatusColdMs');
+  assert.equal(status.complete, true);
+  assert.equal(status.projection.available, true);
+  if (process.env.OPENWORLD_CATALOG_EXPECTED_FILES) {
+    assert.equal(status.freshFiles, Number(process.env.OPENWORLD_CATALOG_EXPECTED_FILES));
+    assert.equal(status.expectedFiles, Number(process.env.OPENWORLD_CATALOG_EXPECTED_FILES));
+  }
+  await read('catalog/status', 'catalogStatusWarmMs');
+  const term = process.env.OPENWORLD_CATALOG_TEST_TERM ?? 'x_resultIsa';
+  const searchPath = `catalog/search?q=${encodeURIComponent(term)}&limit=100`;
+  const search = await read(searchPath, 'searchColdMs');
+  await read(searchPath, 'searchWarmMs');
+  const found = search.items.find(item => item.term === term);
+  assert.ok(found, `Indexed ${term}`);
+  assert.ok(found.typeEntries.length, 'Recorded types are inspectable');
+  const path = `catalog/term?term=${encodeURIComponent(term)}&limit=2`;
+  const all = await read(`${path}&scope=all`, 'definitionsAllMs');
+  const loaded = await read(`${path}&scope=loaded`, 'definitionsLoadedMs');
+  const unloaded = await read(`${path}&scope=unloaded`, 'definitionsUnloadedMs');
+  assert.equal(all.total, found.definitions);
+  assert.equal(all.total, loaded.total + unloaded.total);
+  assert.equal(all.occurrences, loaded.occurrences + unloaded.occurrences);
+  assert.ok(unloaded.total > 2, 'Unloaded definition evidence spans pages');
+  const next = await read(`${path}&scope=unloaded&offset=2`, 'definitionsNextPageMs');
+  assert.equal(next.total, unloaded.total);
+  assert.ok(next.items.every(item => !unloaded.items.some(first => first.id === item.id)));
+  const item = unloaded.items[0];
+  assert.equal(item.loaded, false);
+  assert.ok(item.positions.length && item.properties.length);
+  const detail = await read(`catalog/assertion?${new URLSearchParams({ term, source: item.source, id: item.id })}`, 'unloadedAssertionMs');
+  assert.deepEqual(detail.expression, item.expression);
+  assert.equal(detail.loaded, false);
+  const mt = await read(`catalog/term?${new URLSearchParams({ term: item.mt, facet: 'context', scope: 'unloaded', limit: '2' })}`, 'unloadedMTMs');
+  assert.ok(mt.items.length && mt.items.every(entry => entry.mt === item.mt && !entry.loaded));
+  if (process.env.LOGOS_CHROME) {
+    const browser = await launchChromium(process.env.LOGOS_CHROME);
+    try {
+      await browser.send('Emulation.setDeviceMetricsOverride', { width: 1360, height: 950, deviceScaleFactor: 1, mobile: false });
+      await browser.send('Page.navigate', { url: new URL(`#/catalog?q=${encodeURIComponent(term)}`, base).href });
+      await browser.wait('document.querySelector("h1")?.textContent === "All-file term index" && document.querySelector("main").getAttribute("aria-busy") === "false"');
+      assert.ok(await browser.evaluate('document.querySelector(".data-table tbody a") !== null'));
+      await browser.route(`#/definitions?${new URLSearchParams({ term, scope: 'unloaded', limit: '2' })}`);
+      assert.ok(await browser.evaluate('document.querySelectorAll(".assertion-view").length === 2'));
+      assert.ok(await browser.evaluate('document.querySelector(".catalog-positions summary")?.textContent.includes("Matching structural positions")'));
+      assert.ok(await browser.evaluate('document.querySelector(".assertion-group-heading").textContent.includes("All indexed MT assertions")'));
+      assert.match(await browser.evaluate('document.querySelector(".assertion-ball").getAttribute("href")'), /^#\/catalog-assertion/u);
+      await browser.route(catalogAssertionHref(item, term));
+      assert.ok(await browser.evaluate('document.querySelector(".assertion-view .expression a") !== null'));
+      assert.equal(await browser.evaluate('document.querySelector("main").textContent.includes("x_cid")'), false);
+      for (const [width, height, mobile] of [[1360, 950, false], [390, 844, true]]) {
+        await browser.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile });
+        assert.equal(await browser.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'), true);
+      }
+      assert.deepEqual(browser.exceptions, []);
+    } finally {
+      await browser.close();
+    }
+  }
+  const after = await read('status');
+  assert.equal(after.generation, before.generation);
+  assert.deepEqual(after.files, before.files);
+  assert.deepEqual(after.counts, before.counts);
+  t.diagnostic(JSON.stringify({ term, coverage: status.freshFiles, definitions: all.total, unloaded: unloaded.total, timings }));
 });
