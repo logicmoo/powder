@@ -1178,6 +1178,8 @@ async function assertionPage(route, signal) {
     heading('Assertion detail', id, copyButton('Copy expression', expressionText(assertion.expression))),
     annotationContextControl(route, signal, context => editor.setContext(context)),
     assertionGroups([assertion], { detail: true }),
+    assertionView.utilityPanel({ id, generation: original.generation, signal,
+      loadPage: (params, options) => api('rule-utility', params, options) }),
     editor,
     compiledClausePanel(assertion.id, original.generation, signal),
     element('section', { className: 'provenance-section' }, element('h2', {}, 'Source provenance'),
@@ -1745,10 +1747,13 @@ function inputField(label, input) {
 
 function queryResults(data) {
   const solutions = data.solutions ?? [];
-  if (!solutions.length) return empty('No solutions', 'No matching proof was found within the selected context and limits. Ordinary implications are not executable rules.');
+  const utility = data.utility ? assertionView.ruleUtility({ ...data.utility, scope: 'query' }) : null;
+  if (!solutions.length) return element('div', {},
+    empty('No solutions', 'No matching proof was found within the selected context and limits. Ordinary implications are not executable rules.'), utility);
   const results = element('div', { className: 'query-solutions' },
     element('h2', {}, `${number(solutions.length)} ${solutions.length === 1 ? 'solution' : 'solutions'}`),
-    data.truncated && element('p', { className: 'muted' }, 'The result limit was reached. Narrow your query or increase the limit.'));
+    data.truncated && element('p', { className: 'muted' }, 'The result limit was reached. Narrow your query or increase the limit.'),
+    utility);
   solutions.forEach((solution, index) => {
     const bindings = solution.bindings ?? [];
     const body = element('section', { className: 'solution' },
@@ -1761,7 +1766,7 @@ function queryResults(data) {
     const proof = solution.proof ?? [];
     body.append(element('details', { className: 'proof', open: presentation.get().fields.proof },
       element('summary', {}, `${proof.length} successful proof ${proof.length === 1 ? 'step' : 'steps'}`),
-      annotateCards(colorAssertionBalls(assertionView.proof(proof), proof), proof, { context: solution.mt })));
+      annotateCards(colorAssertionBalls(assertionView.proof(proof, { utilityReport: data.utility }), proof), proof, { context: solution.mt })));
     results.append(body);
   });
   return results;
