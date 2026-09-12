@@ -13,6 +13,8 @@ test('model choice never falls back and scope keys are concrete', () => {
   assert.equal(canChat({ conversation: { status: 'ready' }, text: 'Hi', approved: false }), false);
   assert.equal(canChat({ conversation: { status: 'running' }, text: 'Hi', approved: true }), false);
   assert.equal(canChat({ conversation: { status: 'ready' }, text: 'Hi', approved: true }), true);
+  assert.equal(canChat({ conversation: { status: 'failed', calls: [{ state: 'unknown' }] },
+    text: 'Hi', approved: true }), false);
 });
 test('isolated browser: explicit model refresh, consent, snapshots and text-only controls', {
   skip: !process.env.LOGOS_CHROME, timeout: 60000,
@@ -60,6 +62,10 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     else if (action === 'prompt') result = { content: 'Synthetic fixture prompt', revision: 'p1', rawHash: 'p1' };
     else if (action === 'models') result = { items: ['gpt-5.6-sol', 'fixture-other'], selected: settings.model, selectedAvailable: true };
     else if (action === 'settings/save') { settings = { ...settings, ...body.settings, revision: 'r2' }; result = settings; }
+    else if (action === 'grounding/preview') result = { id: 'fixture-grant', hash: 'fixture-hash',
+      entries: [{ material: { term: 'x_Synthetic', text: 'Synthetic approved evidence' }, evidence: [{ id: 'a-fixture', revision: 'r-fixture' }] }] };
+    else if (action === 'grounding/approve') result = { id: 'fixture-grant', approved: true };
+    else if (action === 'todos') result = { available: true, items: [{ title: 'Synthetic local task' }] };
     else if (action === 'start') {
       conversation = { id: 'c-fixture', identity: 'llm', status: 'ready', revision: 0, model: settings.model,
         promptHash: 'p1', messages: [], scope: body.scope, events: [], audit: [], calls: [],
@@ -90,8 +96,24 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     assert.equal(settings.model, 'fixture-other');
     assert.equal(requests.some(r => r.action === 'chat'), false);
     await browser.evaluate(`history.replaceState(null,'','/#/agent-chips?active=teacher')`);
+    await browser.evaluate(`for(const [name,value] of [['llm-term-keys','x_Synthetic'],['llm-read-mts','x_FixtureMt']]) {
+      const input=document.querySelector('[name="'+name+'"]');input.value=value;input.dispatchEvent(new Event('input'));}`);
+    await click('Start new conversation');
+    await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Preview and approve')`);
+    assert.equal(requests.some(r => r.action === 'start'), false);
+    await click('Preview grounding locally');
+    await browser.wait(`document.querySelector('.llm-grounding-preview').textContent.includes('Synthetic approved evidence')`);
+    assert.equal(requests.some(r => r.action === 'chat' || r.action === 'start'), false);
+    assert.equal(requests.find(r => r.action === 'grounding/preview').body.requests.length, 2);
+    await click('Approve exactly this nonsensitive preview');
+    await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Exact preview approved')`);
+    await browser.evaluate('teacher.deactivate();teacher.activate()');
     await click('Start new conversation');
     await browser.wait(`document.body.textContent.includes('prompt p1')`);
+    assert.equal(requests.find(r => r.action === 'start').body.scope.grant, 'fixture-grant');
+    await click('Todos'); await click('Refresh local TODOs');
+    await browser.wait(`document.querySelector('.llm-local-todos').textContent.includes('Synthetic local task')`);
+    assert.equal(requests.some(r => r.action === 'chat'), false);
     assert.equal(await browser.evaluate('location.hash'), '#/agent-chips?active=teacher');
     assert.equal(await browser.evaluate('lastConversation.agent'), 'llm-knowledge');
     await browser.evaluate(`const t=document.querySelector('[name="llm-message"]');t.value='Synthetic fixture';t.dispatchEvent(new Event('input'))`);
@@ -118,6 +140,7 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     assert.equal(await browser.evaluate(`document.querySelector('[name="llm-rounds"]').value`), '6');
     assert.equal(await browser.evaluate(`document.querySelector('[name="llm-term-keys"]').value`), 'x_UnsentScope');
     assert.equal(await browser.evaluate(`[...teacher.element.querySelectorAll('[role="tab"]')].find(b=>b.textContent==='Events').getAttribute('aria-selected')`), 'true');
+    assert.equal(await browser.evaluate(`teacher.element.querySelector('.llm-local-todos').textContent.includes('Synthetic local task')`), true);
     await browser.evaluate(`(async()=>{window.otherTeacher=await createTeacher({active:false});
       document.querySelector('main').append(otherTeacher.element)})()`);
     assert.equal(await browser.evaluate(`otherTeacher.getState().conversationId`), null);

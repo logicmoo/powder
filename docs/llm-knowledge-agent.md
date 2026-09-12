@@ -105,8 +105,11 @@ view controller does not arbitrate operator starts.
 | `llm/prompt` | GET | Current fixed prompt content and raw hash |
 | `llm/prompt/save` | POST | `{content,revision}` |
 | `llm/registry` | GET | Actual adapter availability/limitations |
-| `llm/start` | POST | `{scope:{terms:[],readMts:[],writeMts:[]}}`; no inference |
+| `llm/grounding/preview` | POST | `{scope,requests:[{tool,arguments}]}`; local reads only |
+| `llm/grounding/approve` | POST | `{id,hash,approvedNonsensitive:true}`; exact local approval, no inference |
+| `llm/start` | POST | `{scope:{terms:[],readMts:[],writeMts:[],grant:null}}`; optional approved grant ID, no inference |
 | `llm/conversation?id=...` | GET | Status, text, events, raw reply and execution records |
+| `llm/todos?id=...` | GET | Local conversation-owned TODO inspector, first 25 resources |
 | `llm/chat` | POST | `{id,revision,text,approvedNonsensitive:true}` |
 | `llm/interrupt` | POST | `{id}`; interrupt current turn, retain conversation |
 | `llm/stop` | POST | `{id}`; close conversation |
@@ -140,23 +143,66 @@ calls are discarded. Tool execution is one-shot, with durable reservations
 before dispatch and durable outcomes afterward. Repeated call IDs reuse a
 recorded result; changed arguments conflict; reserved/unknown outcomes are never
 automatically re-executed. An interrupted/crashed conversation is not silently
-resumed after restart. Use Stop and a new conversation when needed.
+resumed after restart. Unconfirmed mutation outcomes stop the turn and block new
+turns in that conversation. There is no automatic reconciliation/resubmission:
+review the durable KEE receipt through the host's KEE facilities before repeating
+the intent. Stop does not undo a committed mutation.
 
 The real `kb_kee` API is used for actual discovery, context grants and invocation.
-The current export adapter connects only `kee_catalog_status`,
-`kee_definitions`, and `kee_occurrences` when available. Definitions/occurrences
-must match the real user's selected exact term and read-MT keys; no broad
-all-MT term search or file reads are exposed. Results pass a bounded semantic
-field projection, dropping source paths and arbitrary diagnostic metadata.
-Context tokens stay host-only and expire/close. Every tool argument is parsed
-as a JSON object and strictly schema-validated before invocation. Original
+Availability comes from actual registry discovery, not module-name presence.
+Context tokens stay host-only and expire/close. Every tool argument is parsed as
+a JSON object and strictly schema-validated, including canonical nullable
+`anyOf` fields and nested `additionalProperties:false`. Provider `strict:true`
+is not fabricated for schemas containing genuinely optional fields. Original
 assistant `tool_calls` and matching `role:tool` IDs are retained for later rounds.
 
-**Current limitation:** the managed mutation/audit/undo and todo bridge is
-another owner's unfinished integration. This adapter advertises no mutation,
-load, todo, GenerateComment or fake capability. The UI states this explicitly;
-execution records for read tools are not claimed to be managed KB changesets.
-The symbolic agent is separate and is not implemented by this module.
+### Exact outgoing grounding
+
+Read-MT permission alone is **not** export consent. Selecting a term does not
+advertise its read tools. The local preview supports bounded catalog status,
+definitions, occurrences, TODO get/list and audit projections; the browser offers
+up to four term/MT pairs. A preview accepts at most eight requests, limits each
+paged read to five records and each projected result to 16 KiB of UTF-8 JSON.
+Unsupported tools and mutations cannot be previewed.
+
+The preview displays the exact permitted material plus local identity evidence
+(IDs, source identities, MTs and revisions). Source paths and arbitrary
+diagnostics are never automatically included in outgoing material. Evidence
+remains local; outgoing snapshots include material, request and content hash.
+Approval binds the entire preview hash and selected scope. Stored entry hashes
+are checked for corruption. Changed selection requires a new preview/approval.
+These actions perform no provider request and cannot be invoked as model tools.
+
+Conversation policy `llm-exact-grounding-v2` snapshots approved material as an
+explicitly untrusted data message, never system instructions. Before **every**
+provider round, the host re-reads all approved requests through KEE and requires
+the same material/identity hashes. Each read tool call must also match an exact
+approved request and return the approved hash. Changed data is withheld, even if
+the change came from an otherwise authorized TODO mutation. Old-policy
+conversations must be replaced explicitly; their history is not silently
+upgraded or exported.
+
+### Real application TODOs
+
+The adapter connects actual available `kee_ledger_status`, `kee_todo_create`,
+`kee_todo_update`, `kee_todo_delete`, `kee_undo` and `kee_redo`. Ledger status
+exports only its revision. Ordinary valid mutations are automatic, not subject
+to per-change approval. Exact ledger/resource revisions, permissions, MT
+ceilings and durable replay are enforced by KEE.
+
+An additional durable conversation ownership set prevents changing, depending
+on or undoing another conversation's resources/changesets. New MTs must be in
+the explicit write ceiling (itself a subset of selected read MTs); `null` is
+application-global, never all MTs. The model cannot mark tasks done: KEE requires
+real user-kind completion attestation. Mutation results expose only committed
+receipts, changeset/resource IDs and revisions, not raw task text or audit images.
+The local TODO inspector does not export its contents.
+
+These are **application TODOs**, not KB assertions or Copilot session tasks.
+Managed KB assertion edits, native annotation mutation, both source-loading
+choices, GenerateComment, broad all-MT queries and operator/symbolic execution
+remain unavailable through Teacher. No fake functions or load-approval fields
+are emitted. The symbolic agent remains a separate non-LLM implementation.
 
 Conversation files and the exact user-approved material they contain remain
 in the repository-local application state directory. They are not deleted by
@@ -172,5 +218,9 @@ node --test prolog\ow_dr\tests\llm-agent-ui.test.mjs
 ```
 
 Tests launch an isolated loopback HTTP fixture, never the live emullm completion
-endpoint, and use only synthetic text. Their state is repository-local scratch
-and is removed afterward. No native KB or production listener is changed.
+endpoint, and use only synthetic text. `POWDER_AGENT_STATE` and
+`POWDER_KEE_STATE_DIR` point at owned repository-local fixture directories and are
+restored afterward. Tests include actual TODO commit/replay/update/undo/redo,
+exact approval/freshness/corruption, full assistant/tool protocol rounds, lost
+receipt blocking and real Chrome chip/preview interactions. No checkpoint
+process, native KB or production listener is changed.

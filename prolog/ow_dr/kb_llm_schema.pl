@@ -20,6 +20,10 @@ tool_name(Name) :-
     forall(member(X,Codes),(X=<127,(code_type(X,alnum);memberchk(X,[0'_,0'-])))).
 
 schema(S) :-
+    is_dict(S),get_dict(anyOf,S,Choices),!,
+    strict_keys(S,[anyOf]),must_be(list,Choices),length(Choices,N),between(1,8,N),
+    maplist(schema,Choices).
+schema(S) :-
     must_be(dict,S),get_dict(type,S,Type),
     (memberchk(Type,["object","array","string","integer","number","boolean","null"])->true;
      domain_error(llm_schema_type,Type)),
@@ -45,6 +49,8 @@ validate_arguments(Schema,Text,Arguments) :-
     must_be(string,Text),string_length(Text,N),(N=<16384->true;resource_error(llm_tool_arguments)),
     atom_json_dict(Text,Arguments,[]),must_be(dict,Arguments),
     (value(Schema,Arguments)->true;throw(error(llm_arguments_mismatch,_))).
+value(S,V) :-
+    get_dict(anyOf,S,Choices),!,once((member(Choice,Choices),value(Choice,V))).
 value(S,V) :-
     typed(S.type,S,V),
     (get_dict(enum,S,Options)->memberchk(V,Options);true).

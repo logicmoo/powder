@@ -16,6 +16,9 @@
 :- http_handler(openworld_dr(api/llm/prompt),llm_endpoint(prompt),[method(get)]).
 :- http_handler(openworld_dr(api/llm/prompt/save),llm_endpoint(prompt_save),[method(post)]).
 :- http_handler(openworld_dr(api/llm/registry),llm_endpoint(registry),[method(get)]).
+:- http_handler(openworld_dr(api/llm/grounding/preview),llm_endpoint(grounding_preview),[method(post)]).
+:- http_handler(openworld_dr(api/llm/grounding/approve),llm_endpoint(grounding_approve),[method(post)]).
+:- http_handler(openworld_dr(api/llm/todos),llm_endpoint(todos),[method(get)]).
 :- http_handler(openworld_dr(api/llm/start),llm_endpoint(start),[method(post)]).
 :- http_handler(openworld_dr(api/llm/conversation),llm_endpoint(conversation),[method(get)]).
 :- http_handler(openworld_dr(api/llm/chat),llm_endpoint(chat),[method(post)]).
@@ -50,6 +53,9 @@ action(prompt,_,Reply) :- prompt_document(Reply).
 action(prompt_save,R,Reply) :-
     body(R,B),strict_keys(B,[content,revision]),save_prompt_document(B.content,B.revision,Reply).
 action(registry,_,Reply) :- registry_status(Reply).
+action(grounding_preview,R,Reply) :- body(R,B),preview_grounding(B,Reply).
+action(grounding_approve,R,Reply) :- body(R,B),approve_grounding(B,Reply).
+action(todos,R,Reply) :- http_parameters(R,[id(Id,[atom])]),local_todos(Id,Reply).
 action(start,R,Reply) :-
     body(R,B),strict_keys(B,[scope]),start_conversation(B.scope,Reply).
 action(conversation,R,Reply) :-
