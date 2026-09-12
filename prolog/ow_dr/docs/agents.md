@@ -75,7 +75,7 @@ authenticated identity, permission/MT ceilings, budgets and current revisions.
 If discovery is unavailable, the agent reports the missing integration and
 does not invent Cyc API names or claim to have performed edits.
 
-### Symbolic text agent
+### Cyc: symbolic text agent
 
 This is a separate agent identity, not an LLM with a different prompt. Its
 goals, state, policies, dialogue grammar, lexicon, templates, rules and plans
@@ -136,6 +136,36 @@ The warning does not make concurrent edits race-proof, waive native permissions
 or authorize overwriting user changes. Inspect relevant changes and surface
 conflicts rather than resetting or replacing another actor's edits.
 
+#### Verified adapter contracts; bridge implementation still planned
+
+These interface/lifecycle details were verified by the coordinator. They do not
+mean an operator bridge has been delivered.
+
+- **Copilot:** pin the tested official SDK version and verify that the installed
+  version supports the intended explicit `cli_path` and
+  `RuntimeConnection.for_uri` integration. Do not assume these interfaces are
+  interchangeable across versions or silently choose an unconfigured runtime.
+- Disconnect is resumable and **keeps history**. `delete_session` is permanent
+  deletion, never the implementation of Disconnect, tab close or ordinary
+  cancellation. Do not delete a session to recover a transport failure.
+- `client.stop` may stop only an **SDK-owned runtime**. Track ownership and do
+  not apply it to an attached external/shared runtime. Resume remains restricted
+  to the supported documented operation and the verified primary-repository CWD.
+- **Permissions:** never use `approve_all`. Native permission requests require
+  the real human policy/decision and fail closed when disconnected.
+- **Codex:** use the installed official `app-server` stdio protocol:
+  `initialize`, then `initialized`, followed by the documented thread/turn API
+  with its **camelCase** fields. Do not send a Copilot SDK protocol or guessed
+  snake_case payloads to it.
+- Codex `approvalPolicy: "never"` means approval requests are **auto-rejected**,
+  not “approve all” or unrestricted authority. Preserve the explicit native
+  policy; do not use this setting as a permission bypass.
+- Use the explicit user-installed `codex_bin` and trusted CWD. Do not download
+  or substitute a bundled Codex binary. On Windows, resolve installed PowerShell
+  shims to the supported launcher/target; a `.ps1` file is not a Win32 executable.
+  Verify target/version and use structured arguments, not browser-supplied shell
+  strings or global installation as a fallback.
+
 **A WebSocket alone is not restart persistence.** Prolog serves the main
 application assets, so reconnecting to a surviving socket is insufficient if
 the main UI cannot load. The Python service and minimal recovery assets must
@@ -154,7 +184,9 @@ exactly-once command execution or persistence solely from an open WebSocket.
 
 ### Four chat chips, four independent contexts
 
-The planned **Teacher / Symbolic / Copilot Operator / Codex Operator** chips retain separate buffers,
+The planned chip labels are exactly **Teacher / Cyc / Copilot / Codex**:
+the LLM teacher, LLM-free symbolic Cyc agent, Copilot operator and Codex operator.
+All four retain separate buffers,
 history, drafts, settings, status, unread indicators and TODO scope, as well as
 role/conversation identity and trace. Switching chips must not overwrite a
 draft, merge histories or submit work. No automatic cross-role forwarding or
@@ -314,7 +346,7 @@ rule-use observations, Cyc configured utility and proposed agent policy.
   handling are implemented and tested, not inferred from `/v1/models`.
 - Communication and workflow held-out tests run with the LLM disabled and prove
   zero LLM network calls, inspectable proofs, persistent cases and regression checks.
-- Teacher, Symbolic, Copilot Operator and Codex Operator expose separate text identities, buffers,
+- Teacher, Cyc, Copilot and Codex expose separate text identities, buffers,
   history/drafts/settings/status/unread/TODO scope and traces.
 - Operator recovery is tested with Prolog/main assets unavailable: independent
   authenticated recovery view, output-only sequence replay, documented resume
@@ -324,3 +356,7 @@ rule-use observations, Cyc configured utility and proposed agent policy.
   checkout. Tests cover cross-repository resume rejection, isolated auth/PIDs/
   permissions/cancellation, preserved user edits and warning-plus-Start-anyway
   concurrency without claiming race-proof shared-checkout editing.
+- Adapter tests distinguish resumable disconnect from permanent deletion,
+  owned from attached runtimes, human permissions from `approve_all`, and Codex
+  auto-rejected approvals from granted authority; Windows shim launching and
+  the version-pinned official protocols are validated without model prompts.

@@ -259,10 +259,31 @@ native support. Unknown in-flight command/tool outcomes must remain explicitly
 unknown until inspected; do not blindly retry or claim exactly-once execution.
 Secrets must not enter URLs, transcript/replay logs or KB records.
 
-Teacher, Symbolic, Copilot Operator and Codex Operator chat chips need separate buffers, history,
+The four chip labels are **Teacher / Cyc / Copilot / Codex**; Cyc is the
+symbolic role and the latter two are operators. Each needs separate buffers, history,
 drafts, settings, status, unread indicators and TODO scope. Changing chips must
 not merge authority or submit work. This planned role adds no KEE registry entry,
 global installation authorization or automatic code/model task.
+
+### Verified operator interfaces; application bridge still planned
+
+Coordinator-verified details constrain the future host; they are not KEE tool
+names and do not establish a delivered bridge:
+
+| Backend concern | Required handling |
+|---|---|
+| Copilot SDK compatibility | Pin the tested official SDK version. Confirm support for explicit `cli_path` and `RuntimeConnection.for_uri` in that version; do not guess a private runtime interface. |
+| Copilot disconnect | Resumable, retaining history. Never implement it with permanent `delete_session`; transport loss, tab close and cancel must not erase history. |
+| Copilot runtime shutdown | `client.stop` is restricted to SDK-owned runtimes, not attached/shared runtimes. Record ownership and use only documented resume with validated CWD. |
+| Native permissions | Never `approve_all`. Preserve human native permissions; fail closed for pending requests when disconnected. Starting is not edit authorization. |
+| Codex initialization | Official `app-server` stdio: `initialize`, then `initialized`, then the documented thread/turn API with camelCase fields. Not Copilot protocol or guessed snake_case fields. |
+| Codex approval policy | `approvalPolicy: "never"` auto-rejects approval requests; it is not approve-all or unrestricted execution. Never use it to bypass human policy. |
+| Codex installation | Explicit user-installed `codex_bin` and host-trusted CWD; no bundled download/substitution. |
+| Windows launchers | Resolve installed PowerShell shims to a supported target/launcher. Do not treat `.ps1` as a Win32 executable; verify path/version and use structured arguments. |
+
+No sessions or model prompts were started to document these contracts. Preserve
+isolated authentication/model IDs, session history, PIDs, permissions and
+cancellation for the two operators.
 
 ## One future typed semantic registry — PLANNED
 

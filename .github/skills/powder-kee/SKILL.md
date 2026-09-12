@@ -140,6 +140,22 @@ Require authenticated localhost WebSocket/recovery access, private credentials
 and native CLI human permission decisions. **Human Start is not automatic edit
 permission.** Fail closed for permissions when
 the human is disconnected. Keep secrets out of URLs, logs, chat/KB and replay.
+
+Coordinator-verified contracts still require bridge implementation:
+- Copilot: pin the tested official SDK version with verified explicit
+  `cli_path` / `RuntimeConnection.for_uri` support.
+- Disconnect is resumable and keeps history; `delete_session` is permanent,
+  never a disconnect/cancel/tab-close substitute.
+- `client.stop` applies only to SDK-owned runtimes, not attached/shared ones.
+  Never use `approve_all`; keep real human native permission decisions.
+- Codex: official `app-server` stdio `initialize` then `initialized`, followed
+  by the documented camelCase thread/turn API.
+- `approvalPolicy: "never"` auto-rejects approval requests; it is not approve-all.
+- Require user-installed `codex_bin` and trusted CWD, with no bundled download.
+  Resolve installed Windows PowerShell shims to supported launchers/targets;
+  `.ps1` is not a Win32 executable. Do not launch sessions or model prompts merely
+  to follow this documentation.
+
 Main assets depend on Prolog, so the minimal recovery view must be independently
 served by the surviving bridge; WebSocket alone is not restart persistence.
 Replay bounded sequenced **output**, never commands, stdin, tool calls or new
@@ -147,7 +163,8 @@ model tasks. Use documented resume only; preserve unknown in-flight outcomes
 explicitly and inspect before any human retry. No global installs or automatic
 code/model tasks are authorized.
 
-Teacher, Symbolic, Copilot Operator and Codex Operator chips retain separate buffers, history, drafts,
+The exact four chip labels **Teacher / Cyc / Copilot / Codex** identify the
+teacher, symbolic Cyc role and two isolated operators. They retain separate buffers, history, drafts,
 settings, status, unread indicators, TODO scope, text identity and trace.
 Switching chips must not merge authority, discard drafts or submit work.
 No audio, microphone, STT/TTS, voice, captions or turn-silence UI; textual
