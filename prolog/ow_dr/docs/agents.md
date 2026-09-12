@@ -5,6 +5,8 @@ an agent, configure a model, or grant tool permissions. See the verified
 [current route inventory and proposed KEE contract](kee-tools.md), the
 [LLM prompt](../prompts/llm-knowledge-agent.md), and the
 [powder-kee skill](../../../.github/skills/powder-kee/SKILL.md).
+The [source-verified KB asset appendix](agent-kb-inventory.md) lists candidate
+data/templates, not ready agent execution.
 
 ## What exists, and what is planned
 
