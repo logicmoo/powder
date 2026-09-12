@@ -187,6 +187,15 @@ posting identities, holds the existing directory lock, and switches the small
 manifest only after the new support directory is complete. Missing support is
 explicitly pending; it does not disable basic exact-term browsing.
 
+New type manifests record the expected bucket keys. An unpopulated bucket returns
+no recorded declarations without reading a payload; a missing expected bucket or
+missing support directory raises an integrity error instead of a false empty
+answer. Legacy manifests remain readable where their selected bucket exists.
+Without a bucket inventory, a missing file is explicitly unverifiable, not proof
+that the term lacks declarations. The same `--type-directory` upgrade adds the
+inventory without changing source, query, search or posting identities. No
+automatic rebuild or source load occurs during a type request.
+
 The actual directory-only upgrade completed in **97.340 seconds**, retaining
 **744,932 declarations for 209,260 subjects** in **154,171,083 bytes**. A standalone
 `x_diplomaticState` lookup took **3,019 ms cold / 56 ms warm**, returning its one

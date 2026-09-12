@@ -50,10 +50,11 @@ write_type_projection(Parent,Header,Provided,Info) :-
          catalog_type_classes(Header.revision,Header.taxonomy,Schema.categories)),
        assoc_to_list(Schema.types,Pairs),length(Pairs,Count),
        empty_assoc(Empty),foldl(type_bucket,Pairs,Empty,Buckets),
-       assoc_to_list(Buckets,Groups),length(Groups,Total),
+       assoc_to_list(Buckets,Groups),length(Groups,Total),pairs_keys(Groups,BucketKeys),
        write_buckets(Groups,Directory,Header,0,Total),
        findall(N,(member(_-Types,Pairs),length(Types,N)),Counts),sum_list(Counts,Claims),
        Info=types{schema:catalog_types_v1,directory:Directory,subjects:Count,claims:Claims,
+         bucketKeys:BucketKeys,
          pathPolicy:representative_shortest_paths,proofAlternativesExhaustive:false}),
       Catcher,(Catcher==exit->true;delete_directory_and_contents(Directory))).
 type_bucket(Key-Types,Before,After) :-
@@ -76,18 +77,33 @@ type_status(Header,Status) :-
        Status=json{available:false,state:pending}).
 type_page(Header,Key,Offset,Limit,Reply) :-
     (get_dict(types,Header,Info)->true;throw(error(catalog_types_pending,_))),
-    kb_catalog_directory:bucket_id(Key,Bucket),bucket_path(Info.directory,Bucket,Path),
-    (exists_file(Path)->
-       kb_catalog_directory:read_record(Path,
-         catalog_type_declarations(Header.revision,Header.taxonomy,Rows)),
-       (get_assoc(Key,Rows,Types)->true;Types=[])
-    ;Types=[]),
+    kb_catalog_directory:bucket_id(Key,Bucket),type_rows(Header,Info,Bucket,Rows),
+    (get_assoc(Key,Rows,Types)->true;Types=[]),
     kb_catalog_index:page(Types,Offset,Limit,Selected,Total),
     (Selected==[]->Items=[];
       classes(Header,Info,Classes),maplist(type_item(Classes),Selected,Items)),
     Reply=json{items:Items,total:Total,offset:Offset,limit:Limit,
       scope:catalog_taxonomy_not_mt_entailment,pathPolicy:Info.pathPolicy,
       proofAlternativesExhaustive:false}.
+type_rows(Header,Info,Bucket,Rows) :-
+    (exists_directory(Info.directory)->true;
+      throw(error(catalog_type_directory_missing(Info.directory),_))),
+    bucket_path(Info.directory,Bucket,Path),
+    (get_dict(bucketKeys,Info,Keys)->
+       valid_bucket_inventory(Keys),
+       (memberchk(Bucket,Keys)->read_required_bucket(Header,Path,Rows);empty_assoc(Rows))
+    ;exists_file(Path)->read_required_bucket(Header,Path,Rows)
+    ;throw(error(catalog_type_bucket_inventory_missing(Path),_))).
+valid_bucket_inventory(Keys) :-
+    (ground(Keys),is_list(Keys),sort(Keys,Keys),maplist(valid_bucket_key,Keys)->true;
+      throw(error(domain_error(catalog_type_bucket_inventory,Keys),_))).
+valid_bucket_key(Key) :-
+    atom(Key),atom_codes(Key,[A,B]),hex_code(A),hex_code(B).
+hex_code(Code) :- (between(0'0,0'9,Code);between(0'a,0'f,Code)).
+read_required_bucket(Header,Path,Rows) :-
+    (exists_file(Path)->true;throw(error(catalog_type_bucket_missing(Path),_))),
+    kb_catalog_directory:read_record(Path,
+      catalog_type_declarations(Header.revision,Header.taxonomy,Rows)).
 classes(Header,Info,Classes) :-
     directory_file_path(Info.directory,'classes.data',Path),
     kb_catalog_index:file_stamp(Path,Stamp),

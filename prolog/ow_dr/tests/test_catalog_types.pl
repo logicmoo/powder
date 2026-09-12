@@ -67,4 +67,69 @@ test(native_unload_does_not_remove_catalog_type_provenance,
     catalog_query_types(json{term:x_p},After),
     assertion(Before.items==After.items),assertion(Before.revision==After.revision).
 
+test(publication_records_the_expected_type_buckets,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    kb_catalog_directory:manifest(Header),
+    kb_catalog_directory:bucket_id(x_p,Bucket),
+    assertion(Header.types.bucketKeys==[Bucket]).
+test(missing_expected_bucket_is_not_an_empty_type_answer,
+     [setup(fixture(S)),cleanup(cleanup(S)),
+      throws(error(catalog_type_bucket_missing(_),_))]) :-
+    kb_catalog_directory:manifest(Header),
+    kb_catalog_directory:bucket_id(x_p,Bucket),
+    kb_catalog_types:bucket_path(Header.types.directory,Bucket,Path),
+    delete_file(Path),
+    catalog_query_types(json{term:x_p},_).
+test(unpopulated_bucket_needs_no_payload_read,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    kb_catalog_directory:manifest(Header),
+    kb_catalog_directory:bucket_id(x_missing,Bucket),
+    assertion(\+memberchk(Bucket,Header.types.bucketKeys)),
+    setup_call_cleanup(
+      wrap_predicate(kb_catalog_directory:read_record(_,_),no_empty_type_payload,_,
+        throw(unexpected_type_payload_read)),
+      (type_page(Header,x_missing,0,25,Reply),
+       assertion(Reply.items==[]),assertion(Reply.total==0)),
+      unwrap_predicate(kb_catalog_directory:read_record(_,_),no_empty_type_payload)).
+test(missing_projection_directory_is_not_an_empty_type_answer,
+     [setup(fixture(S)),cleanup(cleanup(S)),
+      throws(error(catalog_type_directory_missing(_),_))]) :-
+    kb_catalog_directory:manifest(Header),
+    delete_directory_and_contents(Header.types.directory),
+    type_page(Header,x_missing,0,25,_).
+test(legacy_existing_bucket_stays_readable,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    kb_catalog_directory:manifest(Header),
+    del_dict(bucketKeys,Header.types,_,Legacy),
+    type_page(Header.put(types,Legacy),x_p,0,25,Reply),
+    assertion(Reply.total==2).
+test(legacy_absent_bucket_is_explicitly_unverified,
+     [setup(fixture(S)),cleanup(cleanup(S)),
+      throws(error(catalog_type_bucket_inventory_missing(_),_))]) :-
+    kb_catalog_directory:manifest(Header),
+    del_dict(bucketKeys,Header.types,_,Legacy),
+    type_page(Header.put(types,Legacy),x_missing,0,25,_).
+test(legacy_inventory_upgrade_preserves_other_projection_identities,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    kb_catalog_directory:paths(_,Manifest),kb_catalog_directory:manifest(Header),
+    del_dict(bucketKeys,Header.types,_,LegacyTypes),
+    kb_catalog_directory:write_record(Manifest,catalog_directory(Header.put(types,LegacyTypes))),
+    setup_call_cleanup(
+      wrap_predicate(kb_catalog_query:model(_),no_inventory_upgrade_model,_,
+        throw(monolithic_inventory_upgrade)),
+      build_type_directory(_),
+      unwrap_predicate(kb_catalog_query:model(_),no_inventory_upgrade_model)),
+    kb_catalog_directory:manifest(After),
+    assertion(After.revision==Header.revision),assertion(After.directory==Header.directory),
+    assertion(After.inputHash==Header.inputHash),assertion(After.search==Header.search),
+    kb_catalog_directory:bucket_id(x_p,Bucket),
+    assertion(After.types.bucketKeys==[Bucket]),
+    type_page(After,x_missing,0,25,Reply),assertion(Reply.total==0).
+test(invalid_bucket_inventory_is_not_an_empty_type_answer,
+     [setup(fixture(S)),cleanup(cleanup(S)),
+      throws(error(domain_error(catalog_type_bucket_inventory,_),_))]) :-
+    kb_catalog_directory:manifest(Header),
+    Invalid=Header.types.put(bucketKeys,[not_a_bucket]),
+    type_page(Header.put(types,Invalid),x_missing,0,25,_).
+
 :- end_tests(catalog_types).
