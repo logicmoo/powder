@@ -63,10 +63,12 @@ build_query_locked(File,Providers,Report) :-
     length(Files,Total),nb_setval(powder_projection_total,Total),flag(powder_projection_completed,_,0),
     projection_schema(CatalogFile,Revision,Files,Total,Schema),
     kb_cache:terms_digest([catalog_query_v1,Schema],SchemaHash),
+    definition_schema_hash(Schema,DefinitionHash),
+    previous_posting_directory(SchemaHash,DefinitionHash,Previous),
     file_directory_name(File,Dir),atomic_list_concat([Revision,'-',SchemaHash],Version),
     directory_file_path(Dir,Version,VersionDir),make_directory_path(VersionDir),
     flag(powder_projection_completed,_,0),
-    empty_assoc(Empty),foldl(project_source(Schema,VersionDir,Providers),Files,
+    empty_assoc(Empty),foldl(project_source(Schema,posting_store(VersionDir,Previous),Providers),Files,
       projected(Empty,[]),projected(Terms,FilePairs)),
     maplist(classify_entry(Schema),Catalog.terms,Entries),
     maplist(entry_pair,Entries,EntryPairs),list_to_assoc(EntryPairs,ByTerm),
@@ -79,13 +81,25 @@ build_query_locked(File,Providers,Report) :-
       throw(error(catalog_stale(source_changed_during_projection),_))),
     (Providers==true->ProviderCoverage=complete;ProviderCoverage=pending),
     Projection=query_catalog{schema:catalog_query_v1,revision:Revision,providerCoverage:ProviderCoverage,
-      taxonomy:SchemaHash,coverage:Catalog.coverage,verifiedAt:Catalog.verifiedAt,
+      taxonomy:SchemaHash,definitionSchema:DefinitionHash,coverage:Catalog.coverage,verifiedAt:Catalog.verifiedAt,
       expected:Catalog.expected,terms:ByTerm,postings:Terms,ranked:Order,files:ByFile},
     kb_catalog_index:atomic_data(File,catalog_query(Projection)),
     kb_catalog_directory:build_from_model(File,Projection,_),
     statistics(walltime,[End,_]),Seconds is (End-Start)/1000,
     length(Entries,N),Report=json{terms:N,coverage:Catalog.coverage,revision:Revision,
       providerCoverage:ProviderCoverage,seconds:Seconds}.
+definition_schema_hash(Schema,Hash) :-
+    assoc_to_keys(Schema.targetSlots,Predicates),
+    findall(P-Slots,(member(P,Predicates),definition_slots(P,Schema,Slots)),Shapes),
+    kb_cache:terms_digest([definition_positions_v1,Shapes],Hash).
+previous_posting_directory(Taxonomy,Definition,Previous) :-
+    kb_catalog_directory:paths(Query,Manifest),
+    (exists_file(Manifest),exists_file(Query),
+       catch(kb_catalog_directory:read_record(Manifest,catalog_directory(Header)),_,fail),
+       kb_catalog_index:file_stamp(Query,Stamp),Stamp==Header.inputStamp,
+       (get_dict(definitionSchema,Header,Definition);Header.taxonomy==Taxonomy)->
+       Previous=Header
+    ;Previous=none).
 verify_catalog_manifest(Expected) :-
     directory_manifest('KBs',_,Manifest),pairs_keys(Manifest,Paths),
     maplist(path_key,Paths,CurrentKeys0),sort(CurrentKeys0,CurrentKeys),
@@ -118,20 +132,28 @@ read_source(File,Data) :-
     kb_catalog_index:read_data(File.cache,source_catalog(Data)),
     (Data.identity==File.identity->true;throw(error(catalog_stale(File.path),_))).
 
-project_source(Schema,Directory,Providers,File,projected(Before,Files),projected(After,[Key-Info|Files])) :-
+project_source(Schema,posting_store(Directory,Previous),Providers,File,
+               projected(Before,Files),projected(After,[Key-Info|Files])) :-
     flag(powder_projection_completed,N,N),projection_progress(postings,File.path,N,null),
     read_source(File,Data),
     crypto_data_hash(File.path,Name,[algorithm(sha256),encoding(utf8)]),
-    atom_concat(Name,'.postings',Base),directory_file_path(Directory,Base,Path),
-    (reusable_postings(Path,File,Posts,Digest)->
+    atom_concat(Name,'.postings',Base),directory_file_path(Directory,Base,NewPath),
+    (reusable_posting_path(NewPath,Previous,File,Path,Posts,Digest)->
        foldl(add_projection_post,Posts,Before,After)
-    ;source_views(Data,Sentences,Applications),
+    ;Path=NewPath,source_views(Data,Sentences,Applications),
      write_source_postings(Path,File,Data,Sentences,Applications,Schema,Before,After,Digest)),
     provider_info(Providers,File.path,Data,Schema,ProviderInfo),
     path_key(File.path,Key),BaseInfo=File.put(json{postings:Path,postingsDigest:Digest,
       termSchema:Data.termSchema,dependencySummary:Data.dependencies}),
     Info=BaseInfo.put(ProviderInfo),
     flag(powder_projection_completed,_,N+1).
+reusable_posting_path(Path,_,File,Path,Posts,Digest) :-
+    reusable_postings(Path,File,Posts,Digest),!.
+reusable_posting_path(_,Previous,File,Path,Posts,Digest) :-
+    is_dict(Previous),
+    catch(kb_catalog_directory:lookup_source(Previous,File.path,Old),_,fail),
+    Old.identity==File.identity,Path=Old.postings,
+    reusable_postings(Path,File,Posts,Digest).
 provider_info(false,_,_,_,json{providerCoverage:pending}).
 provider_info(true,Source,Data,Schema,json{providerCoverage:complete,providerExtensions:Extensions}) :-
     source_provider_extensions(Source,Data,Schema,Extensions).

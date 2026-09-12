@@ -173,6 +173,7 @@ test(changed_defining_file_invalidates_cached_types_then_retracts_cross_file_cat
     compiled('types.krf',"(isa entity Kind)\n(genls Kind Predicate)\n(genls Kind Function)\n",_),
     build,catalog_query_search(json{q:x_entity},Before),Before.items=[Typed],
     assertion(Typed.groups==[functions,predicates]),
+    posting_path('KBs/mentions.krf',PreviousPosting),time_file(PreviousPosting,PostingTime),
     kb_catalog_index:source_path(A,ACache),kb_cache:file_digest(ACache,AHash),
     compiled('types.krf',"(isa entity OtherKind)\n",_),
     refresh_catalog(['KBs/types.krf'],Refresh),assertion(Refresh.complete==true),
@@ -185,6 +186,8 @@ test(changed_defining_file_invalidates_cached_types_then_retracts_cross_file_cat
     catalog_query_search(json{q:x_entity},After),After.items=[Changed],
     assertion(Changed.groups==[typed_other]),assertion(Changed.types==[x_OtherKind]),
     assertion(Changed.files==2),kb_cache:file_digest(ACache,AHash),
+    posting_path('KBs/mentions.krf',CurrentPosting),assertion(CurrentPosting==PreviousPosting),
+    time_file(CurrentPosting,PostingTime),
     catalog_query_term(json{term:x_entity},Definitions),
     Definitions.items=[Definition],assertion(Definition.source=='KBs/types.krf'),
     current_taxonomy(Schema),
@@ -201,6 +204,17 @@ test(shared_maintenance_workflow_publishes_selected_file_changes_and_retained_me
     catalog_query_term(json{term:x_after,facet:semantic},New),assertion(New.total==1),
     catalog_query_term(json{term:x_retained,facet:semantic},Kept),assertion(Kept.total==1),
     kb_catalog_directory:directory_status(Directory),assertion(Directory.state==ready).
+test(changed_global_definition_slots_do_not_reuse_incompatible_source_postings,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('mentions.krf',"(aboutRelation other entity)\n",_),
+    compiled('schema.krf',"(isa aboutRelation MetaRelation)\n(arg2Isa aboutRelation Relation)\n",_),
+    build,posting_path('KBs/mentions.krf',BeforePosting),
+    catalog_query_term(json{term:x_entity},Before),assertion(Before.total==1),
+    compiled('schema.krf',"(isa aboutRelation MetaRelation)\n(arg1Isa aboutRelation Relation)\n",_),
+    maintain_query_catalog(['KBs/schema.krf'],false,_),
+    posting_path('KBs/mentions.krf',AfterPosting),assertion(AfterPosting\==BeforePosting),
+    catalog_query_term(json{term:x_entity},After),assertion(After.total==0),
+    catalog_query_term(json{term:x_other},Other),assertion(Other.total==1).
 test(stale_type_source_cannot_leave_other_file_classifications_fresh,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('mentions.krf',"(mentions entity)\n",_),
@@ -245,6 +259,9 @@ current_taxonomy(Schema) :-
     kb_catalog_index:catalog_paths(Catalog,_),file_directory_name(Catalog,Directory),
     atom_concat(Revision,'.taxonomy',Name),directory_file_path(Directory,Name,Path),
     kb_catalog_index:read_data(Path,catalog_taxonomy(Revision,Schema)).
+posting_path(Source,Path) :-
+    kb_catalog_query:model(Model),kb_catalog_query:path_key(Source,Key),
+    get_assoc(Key,Model.files,File),Path=File.postings.
 unload_fixture_if_loaded(Source) :-
     (kb_store:source_info(Source,_)->kb_store:generation(G),kb_store:unload_source(Source,G,_);true).
 test(large_catalog_read_capacity_is_thread_local) :-

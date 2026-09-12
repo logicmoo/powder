@@ -170,6 +170,13 @@ the catalog; removed directories cannot be reintroduced as global providers
 from retained artifacts. The CLI reports measured projection time, and progress
 retains its known source denominator through the postings phase.
 
+Cross-revision maintenance also reuses a previous file's immutable posting when
+its source identity and effective definition-position schema are unchanged.
+Type/category proof changes alone do not duplicate unaffected source postings.
+Changing a schema target slot invalidates those postings even when their original
+file bytes are unchanged. Legacy directories can reuse postings when the complete
+taxonomy hash matches; no existing artifact migration is required.
+
 Exact term and assertion requests use `query.directory`: a small manifest,
 256 immutable key buckets and compact source descriptors. These reference the
 same term entries and per-source postings, not a second semantic index. A request
