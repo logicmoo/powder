@@ -5,6 +5,7 @@
            host_snapshot_safe/0]).
 :- use_module(kb_saved_state, []).
 :- use_module(kb_checkpoint_policy, []).
+:- use_module(kb_checkpoint_mode, []).
 :- use_module(kb_checkpoint, []).
 :- use_module(kb_checkpoint_http, []).
 :- use_module(kb_console_launch, []).
@@ -35,6 +36,7 @@
 % This is the serving adapter, not an additional initialization(main) entry.
 % Importing it registers handlers/hooks only and never starts resources.
 run_application(Args) :-
+    kb_checkpoint_mode:require_serving,
     startup_plan(Args,Plan),
     (Plan=saved(Id,Forward)->
       launch_selected(Id,Forward)
@@ -89,6 +91,7 @@ kb_saved_state:resume_application(Args,Metadata) :-
     kb_checkpoint_host:resume_host(Args,Metadata).
 resume_host(Args,Metadata) :-
     kb_checkpoint_policy:require_checkpoint_execution(resume),
+    kb_checkpoint_mode:require_serving,
     resume_configuration(Args,Metadata,Port,Debug),
     Settings=Metadata.configuration.settings,
     setup_call_cleanup(start_host(Port,Settings,Debug,main),
@@ -126,6 +129,7 @@ start_host(Port,Settings,Debug,StopQueue) :-
     kb_checkpoint_policy:require_checkpoint_execution(checkpoint_host),
     start_host_owned(Port,Settings,Debug,StopQueue).
 start_host_owned(Port,Settings,DebugInput,StopQueue) :-
+    kb_checkpoint_mode:require_serving,
     (is_list(DebugInput)->debug_dict(DebugInput,Debug);Debug=DebugInput),
     with_mutex(powder_checkpoint_host,
       (host(_)->throw(error(checkpoint_host_already_started,_));
@@ -144,6 +148,7 @@ start_checkpoint_control(Port) :-
     kb_checkpoint_policy:checkpoint_policy(Policy),
     (Policy.executionPaused==true->true;kb_checkpoint:start_managed_instance(Port,_)).
 wait_host(Queue) :-
+    kb_checkpoint_mode:require_serving,
     kb_store:status(Status),host(H),app_base(Base),
     format('powder - Paraconsistent Open World Defeasible Epistemic Reasoner~nReady: http://localhost:~d~w~n',
       [H.primary,Base]),
@@ -164,7 +169,7 @@ stop_stage(Stage,Goal) :-
 
 host_configuration(Config) :-
     host(H),
-    (H.mode==candidate->Config=H.configuration
+    (memberchk(H.mode,[candidate,promoting])->Config=H.configuration
     ;kb_debug_telnet:debug_resume_profile(D),
      Config=H.configuration.put(debug,D)).
 host_snapshot_safe :-
@@ -174,6 +179,7 @@ require_mutable_instance :-
       permission_error(modify,checkpoint_trial,read_only_until_promoted);true).
 
 open_listener(Port,Profile) :-
+    kb_checkpoint_mode:require_serving,
     with_mutex(openworld_listener_control,
       (nonvar(Port),kb_server:server_port(Port)->
         throw(error(permission_error(bind,owned_http_port,Port),_))
@@ -195,6 +201,7 @@ listener_profiles(Profiles) :-
          http_workers(Port,Workers),Profile=profile{start:Workers,max:Workers,spare:0}),
        get_dict(start,Profile,Start)),Profiles).
 start_debug(Debug) :-
+    kb_checkpoint_mode:require_serving,
     kb_debug_admin:start_host_debug(Debug).
 free_loopback_port(Port) :-
     setup_call_cleanup(tcp_socket(Socket),tcp_bind(Socket,ip(127,0,0,1):Port),tcp_close_socket(Socket)).
@@ -207,18 +214,20 @@ kb_checkpoint:process_hook(Action,PID,Options,Result) :-
     kb_console_launch:process_control(Action,PID,Options,Result).
 kb_checkpoint:runtime_hook(configuration,_,Config) :- host_configuration(Config).
 kb_checkpoint:runtime_hook(capabilities,_,[drain,resume_admissions,release_ports,
-    bind_ports,recovery_listener,retire_old,activate]) :- host(_).
+    bind_ports,retire_old,activate]) :- host(_).
 kb_checkpoint:runtime_hook(profiles,_,Profiles) :- host(_),listener_profiles(Profiles).
-kb_checkpoint:runtime_hook(start_candidate,Input,Port) :-
+kb_checkpoint:runtime_hook(start_candidate,Input,nonserving) :-
     kb_checkpoint_policy:require_checkpoint_execution(candidate_listener),
     is_dict(Input.metadata.checkpoint),get_dict(runtime,Input.metadata.checkpoint,_),
     saved_configuration(Input.metadata,Config),Settings=Input.metadata.configuration.settings,
-    setup_call_catcher_cleanup(true,
-      (kb_jobs:start_pools(Settings),open_listener(Port,Settings.pools.http),
-       assertz(host(host{configuration:Config,settings:Settings,stopQueue:Input.stopQueue,
-         primary:Port,mode:candidate}))),
-      Catcher,(Catcher==exit->true;stop_host)).
-kb_checkpoint:runtime_hook(wait_candidate,Queue,done) :- wait_host(Queue).
+    kb_checkpoint_mode:enter_candidate,
+    with_mutex(powder_checkpoint_host,
+      (host(_)->throw(error(checkpoint_host_already_started,_));
+      assertz(host(host{configuration:Config,settings:Settings,stopQueue:Input.stopQueue,
+        primary:Config.primary,mode:candidate})))).
+kb_checkpoint:runtime_hook(wait_candidate,Queue,done) :-
+    thread_get_message(Queue,Message),
+    (Message==activate->wait_host(Queue);Message==stop).
 kb_checkpoint:runtime_hook(stop_candidate,_,done) :- host(_),stop_host.
 kb_checkpoint:runtime_hook(drain,_,Lease) :-
     host(_),
@@ -234,6 +243,11 @@ kb_checkpoint:runtime_hook(release_ports,Profiles,done) :-
     (member(Primary,Profiles),Primary.port=:=H.configuration.primary->stop_transfer_debug(40);true),
     forall(member(P,Profiles),close_listener(P.port)).
 kb_checkpoint:runtime_hook(bind_ports,Profiles,done) :-
+    kb_checkpoint_mode:require_serving,
+    host(H0),
+    (H0.mode==candidate->
+      retract(host(H0)),assertz(host(H0.put(mode,promoting))),
+      kb_jobs:start_pools(H0.settings);true),
     forall(member(P,Profiles),
       (kb_server:server_port(P.port)->true;
         (get_dict(http,P,Profile)->true;Profile=profile{start:P.workers,max:P.workers,spare:0}),
@@ -246,9 +260,27 @@ stop_transfer_debug(Attempts) :-
       error(debug_threads_still_running(N),Context),
       (Attempts>0->sleep(0.05),Remaining is Attempts-1,stop_transfer_debug(Remaining);
         throw(error(debug_threads_still_running(N),Context)))).
-kb_checkpoint:runtime_hook(recovery_listener,_,Port) :-
-    host(H),open_listener(Port,H.settings.pools.http).
 kb_checkpoint:runtime_hook(activate,_,done) :-
-    retract(host(H)),assertz(host(H.put(_{mode:active,primary:H.configuration.primary}))).
+    host(H),
+    (H.mode==active->true;
+      retract(host(H)),assertz(host(H.put(_{mode:active,primary:H.configuration.primary}))),
+      thread_send_message(H.stopQueue,activate)).
+kb_checkpoint:runtime_hook(nonserving,_,done) :-
+    close_all_listeners,stop_transfer_debug(40),kb_jobs:stop_pools,
+    retract(host(H)),assertz(host(H.put(mode,candidate))).
+kb_checkpoint:runtime_hook(query,Payload,Result) :-
+    host(H),H.mode==candidate,
+    must_be(dict,Payload),must_be(integer,Payload.limit),
+    between(1,100,Payload.limit),must_be(number,Payload.timeout),
+    Payload.timeout>0,Payload.timeout=<10,
+    (atom(Payload.query)->atom_string(Payload.query,Text);Text=Payload.query),
+    must_be(string,Text),string_length(Text,Length),Length=<8192,
+    kb_store:query_text(Text,Payload.mt,Payload.limit,Payload.timeout,Result).
+kb_checkpoint:runtime_hook(health,_,Health) :-
+    host_configuration(Runtime),kb_jobs:task_overview(Jobs),
+    kb_debug_telnet:debug_resume_profile(Debug),
+    (stream_property(user_input,tty(true))->TTY=true;TTY=false),
+    findall(T,kb_lifecycle:console_owner(T),Console),
+    Health=health{runtime:Runtime,jobs:Jobs,debug:Debug,tty:TTY,console:Console}.
 kb_checkpoint:runtime_hook(retire_old,_,done) :-
     host(H),thread_send_message(H.stopQueue,stop).

@@ -8,13 +8,13 @@
 :- use_module(kb_paths).
 :- use_module(kb_store, []).
 :- use_module(kb_checkpoint_policy, []).
+:- use_module(kb_checkpoint_mode, []).
+:- use_module(kb_checkpoint_ipc, []).
 :- use_module(kb_urls, [app_base/1]).
 :- use_module(library(crypto)).
 :- use_module(library(error)).
 :- use_module(library(filesex)).
-:- use_module(library(http/thread_httpd)).
 :- use_module(library(http/http_json)).
-:- use_module(library(http/http_client)).
 :- use_module(library(http/http_open)).
 :- use_module(library(http/http_parameters)).
 :- use_module(library(http/json)).
@@ -47,6 +47,7 @@ default_process(wait,PID,Seconds,Result) :- process_wait(PID,Result,[timeout(Sec
 default_process(terminate,PID,_,done) :- process_kill(PID,term).
 default_process(release,_,_,done).
 snapshot_safe :-
+    kb_checkpoint_ipc:snapshot_safe,
     ((instance(_);run(_,_,_);candidate_context(_);candidate_starting;transition_thread(_,_))->
       throw(error(checkpoint_runtime_is_not_savable,_));true).
 kb_saved_state:checkpoint_stamp(Stamp) :-
@@ -58,22 +59,32 @@ kb_saved_state:checkpoint_stamp(Stamp) :-
 
 start_managed_instance(Primary,Credentials) :-
     kb_checkpoint_policy:require_checkpoint_execution(control_listener),
+    kb_checkpoint_mode:require_serving,
     must_be(integer,Primary),between(1,65535,Primary),
     with_mutex(powder_checkpoint_instance,
       (instance(_)->throw(error(checkpoint_instance_already_started,_));
        uuid(Id),secret(Token),
-       setup_call_cleanup(true,
-         % Admission leases belong to a thread across prepare/bind/commit requests.
-         (http_server(kb_checkpoint:control_http,
-            [port('127.0.0.1':Control),workers(1),timeout(10)]),
-          assertz(instance(instance{id:Id,primary:Primary,control:Control,role:active})),
-          assertz(control_secret(Token))),
-         true),
-       Credentials=credentials{instance:Id,port:Control,token:Token})).
+      run_directory(Id,Directory),file_directory_name(Directory,Parent),
+      make_directory_path(Parent),kb_checkpoint_ipc:private_directory(Directory),
+      start_instance_control(Id,Primary,active,Token,Directory,Credentials))).
+start_instance_control(Id,Primary,Role,Token,Directory,Credentials) :-
+    directory_file_path(Directory,ipc,Mailbox),
+    kb_checkpoint_ipc:private_directory(Mailbox),
+    assertz(instance(instance{id:Id,primary:Primary,control:Mailbox,role:Role})),
+    assertz(control_secret(Token)),
+    kb_checkpoint_ipc:start_server(Mailbox,kb_checkpoint:control_command,Thread),
+    assertz(control_worker(Thread)),
+    Credentials=credentials{instance:Id,mailbox:Mailbox,token:Token}.
+:- dynamic control_worker/1.
+:- volatile control_worker/1.
+control_command(Command,Reply) :-
+    with_mutex(powder_checkpoint_control,authenticated_command(Command,Reply)).
 stop_managed_instance :-
     with_mutex(powder_checkpoint_instance,
-      (retract(instance(I))->
-        http_stop_server('127.0.0.1':I.control,[]),
+      (instance(I)->
+        (retract(control_worker(Thread))->kb_checkpoint_ipc:stop_server(Thread);true),
+        retractall(instance(_)),
+        (exists_directory(I.control)->delete_directory_and_contents(I.control);true),
         retractall(control_secret(_)),retractall(control_replay(_,_,_,_))
       ;true)).
 checkpoint_instance(Info) :-
@@ -83,7 +94,8 @@ checkpoint_instance(Info) :-
     Info=instance{id:I.id,role:I.role,primary:I.primary,profiles:Profiles,
       checkpoint:Checkpoint,run:Run,generation:Status.generation,counts:Status.counts}.
 checkpoint_read_only :-
-    (candidate_starting;candidate_lease(_);instance(I),memberchk(I.role,[candidate,retired])), !.
+    (kb_checkpoint_mode:nonserving;candidate_starting;candidate_lease(_);
+     instance(I),memberchk(I.role,[candidate,promoting,retired])), !.
 checkpoint_runs(Runs) :-
     with_mutex(powder_checkpoint_data,
       (findall(Id-Data,run(Id,Data,_),Owned),
@@ -112,16 +124,6 @@ json_hash(Term,Hash) :-
     crypto_data_hash(Text,Hash,[algorithm(sha256),encoding(utf8)]).
 same_json(A,B) :- json_hash(A,HA),json_hash(B,HB),HA==HB.
 
-control_http(Request) :-
-    catch((authorized_transport(Request),http_read_json_dict(Request,Command,[value_string_as(atom)]),
-           with_mutex(powder_checkpoint_control,authenticated_command(Command,Reply)),
-           reply_json_dict(Reply)),
-      Error,(message_to_string(Error,Message),
-        reply_json_dict(_{ok:false,error:Message},[status(403)]))).
-authorized_transport(Request) :-
-    memberchk(peer(ip(127,0,0,1)),Request),memberchk(method(post),Request),
-    memberchk(path('/control'),Request),\+memberchk(origin(_),Request), !.
-authorized_transport(_) :- throw(error(permission_error(access,checkpoint_control,transport),_)).
 authenticated_command(Command,Reply) :-
     must_be(dict,Command),instance(I),
     (text_atom(Command.instance,I.id)->true;
@@ -133,7 +135,8 @@ authenticated_command(Command,Reply) :-
       throw(error(permission_error(reuse,checkpoint_request,RequestId),_))
     ;control_secret(Expected),Token==Expected->
       secret(Next),retractall(control_secret(_)),assertz(control_secret(Next)),
-      catch((control_action(Command.action,Command.payload,Result)->Outcome=ok(Result);
+      catch((permitted_control_action(I.role,Command.action),
+             control_action(Command.action,Command.payload,Result)->Outcome=ok(Result);
              throw(error(checkpoint_control_failed,_))),Error,
         (message_to_string(Error,Message),Outcome=error(Message))),
       (Outcome=ok(Value)->Reply=reply{ok:true,result:Value,token:Next,instance:I.id,request:RequestId};
@@ -141,6 +144,14 @@ authenticated_command(Command,Reply) :-
       assertz(control_replay(RequestId,Token,Fingerprint,Reply)),
       prune_replays
     ;throw(error(permission_error(access,checkpoint_control,identity_or_capability),_))).
+permitted_control_action(Role,Action) :-
+    (Role==candidate->Allowed=[proof,query,prepare,bind,unbind,stop]
+    ;Role==promoting->Allowed=[proof,commit,unbind,stop]
+    ;Role==active->Allowed=[proof,commit,activate,unbind,stop,trial,promote,status,cancel,save,candidate]
+    ;Role==retired->Allowed=[status]
+    ;domain_error(checkpoint_role,Role)),
+    (memberchk(Action,Allowed)->true;
+     throw(error(permission_error(execute,checkpoint_control,Action),_))).
 prune_replays :-
     findall(Id,control_replay(Id,_,_,_),Ids),length(Ids,N),
     (N>128->Ids=[Old|_],retractall(control_replay(Old,_,_,_));true).
@@ -149,14 +160,10 @@ control_call(Credentials,Action,Payload,Updated,Reply) :-
     uuid(RequestId),
     Command=command{instance:Credentials.instance,token:Credentials.token,
       request:RequestId,action:Action,payload:Payload},
-    local_url(Credentials.port,'/control',URL),
-    retry_control(2,URL,Command,Response),
+    kb_checkpoint_ipc:request(Credentials.mailbox,Command,Response),
     text_atom(Response.instance,Credentials.instance),
     text_atom(Response.request,RequestId),text_atom(Response.token,Next),
     Updated=Credentials.put(token,Next),Reply=Response.
-retry_control(N,URL,Command,Response) :-
-    catch(http_post(URL,json(Command),Response,[json_object(dict),timeout(6)]),Error,
-      (N>0->Left is N-1,retry_control(Left,URL,Command,Response);throw(Error))).
 peer_action(Run,Action,Payload,Result) :-
     atom_concat(checkpoint_peer_,Run,Mutex),
     with_mutex(Mutex,
@@ -178,28 +185,31 @@ control_action(prepare,_,_{prepared:true}) :- !,
        Catcher,(Catcher==exit->true;host(resume_admissions,Lease,_)))).
 control_action(bind,Payload,_{bound:Profiles}) :- !,
     candidate_context(C),same_json(Payload.profiles,C.targets),
+    (Payload.confirm=='take-over-original-ports'->true;
+      throw(error(permission_error(promote,checkpoint_candidate,explicit_approval_required),_))),
     candidate_lease(_),owned_profiles(Before),
+    retract(instance(I)),assertz(instance(I.put(role,promoting))),
+    kb_checkpoint_mode:permit_serving,
     catch(host(bind_ports,C.targets,_),Error,
       (owned_profiles(After),new_profiles(Before,After,Added),
-       catch(host(release_ports,Added,_),_,true),throw(Error))),
+       catch(host(release_ports,Added,_),_,true),return_to_nonserving,throw(Error))),
     owned_profiles(Profiles).
 control_action(unbind,_,_{unbound:true}) :- !,
     candidate_context(C),owned_profiles(Current),matching_profiles(Current,C.targets,Targets),
-    host(release_ports,Targets,_),release_candidate_lease.
+    host(release_ports,Targets,_),release_candidate_lease,return_to_nonserving.
 control_action(commit,_,_{committed:true}) :- !,
     candidate_context(C),
     owned_profiles(Current),forall(member(P,C.targets),known_profile(Current,P)),
-    instance(I0),verify_instance_ports(C.targets,C.metadata,I0.id),
-    include(port_is(C.temporary),Current,Temporary),
-    host(release_ports,Temporary,_),
     retract(instance(I)),assertz(instance(I.put(_{role:active,primary:C.original}))),
     adopt_success(C).
 control_action(activate,_,_{active:true}) :- !,
     candidate_context(C),instance(I),I.role==active,
-    owned_profiles(Current),\+ (member(P,Current),P.port=:=C.temporary),
+    owned_profiles(Current),same_json(Current,C.targets),
     host(capabilities,none,Capabilities),
     (memberchk(activate,Capabilities)->host(activate,none,_);true),
     release_candidate_lease.
+control_action(query,Payload,Result) :- !,
+    candidate_context(_),host(query,Payload,Result).
 control_action(stop,_,_{stopping:true}) :- !,
     candidate_context(C),
     release_candidate_lease,
@@ -208,10 +218,16 @@ control_action(trial,Payload,Reply) :- !,try_checkpoint(Payload.id,Payload.gener
 control_action(promote,Payload,Reply) :- !,promote_checkpoint(Payload.run,Payload.revision,Reply).
 control_action(status,Payload,Reply) :- !,checkpoint_status(Payload.run,Reply).
 control_action(cancel,Payload,Reply) :- !,cancel_checkpoint(Payload.run,Reply).
+control_action(candidate,Payload,Reply) :- !,
+    instance(I),I.role==active,memberchk(Payload.action,[proof,query]),
+    peer_action(Payload.run,Payload.action,Payload.payload,Reply).
 control_action(save,Payload,Reply) :- !,
     kb_saved_state:saved_states(Catalog),
     kb_saved_state:create_saved_state(Payload.name,Payload.generation,Catalog.revision,Reply).
 control_action(Action,_,_) :- throw(error(domain_error(checkpoint_action,Action),_)).
+return_to_nonserving :-
+    host(nonserving,none,_),kb_checkpoint_mode:enter_candidate,
+    retract(instance(I)),assertz(instance(I.put(role,candidate))).
 port_is(Port,Profile) :- Profile.port=:=Port.
 new_profiles(Before,After,New) :- exclude(known_profile(Before),After,New).
 known_profile(Profiles,P) :- member(Q,Profiles),same_json(P,Q),!.
@@ -224,9 +240,13 @@ checkpoint_proof(Nonce,Proof) :-
     instance(I),candidate_context(C),current_prolog_flag(pid,PID),
     kb_saved_state:current_snapshot_identity(Identity),
     kb_saved_state:runtime_probe(Probe),owned_profiles(Profiles),
+    host(health,none,Health),kb_saved_state:verify_saved_native(C.metadata,Native),
+    nonserving_value(I.role,Nonserving),
     Proof=proof{nonce:Nonce,instance:I.id,pid:PID,checkpoint:C.checkpoint,
       run:C.run,owner:C.owner,identity:Identity,runtimeProbe:Probe,profiles:Profiles,
-      coldSourceLoad:false}.
+      role:I.role,nonserving:Nonserving,health:Health,nativeTVA:Native,coldSourceLoad:false}.
+nonserving_value(candidate,true) :- !.
+nonserving_value(_,false).
 
 try_checkpoint(Id0,Expected,Reply) :-
     kb_checkpoint_policy:require_checkpoint_execution(start_candidate),
@@ -243,7 +263,8 @@ try_checkpoint(Id0,Expected,Reply) :-
       ;new_trial(Owner,Metadata,Image,Reply))).
 new_trial(Owner,Metadata,Image,Reply) :-
     uuid(Id),uuid(CandidateId),secret(Token),
-    run_directory(Id,Directory),make_directory_path(Directory),
+    run_directory(Id,Directory),file_directory_name(Directory,Parent),make_directory_path(Parent),
+    kb_checkpoint_ipc:private_directory(Directory),
     directory_file_path(Directory,'request.json',RequestFile),
     directory_file_path(Directory,'ready.json',ReadyFile),
     owned_profiles(Profiles),
@@ -253,7 +274,8 @@ new_trial(Owner,Metadata,Image,Reply) :-
     kb_saved_state:write_json(RequestFile,Request),
     Initial=trial{id:Id,checkpoint:Metadata.id,owner:Owner.id,candidate:CandidateId,
       phase:starting,revision:1,primary:Owner.primary,targets:Profiles,
-      temporary:null,message:"Starting isolated checkpoint candidate."},
+      temporary:null,transport:private_file_ipc,
+      message:"Restoring nonserving candidate; no HTTP, debug or agent services."},
     assertz(run(Id,Initial,owned{directory:Directory,pid:none,metadata:Metadata})),
     catch(((current_prolog_flag(executable,SWI),
       (once(launch_hook(SWI,['-q','-f',none,'-x',Image,'--','--checkpoint-candidate',RequestFile],Directory,PID))->
@@ -261,11 +283,12 @@ new_trial(Owner,Metadata,Image,Reply) :-
       set_run_pid(Id,PID),
       wait_ready(ReadyFile,PID,30,Ready),
       text_atom(Ready.instance,CandidateId),Ready.pid=:=PID,
-      Credentials=credentials{instance:CandidateId,port:Ready.control,token:Token},
+      directory_file_path(Directory,ipc,Mailbox),text_atom(Ready.mailbox,Mailbox),
+      Credentials=credentials{instance:CandidateId,mailbox:Mailbox,token:Token},
       assertz(peer(Id,Credentials)),
-      update_run(Id,_{temporary:Ready.temporary},_),
       verify_candidate(Id,Metadata,Profiles),
-      update_run(Id,_{phase:trial_ready,message:"Candidate verified; original instance remains untouched."},Reply))->true;
+      update_run(Id,_{phase:trial_ready,pid:PID,
+        message:"Nonserving candidate verified over private IPC; original instance remains untouched."},Reply))->true;
       throw(error(checkpoint_candidate_start_failed(Id),_))),
       Error,(fail_trial(Id,Error,Reply))).
 set_run_pid(Id,PID) :-
@@ -326,7 +349,7 @@ verify_candidate(Id,Metadata,_) :-
     matching_json(configuration,Proof.identity.configuration,Metadata.configuration),
     matching_json(counts,Proof.identity.counts,Metadata.counts),
     matching_json(files,Proof.identity.files,Metadata.files),Proof.coldSourceLoad==false,
-    verify_instance_ports([listener{port:Data.temporary,workers:1}],Metadata,Data.candidate), !.
+    Proof.profiles==[],Proof.nonserving==true,Proof.role==candidate, !.
 verify_candidate(Id,_,_) :- throw(error(checkpoint_candidate_identity_or_health_failed(Id),_)).
 matching_json(Label,A,B) :-
     (same_json(A,B)->true;throw(error(checkpoint_mismatched(Label,A,B),_))).
@@ -387,7 +410,7 @@ promote_checkpoint(Id0,ExpectedRevision,Reply) :-
        ;memberchk(Data.phase,[trial_ready,recovery_serving]),
         (Data.revision=:=ExpectedRevision->true;throw(error(checkpoint_revision_conflict,_))),
         host(capabilities,none,Capabilities),
-        forall(member(C,[drain,resume_admissions,release_ports,bind_ports,recovery_listener,retire_old]),
+        forall(member(C,[drain,resume_admissions,release_ports,bind_ports,retire_old]),
           (memberchk(C,Capabilities)->true;throw(error(checkpoint_capability_required(C),_)))),
         update_run(Id,_{phase:promoting,previousPhase:Data.phase,released:false,
           message:"Draining before original-port takeover."},Reply),
@@ -421,19 +444,16 @@ perform_promotion(Id) :-
        owned_profiles(Release),matching_profiles(Release,Data.targets,OwnedRelease),
        update_run(Id,_{released:true},_),
        host(release_ports,OwnedRelease,_),
-       peer_action(Id,bind,_{profiles:Data.targets},_),
+       peer_action(Id,bind,_{profiles:Data.targets,confirm:'take-over-original-ports'},_),
        verify_instance_ports(Data.targets,Owned.metadata,Data.candidate),
        finish_candidate(Id,Data,Owned))).
 finish_candidate(Id,Data,Owned) :-
     peer_action(Id,commit,_{},_),
     primary_candidate_verified(Id),verify_instance_ports(Data.targets,Owned.metadata,Data.candidate),
-    peer_action(Id,proof,_{nonce:retirement},Proof),
-    (\+ (member(P,Proof.profiles),P.port=:=Data.temporary)->true;
-      throw(error(checkpoint_temporary_listener_not_retired,_))),
     peer_action(Id,activate,_{},_),
     release_process_ownership(Id,false),
     update_run(Id,_{phase:promoted,recovery:null,
-      message:"Replacement verified on the original ports; temporary listener retired."},_),
+      message:"Explicitly promoted replacement verified on the original ports."},_),
     instance(I),retract(instance(I)),assertz(instance(I.put(role,retired))),
     release_old_lease(Id),
     host(retire_old,Id,_).
@@ -449,14 +469,8 @@ recover_promotion(Id,Error) :-
          (host(bind_ports,Data.targets,_),verify_instance_ports(Data.targets,Owned.metadata,Data.owner))),_,fail)->
         cleanup_candidate(Id),
         update_run(Id,_{phase:rolled_back,message:Message},_)
-      ;(catch(verify_public_port(Data.temporary,Owned.metadata.put(expectedInstance,Data.candidate)),_,fail)->
-          update_run(Id,_{phase:recovery_serving,message:Message,
-            recovery:"Checkpoint remains available on the temporary port; old control remains alive. Release the occupied original port and retry takeover."},_)
-        ;host(recovery_listener,none,RecoveryPort),
-         verify_public_port(RecoveryPort,Owned.metadata.put(expectedInstance,Data.owner)),
-         update_run(Id,_{phase:recovery_serving,message:Message,temporary:RecoveryPort,
-           recoveryHost:old,
-           recovery:"Old instance is serving on a fresh recovery port; original port requires repair."},_)))
+      ;update_run(Id,_{phase:recovery_required,message:Message,
+          recovery:"Original-port rebind failed. Both private control channels remain available; no recovery HTTP port was opened."},_))
     ;Data.previousPhase==recovery_serving->
       update_run(Id,_{phase:recovery_serving,message:Message},_)
     ;catch(peer_action(Id,unbind,_{},_),_,true),
@@ -469,7 +483,7 @@ primary_candidate_verified(Id) :-
 adopt_success(C) :-
     retractall(adopted(C.run,_)),
     assertz(adopted(C.run,trial{id:C.run,checkpoint:C.checkpoint,candidate:C.candidate,
-      owner:C.owner,phase:promoted,primary:C.original,temporary:C.temporary,
+      owner:C.owner,phase:promoted,primary:C.original,temporary:null,
       targets:C.targets,revision:1,message:"Checkpoint active on original ports."})).
 
 update_run(Id,Patch,Updated) :-
@@ -532,6 +546,7 @@ release_process_ownership(Id,ClearPID) :-
 
 candidate_entry(RequestFile,Metadata) :-
     kb_checkpoint_policy:require_checkpoint_execution(candidate),
+    kb_checkpoint_mode:enter_candidate,
     kb_saved_state:read_json(RequestFile,Request),
     run_directory(Request.run,Directory),directory_file_path(Directory,'request.json',Expected),
     absolute_file_name(RequestFile,Actual,[access(read)]),Actual==Expected,
@@ -543,12 +558,12 @@ candidate_entry(RequestFile,Metadata) :-
     maplist(valid_profile,Request.targets),
     message_queue_create(Stop),
     setup_call_cleanup(assertz(candidate_starting),
-      (host(start_candidate,_{metadata:Metadata,stopQueue:Stop},Temporary),
-       must_be(integer,Temporary),start_candidate_control(Request,Temporary,Stop,Metadata,Credentials),
+      (host(start_candidate,_{metadata:Metadata,stopQueue:Stop},nonserving),
+       start_candidate_control(Request,Stop,Metadata,Credentials),
        retractall(candidate_starting),
        checkpoint_proof(startup,Proof),
-       Ready=ready{instance:Credentials.instance,control:Credentials.port,
-         pid:Proof.pid,temporary:Temporary},
+       Ready=ready{instance:Credentials.instance,mailbox:Credentials.mailbox,
+         pid:Proof.pid,nonserving:true},
        directory_file_path(Directory,'ready.json',ReadyFile),
        kb_cache:stage_path(ReadyFile,Stage),kb_saved_state:write_json(Stage,Ready),
        rename_file(Stage,ReadyFile),
@@ -556,10 +571,9 @@ candidate_entry(RequestFile,Metadata) :-
       (retractall(candidate_starting),catch(host(stop_candidate,none,_),_,true),
        catch(stop_managed_instance,_,true),
        retractall(candidate_context(_)),message_queue_destroy(Stop))).
-start_candidate_control(Request,Temporary,Stop,Metadata,Credentials) :-
-    start_managed_instance(Temporary,Initial),
-    retract(instance(I)),New=I.put(_{id:Request.candidate,role:candidate}),
-    assertz(instance(New)),retractall(control_secret(_)),assertz(control_secret(Request.secret)),
-    C=Request.put(_{temporary:Temporary,stopQueue:Stop,metadata:Metadata}),
+start_candidate_control(Request,Stop,Metadata,Credentials) :-
+    run_directory(Request.run,Directory),
+    C=Request.put(_{stopQueue:Stop,metadata:Metadata}),
     assertz(candidate_context(C)),
-    Credentials=Initial.put(_{instance:Request.candidate,token:Request.secret}).
+    start_instance_control(Request.candidate,Request.original,candidate,Request.secret,
+      Directory,Credentials).

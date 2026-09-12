@@ -14,7 +14,7 @@ and independent Prolog/Shell console callbacks are retained. Runtime Settings
 
 The parent's existing production execution pause remains fail-closed. Ordinary
 cold startup still starts its requested KB, owned HTTP pools and optional debug
-service, but does not create a checkpoint control listener while paused. Settings
+service, but does not create checkpoint control resources while paused. Settings
 shows the policy reason and disables checkpoint creation/selection/trials.
 Selected images do not override this pause. No production policy was unpaused
 by the integration.
@@ -22,8 +22,8 @@ by the integration.
 `kb_server` installs SWI's supported `http_request_expansion/2` guard at the
 application API mount. It blocks trial mutations even in separately registered
 catalog/annotation handlers, while permitting explicitly read-only POST queries
-and inspectors. The fence covers candidate startup before its listener is
-published, and the interval between commit and final activation. It uses a
+and inspectors. Candidates have no HTTP listener at all; the guard also covers
+the approved port-transfer interval before final activation. It uses a
 memory-only role check, not a potentially failing status/profile expansion.
 
 ## Settings HTTP interface
@@ -78,8 +78,9 @@ user-authorized Settings actions:
   Save is synchronous and cancellable through its caller. Success includes a
   **real separate-process restore validation**, never just qsave's return value.
 * Try: `try_checkpoint(StateId,ExpectedGeneration,Trial)`. Starts an isolated
-  image candidate and returns `trial_ready` only after identity/data/query/
-  provenance/canonical UI/API checks. It leaves old application listeners alone.
+  **nonserving** image candidate and returns `trial_ready` only after private-IPC
+  identity/data/query/provenance checks. It leaves old listeners alone. Browser,
+  CSS/JavaScript and HTTP API checks occur only after approved original-port binding.
 * Take over: `promote_checkpoint(RunId,ExpectedRunRevision,Status)`.
   Returns `promoting` and runs the drain/rebind transaction on an owned management
   thread, not the HTTP worker whose own listener must drain.
@@ -90,7 +91,7 @@ user-authorized Settings actions:
   Cancellation during promotion/recovery is rejected rather than interrupting
   a half-completed port transfer.
 * `checkpoint_instance(Info)` is a public/redacted current-instance summary.
-  `stop_managed_instance/0` stops only the private control listener; normal
+  `stop_managed_instance/0` stops only the private IPC worker; normal
   application cleanup still owns application listeners, pools, and console.
 
 Create does not select the next-start state. Use the saved-state catalog's
@@ -120,16 +121,18 @@ an informative error; there are no always-successful production fallbacks.
 
 | Action | Input | Output / obligation |
 |---|---|---|
-| `capabilities` | `none` | List including `drain`, `resume_admissions`, `release_ports`, `bind_ports`, `recovery_listener`, `retire_old` |
-| `profiles` | `none` | Exact currently owned application listeners: `[listener{port:Port,workers:N},...]`; exclude the private control listener |
-| `start_candidate` | `{metadata:Metadata,stopQueue:Queue}` | Fresh temporary **loopback** port; start fresh runtime/pools, never load source/cache files |
-| `wait_candidate` | `Queue` | Wait on the candidate main thread; own fresh console/quiet scanner here, honoring its stop queue |
+| `capabilities` | `none` | List including `drain`, `resume_admissions`, `release_ports`, `bind_ports`, `retire_old` |
+| `profiles` | `none` | Exact owned application listeners; **empty** for a nonserving candidate |
+| `start_candidate` | `{metadata:Metadata,stopQueue:Queue}` | Atom `nonserving`; install memory-only host configuration, no pools/listeners/debug/agent/console startup |
+| `wait_candidate` | `Queue` | Wait for stop or explicit activation; start the normal console scanner only after activation |
 | `stop_candidate` | `none` | Gracefully clean only this candidate's resources |
 | `drain` | `checkpoint` | Invocation-local lease: reject busy accepted/running work immediately, prevent new admissions and code/store/config changes; never wait for/drop/cancel jobs |
 | `resume_admissions` | `Lease` | Release exactly this drain lease; idempotent release is strongly recommended |
 | `release_ports` | exact owned profile list | Drain/stop only these owned listeners, not another process or an arbitrary PID; do not stop private control |
 | `bind_ports` | exact target profile list | Recreate original primary and all extras, registering each newly owned listener for rollback |
-| `recovery_listener` | `none` | Fresh old-owned recovery port if both original binding and candidate recovery fail |
+| `nonserving` | `none` | Close owned promotion resources and return to nonserving mode after failed binding |
+| `query` | bounded query DTO | Execute through validated KB dispatch, no source/cache reload |
+| `health` | `none` | Redacted runtime, pools, debug and console state, without credentials |
 | `retire_old` | run ID | Schedule graceful old-process/console/pool retirement after replacement verification; do not kill or synchronously await the current control worker |
 
 The existing snapshot hook `kb_jobs:with_saved_state_snapshot(Goal)` must reject
@@ -140,17 +143,26 @@ respect the promotion lease. Never discard existing jobs to make a save succeed.
 The implemented job facade provides `begin_checkpoint_drain/1` and idempotent
 `end_checkpoint_drain/1`; beginning a lease reports busy rather than discarding
 accepted work. Lease-owned snapshots are allowed only from their owner thread.
-Consequently the private control listener intentionally has one worker:
+Consequently the private IPC channel intentionally has one worker:
 candidate prepare, proof, bind, commit, and activate requests must share the
-same thread. Do not attach an autoscaling HTTP pool to this private listener.
+same thread. It is not an HTTP pool and owns no sockets.
 Material verification now checks the complete SourcePack authority/revision DTO
 under that lease, not just the semantic selections. Candidate prepare acquires
 its lease before this verification and releases it on failure.
 
 Candidate startup uses `swipl -q -f none -x IMAGE -- --checkpoint-candidate REQUEST`.
-This enters the controlled `resume_entry/0`, rebuilds native handles/index
+The image already contains a dormant-mode fence. An early `initialization(...,restore)`
+hook reinstalls guards on SWI socket creation/binding/listening/connect/send
+boundaries before application restore hooks. SWI reloads foreign predicates on
+restore, so merely saving `prolog_wrap` wrappers is **not sufficient**.
+The mode module is the builder's first application import. A real qsave test
+checks refused socket and HTTP calls from a later restore initializer.
+The controlled `resume_entry/0` selects candidate mode before rebuilding native handles/index
 registrations from restored clauses, then invokes candidate hooks. It does not
-call `main`, reload the corpus, or inherit an active HTTP worker's stack.
+call `main`, reload the corpus, run agent startup, or inherit an HTTP worker's stack.
+The serving fence is released only for ordinary selected startup after restoration,
+or an authenticated explicit promotion command after old-port release. A candidate
+cannot enter the ordinary resume path.
 
 ## Windows launcher: handle isolation is mandatory
 
@@ -216,20 +228,27 @@ The clean-builder guard also calls the launcher's read-only
 ## Identity, control, and state machine
 
 Run requests/readiness live under the controlled
-`saved-states/runs/UUID/` directory. The secret-bearing launch request is deleted
+`saved-states/runs/UUID/` directory. Run and IPC directories have owner-only native
+Windows ACLs (0700 on Unix); reparse ancestors are refused. The launch request is deleted
 after consumption. Successful states are independent immutable `s-UUID` images.
 
-A separate private loopback listener accepts only JSON `POST /control`, rejects
-browser Origin requests, and requires instance UUID plus a random capability.
+A private file mailbox extends the existing request/readiness IPC. There is no
+temporary, control, health or recovery HTTP listener, including in the old owner.
+Messages are bounded JSON, atomically published under owner-only directories;
+the serialized worker accepts a closed action set and requires an instance UUID
+plus a random capability. This is local same-user IPC, not a network protocol.
 Every accepted command consumes/rotates the capability. The bounded replay cache
 returns the exact previous response for an identical request; the same request
-ID with changed content/capability is rejected. `control_call/5` retries only the
-same request on network errors. Do not expose this private protocol as the
+ID with changed content/capability is rejected. `control_call/5` uses credentials
+`{instance,mailbox,token}`; paths/capabilities never enter browser responses.
+Do not expose this private protocol as the
 Settings API or persist its credentials into a checkpoint.
 
 Trial proves launched PID, candidate/owner/run/checkpoint identity and nonce,
 full snapshot digest, generation, concrete manifest, counts, query/provenance
-probe, canonical HTML, directly linked CSS/JavaScript MIME/status, and API data.
+probe, empty listener profiles, and nonserving runtime state.
+Only after explicitly approved promotion do checks cover canonical HTML,
+directly linked CSS/JavaScript MIME/status, and HTTP API data.
 Every public-port probe also checks the nonce-bearing instance UUID: matching
 KB counts alone cannot distinguish the old process from its replacement.
 
@@ -238,24 +257,24 @@ Promotion order:
 1. Recheck material state/configuration and all required capabilities.
 2. Acquire old and candidate drain leases.
 3. Stop only old owned target listeners; retain old private control/process.
-4. Bind original primary and tracked extras in the candidate.
+4. Explicitly authorize promotion, leave candidate mode, start fresh pools and bind
+   original primary/extras. Debug startup waits until its old listener is released.
 5. Verify canonical UI/assets/API and candidate UUID at every original port.
-6. Candidate commits, retiring its temporary listener but retaining its lease.
-7. Verify original-port identity and temporary-listener removal again.
+6. Replacement commits while retaining its admission lease.
+7. Verify original-port identity again; no temporary listener ever existed.
 8. Activate candidate admissions, mark promotion complete, and request old
    graceful retirement.
 
 Failed binding first attempts a bounded old rebind. If successful, the failed
 candidate is stopped and state becomes `rolled_back`. If the original port is
-occupied, a verified candidate temporary listener and old private control remain
-available as `recovery_serving`; release the conflicting owner and retry Take
-over. If the candidate is gone, the old recovery-listener hook must provide a
-verified serving address. Foreign port occupants are never killed. A failed
+occupied, state becomes `recovery_required`; private control remains available
+and no new recovery HTTP address is created. Release the conflicting owner and
+repair the original binding explicitly. Foreign port occupants are never killed. A failed
 final commit is recovery, not a success-shaped `promoted` result.
 
 This is a controlled local handoff, not a distributed availability guarantee:
 OS resource exhaustion, machine failure, or broken runtime hooks can require
-operator recovery. Keep a clear recovery address and do not retire the old
+operator recovery. Retain private control and do not retire the old
 owned process before successful verification.
 
 ## Isolated integration proof
@@ -266,6 +285,7 @@ python prolog\ow_dr\tests\checkpoint_native_integration.py
 python prolog\ow_dr\tests\saved_state_integration.py
 swipl -q -f none -s prolog\ow_dr\tests\test_checkpoint_wiring.pl -s prolog\ow_dr\tests\test_checkpoint_pause.pl -g "run_tests([checkpoint_wiring,checkpoint_pause]),halt" -t "halt(1)"
 node --test prolog\ow_dr\tests\checkpoints-ui.test.mjs
+swipl -q -f none -s prolog\ow_dr\tests\test_checkpoint_nonserving.pl -g "(run_tests(checkpoint_nonserving)->halt(0);halt(1))"
 ```
 
 Only disposable copied backend code, tiny fixtures, owned children, and ephemeral
@@ -277,7 +297,7 @@ or saved-image opt-out. The separate pause tests retain the real production gate
 
 Native coverage includes two loaded files, actual qsave/new-process restore after
 deleting original/cache/native inputs, busy-save refusal, an actual fresh Windows
-console and main scanner, trial cancellation, injected candidate binding failure
+console, deferred main scanner, trial cancellation, injected candidate binding failure
 with old original-plus-extra rollback, successful takeover and old graceful exit,
 native TVA preservation, another qsave after deleting its sidecar, and selected
 next-start restore with explicit primary-port override and restored extra port.
@@ -308,14 +328,20 @@ SUMO/dialect exclusions, source-free origin classification, imported metadata
 helper exclusion, HTTP origin/consent checks and operation admission.
 The native harness drives the actual full application's Runtime Settings page in
 Chrome to create its first image through the real HTTP API. It verifies desktop/
-mobile navigation, permits a real trial query, rejects trial mutations across
-mounted handlers, and rejects a same-content SourcePack revision change. The
+mobile navigation, runs a real private-IPC trial query, and rejects a same-content
+SourcePack revision change. Windows IPv4/IPv6 TCP and UDP ownership tables are
+sampled throughout startup/trial: the candidate has **zero endpoints before approval**
+while original HTTP remains available. Separate real-socket tests retain mounted
+mutation-fence coverage for the approved promotion interval. The
 standalone Chrome fixture additionally covers escaped names, paused controls,
 operation-specific status and default-off promotion consent.
-The complete native run passed in **216.506 seconds**, including missing-sidecar
+The final nonserving native run passed in **166.055 seconds**, including missing-sidecar
 repeat save and selected restart through `app.pl`. Earlier native shutdown
 failures remain historical observations, not a claimed diagnosis of every
 Windows termination path.
+The frozen-copy backend/API suite passed **37/37**, the private-IPC and real-qsave
+early-fence suite **5/5**, and the Chrome component suite **2/2**. The native
+runner also passed its 24-case copied-host/API/wiring preflight.
 
-The older `checkpoint_integration.py` is a diagnostic surrogate harness; its
-historical results are not evidence of native-console or current full-app wiring.
+The older `checkpoint_integration.py` entry now delegates to the actual native
+workflow. Its superseded temporary-HTTP surrogate host has been retired.

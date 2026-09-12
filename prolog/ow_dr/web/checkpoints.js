@@ -40,7 +40,7 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
   const runs = node('div', undefined, { 'aria-label': 'Checkpoint trials' });
   section.append(node('h2', 'Saved application states'),
     node('p', 'A saved state contains the loaded KB, native annotations, configuration and executable backend code. The next launch resumes that data without re-reading KB sources. Keep these files private.'),
-    node('p', 'Create, select for next launch, and try are separate actions. A trial never takes over the original ports automatically. Its debug listener stays off until authorized takeover releases the original listener.'),
+    node('p', 'Create, select for next launch, and try are separate actions. A trial is nonserving: no HTTP, debug or agent services start. Private local IPC verifies the restored KB. Only explicit takeover can start listeners after the original ports are released.'),
     notice, form, selection, files, operations, runs);
   let catalog, busy = false, timer, polling = false, stopped = false;
   let operationRows = [], runRows = [];
@@ -157,7 +157,8 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
       if (item.cleanup === 'deferred_empty_directory') row.append(node('p',
         'The candidate has stopped. Windows still holds its empty runtime directory; payload files have been removed.'));
       if (item.recovery) row.append(node('p', item.recovery, { role: 'alert' }));
-      if (item.temporary && ['trial_ready', 'promoting', 'recovery_serving'].includes(item.phase)) row.append(openPort(item.temporary, `Open temporary port ${item.temporary}`));
+      if (['starting', 'trial_ready'].includes(item.phase)) row.append(node('p',
+        'Nonserving candidate · private local IPC only · no browser port.'));
       if (item.phase === 'promoted') row.append(openPort(item.primary, `Open replacement on port ${item.primary}`));
       if (['trial_ready', 'recovery_serving'].includes(item.phase)) {
         const ports = item.targets.map(target => target.port).join(', ');

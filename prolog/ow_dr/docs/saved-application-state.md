@@ -30,8 +30,10 @@ Supported startup overrides:
 * `--debug-port=N` / `--debug-off`: override the saved debug setting.
 
 The host already implements the resume callback and native-launcher/coordinator
-hooks. Resume creates new pools, HTTP listeners, a private control listener and
-the native console scanner from restored data. Do not add another resume hook
+hooks. Normal selected resume creates new pools, HTTP listeners, a private IPC
+worker and the native console scanner from restored data. Trial candidates create
+**none** of those serving resources: only private file IPC is started, with no
+HTTP/debug/agent services or outbound network access. Do not add another resume hook
 that calls `main`, `load_sources`, or recursively launches the same selection.
 
 Import `kb_checkpoint_http` to register the local Settings routes. The independent
@@ -245,6 +247,15 @@ qsave_program(Image,
 ```
 
 `development` preserves native file/line metadata and mutable predicates.
+The builder seals a persistent dormant startup mode before qsave. Its first
+application restore initializer reinstalls SWI socket guards, because foreign
+predicate wrappers do not themselves survive reloading. They refuse socket
+creation, listen/bind/connect and UDP send while dormant or a candidate. The
+controlled resume goal identifies candidate mode before data restoration.
+Only normal selected startup or explicit approved promotion releases the fence.
+Private IPC uses owner-only atomic JSON mailboxes beneath the controlled saved-state
+root; no temporary/admin/readiness/health HTTP port is opened. See the
+[checkpoint handoff](checkpoint-handoff.md) for the protocol and rollback contract.
 `native_handle/4`, `native_signature/4`, and `native_file/2` are made volatile
 **in the isolated builder only**. Resume scans already-restored native clauses,
 rebuilds handles and predicate registrations, and retains the saved semantic
@@ -320,9 +331,10 @@ The latest run did not reproduce them; this is not proof that the underlying
 shutdown race is fixed. Cleanup stages now identify debug/HTTP/control/pools
 failures. A subsequent expanded native test also exposed an unresolved candidate
 exit `0xC000013A`; no root cause is claimed. App/API/Settings wiring is now
-integrated and the complete copied-app native workflow passed in 216.506 seconds,
-including real browser-created qsave, source/cache removal, read-only trial
-queries, cancellation, failed-bind rollback, fresh debug credentials, original
+integrated. The final **nonserving** copied-app native workflow passed in
+166.055 seconds, including real browser-created qsave, source/cache removal,
+private-IPC trial queries, zero preapproval candidate TCP/UDP endpoints,
+cancellation, failed-bind rollback, fresh debug credentials, original
 port takeover, survival after old-owner/job retirement, sidecar-free repeat save,
 and selected restart through `app.pl` with explicit CLI overrides.
 
@@ -330,8 +342,8 @@ Production checkpoint-policy guards remain in force. The integration test
 authorizes c06 actions only by replacing the policy module in its own disposable
 copied application. It never unpauses production through HTTP, environment
 variables or image data. The production-pause/cold-start tests run against the
-unchanged real policy. The parent's manual-only non-serving policy decision is
-separate from the now-complete host wiring.
+unchanged real policy. Production execution remains paused; this implementation
+does not authorize a production save, candidate or promotion.
 
 ## Focused verification
 

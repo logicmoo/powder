@@ -1,4 +1,5 @@
-:- module(checkpoint_native_fixture,[fixture_main/0,allow_bind/0,allow_retire/0,record_error/1]).
+:- module(checkpoint_native_fixture,[fixture_main/0,allow_bind/0,allow_retire/0,record_error/1,
+                                    record_child/1]).
 :- use_module('../kb_checkpoint_host',[]).
 :- use_module('../kb_checkpoint_http',[]).
 :- use_module('../kb_saved_state',[]).
@@ -36,6 +37,9 @@ allow_bind :-
     (kb_checkpoint_host:host(H),H.mode==candidate,exists_file(Marker)->
       throw(error(fixture_rejected_candidate_bind,_));true).
 allow_retire :- kb_console_launch:launcher_snapshot_safe.
+record_child(PID) :-
+    case_dir(D),format(atom(Name),'child-~d.started',[PID]),
+    directory_file_path(D,Name,File),kb_saved_state:write_json(File,_{pid:PID}).
 fixture_main :-
     catch_with_backtrace(fixture_run,Error,(print_message(error,Error),throw(Error))),halt.
 fixture_run :-
@@ -68,7 +72,7 @@ fixture_run :-
        directory_file_path(D,'owner.json',Ready),
        current_prolog_flag(pid,PID),
        kb_checkpoint:instance(Instance),kb_checkpoint:control_secret(Token),
-       Credentials=credentials{instance:Instance.id,port:Instance.control,token:Token},
+       Credentials=credentials{instance:Instance.id,mailbox:Instance.control,token:Token},
        findall(Cache,(member(Source,[One,Two]),kb_paths:cache_paths(Source,N,I),member(Cache,[N,I])),Caches),
        kb_saved_state:write_json(Ready,_{primary:Primary,extra:Extra,pid:PID,
          credentials:Credentials,sources:[One,Two],caches:Caches}),

@@ -63,6 +63,26 @@ test(trial_mutation_permission_is_an_explicit_conflict) :-
       error(permission_error(modify,checkpoint_trial,read_only_until_promoted),test),
       Status,Code,_),
     assertion(Status=:=409),assertion(Code==trial_read_only).
+test(nonserving_control_rejects_startup_and_mutation_actions) :-
+    forall(member(Action,[save,trial,promote,activate]),
+      (catch(kb_checkpoint:permitted_control_action(candidate,Action),Error,true),
+       assertion(Error=error(permission_error(execute,checkpoint_control,Action),_)))),
+    forall(member(Action,[proof,query,prepare,bind,stop]),
+      kb_checkpoint:permitted_control_action(candidate,Action)).
+test(private_bind_still_requires_explicit_promotion_consent) :-
+    setup_call_cleanup(assertz(kb_checkpoint:candidate_context(_{targets:[]}),Ref),
+      catch(kb_checkpoint:control_action(bind,_{profiles:[],confirm:no},_),Error,true),
+      erase(Ref)),
+    assertion(Error=error(permission_error(promote,checkpoint_candidate,explicit_approval_required),_)).
+test(promotion_starts_console_wait_once) :-
+    message_queue_create(Queue),
+    setup_call_cleanup(
+      assertz(kb_checkpoint_host:host(host{mode:promoting,configuration:_{primary:4012},stopQueue:Queue})),
+      (kb_checkpoint:runtime_hook(activate,none,done),
+       kb_checkpoint:runtime_hook(activate,none,done),
+       thread_get_message(Queue,activate,[timeout(1)]),
+       assertion(\+thread_get_message(Queue,_,[timeout(0)]))),
+      (retractall(kb_checkpoint_host:host(_)),message_queue_destroy(Queue))).
 test(explicit_sources_override_saved_mode) :-
     kb_checkpoint_host:startup_plan(['--saved-state=invalid','--kb-source=missing.krf'],
       cold(3050,['missing.krf'],[enabled(false),port(3051)])).
@@ -101,13 +121,18 @@ test(only_empty_runtime_directory_cleanup_can_be_deferred,
     catch(kb_checkpoint:empty_directory_cleanup(Error,Empty,_),Failure,true),
     assertion(Failure==Error),assertion(exists_file(Payload)).
 test(candidate_defers_debug_without_losing_the_saved_profile,
-     [setup(fixture(D,P)),cleanup((kb_checkpoint_host:stop_host,cleanup(D,P)))]) :-
+     [setup(fixture(D,P)),cleanup((kb_checkpoint_host:stop_host,
+       kb_checkpoint_mode:permit_serving,cleanup(D,P)))]) :-
     kb_config:server_settings(Settings),
     kb_debug_telnet:debug_resume_profile(Default),
     Debug=Default.put(_{enabled:true,port:3051,max_sessions:3}),
     Runtime=runtime{schema:1,primary:P,debug:Debug},
     Metadata=_{checkpoint:_{runtime:Runtime},configuration:_{settings:Settings}},
     kb_checkpoint:runtime_hook(start_candidate,_{metadata:Metadata,stopQueue:main},_),
+    findall(Port,kb_server:server_port(Port),Ports),assertion(Ports==[P]),
+    assertion(\+kb_jobs:inference_pool_started),
+    catch(kb_checkpoint_host:open_listener(_,Settings.pools.http),Blocked,true),
+    assertion(Blocked=error(permission_error(start,checkpoint_services,nonserving),_)),
     kb_checkpoint_host:host_configuration(Captured),
     assertion(Captured.debug==Debug),
     kb_debug_telnet:debug_telnet_status(Actual),

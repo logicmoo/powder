@@ -6,6 +6,7 @@
            configuration_identity/1, checkpoint_stamp/1, runtime_probe/1,
            saved_snapshot_digest/2, effective_configuration/1,
            restored_server_settings/1, restored_source_packs/1]).
+:- use_module(kb_checkpoint_mode, []).
 :- use_module(kb_paths).
 :- use_module(kb_config, [settings_file/1,server_settings/1]).
 :- use_module(kb_store, []).
@@ -425,6 +426,7 @@ build_image(Snapshot,Image) :-
     volatile(kb_runtime:native_handle/4),
     volatile(kb_runtime:native_signature/4),
     volatile(kb_runtime:native_file/2),
+    kb_checkpoint_mode:seal_image,
     qsave_program(Image,[class(development),goal(kb_saved_state:resume_entry),
       toplevel(halt),init_file(none),stand_alone(false),autoload(false),
       foreign(no_save),packs(false)]).
@@ -595,8 +597,9 @@ snapshot_count(Count) :-
 
 resume_entry :-
     catch((kb_checkpoint_policy:require_checkpoint_execution(restore),
-           (restore_saved_data(Metadata)->true;throw(error(saved_state_restore_failed,_))),
            current_prolog_flag(argv,Args),
+           kb_checkpoint_mode:begin_restore(Args),
+           (restore_saved_data(Metadata)->true;throw(error(saved_state_restore_failed,_))),
            (Args=['--saved-state-verify',Report]->
              verification_report(Metadata,Report)
            ;Args=['--checkpoint-candidate',Request]->
@@ -606,6 +609,7 @@ resume_entry :-
     halt(Code).
 start_resumed_application(Args,Metadata) :-
     kb_checkpoint_policy:require_checkpoint_execution(resume),
+    kb_checkpoint_mode:resume_serving,
     with_mutex(powder_saved_resume,
       (resume_started->throw(error(saved_state_already_resumed,_));assertz(resume_started))),
     (clause(resume_application(_,_),_)->

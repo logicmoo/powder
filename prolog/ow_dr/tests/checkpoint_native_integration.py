@@ -6,6 +6,8 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import threading
+import struct
 import time
 import unittest
 import urllib.error
@@ -50,6 +52,9 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         self.ports = set()
         self.child_handles = {}
         self.controller_job = None
+        self.promoting_pids = set()
+        self.socket_violations = []
+        self.monitor_stop = threading.Event()
         for path in APP.iterdir():
             if path.is_file() and path.suffix.lower() in {".pl", ".ps1", ".dll", ".json"}:
                 shutil.copy2(path, self.app / path.name)
@@ -71,7 +76,10 @@ class NativeCheckpointWorkflow(unittest.TestCase):
             1).replace(
             "kb_checkpoint:runtime_hook(retire_old,_,done) :-",
             "kb_checkpoint:runtime_hook(retire_old,_,done) :-\n    checkpoint_native_fixture:allow_retire,",
-            1), encoding="utf-8")
+            1).replace(
+            "kb_console_launch:launch_new_console(Exe,Args,Directory,PID).",
+            "kb_console_launch:launch_new_console(Exe,Args,Directory,PID),\n"
+            "    checkpoint_native_fixture:record_child(PID).", 1), encoding="utf-8")
         http_adapter = self.app / "kb_checkpoint_http.pl"
         http_adapter.write_text(http_adapter.read_text(encoding="utf-8").replace(
             "endpoint_error(Error) :-", "endpoint_error(Error) :-\n    checkpoint_native_fixture:record_error(Error),", 1),
@@ -114,6 +122,8 @@ class NativeCheckpointWorkflow(unittest.TestCase):
             win_check(job_api.SetInformationJobObject(
                 self.controller_job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
             win_check(job_api.AssignProcessToJobObject(self.controller_job, int(self.owner._handle)))
+            self.monitor = threading.Thread(target=self.monitor_candidate_sockets, daemon=True)
+            self.monitor.start()
         except Exception:
             self.tearDown()
             raise
@@ -173,18 +183,61 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         return self.request(port or self.primary, self.base + "api/checkpoint/" + action, body)
 
     def private_status(self, run):
-        credentials = self.ready["credentials"]
-        request = urllib.request.Request(f"http://127.0.0.1:{credentials['port']}/control",
-            data=json.dumps({**credentials, "request": str(uuid.uuid4()),
-                             "action": "status", "payload": {"run": run}}).encode(),
-            headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                result = json.load(response)
+            return self.private_command("status", {"run": run})
         except OSError as error:
             return {"controlUnavailable": str(error), "processes": self.process_diagnostics()}
+
+    def private_command(self, action, payload):
+        credentials = self.ready["credentials"]
+        mailbox = Path(credentials["mailbox"])
+        self.assertTrue(mailbox.is_relative_to(self.case))
+        request_id = str(uuid.uuid4())
+        command = {"instance": credentials["instance"], "token": credentials["token"],
+                   "request": request_id, "action": action, "payload": payload}
+        stage = mailbox / (request_id + ".stage")
+        stage.write_text(json.dumps(command), encoding="utf-8")
+        stage.replace(mailbox / f"command-{request_id}.json")
+        response = mailbox / f"reply-{request_id}.json"
+        result = wait_json(response, 40)
+        response.unlink()
         credentials["token"] = result["token"]
         return {key: value for key, value in result.items() if key != "token"}
+
+    def candidate_command(self, trial, action, payload):
+        reply = self.private_command("candidate", {"run": trial["id"], "action": action, "payload": payload})
+        self.assertTrue(reply["ok"], reply)
+        return reply["result"]
+
+    def owned_network_rows(self):
+        api = ctypes.WinDLL("iphlpapi", use_last_error=True)
+        found = []
+        for name, klass, sizes in [("GetExtendedTcpTable", 5, [(2, 24), (23, 56)]),
+                                  ("GetExtendedUdpTable", 1, [(2, 12), (23, 28)])]:
+            fn = getattr(api, name)
+            fn.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong),
+                           ctypes.c_bool, ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+            for family, row_size in sizes:
+                size = ctypes.c_ulong(0)
+                result = fn(None, ctypes.byref(size), False, family, klass, 0)
+                self.assertIn(result, [0, 122])
+                buffer = ctypes.create_string_buffer(size.value)
+                self.assertEqual(fn(buffer, ctypes.byref(size), False, family, klass, 0), 0)
+                raw = buffer.raw
+                count = struct.unpack_from("<I", raw)[0]
+                for offset in range(4, 4 + count * row_size, row_size):
+                    pid = struct.unpack_from("<I", raw, offset + row_size - 4)[0]
+                    found.append((pid, name, family))
+        return found
+
+    def monitor_candidate_sockets(self):
+        try:
+            while not self.monitor_stop.wait(.02):
+                pids = {int(path.stem.split("-")[1]) for path in self.case.glob("child-*.started")}
+                forbidden = pids - self.promoting_pids
+                self.socket_violations.extend(row for row in self.owned_network_rows() if row[0] in forbidden)
+        except Exception as error:
+            self.socket_violations.append(("monitor failed", str(error)))
 
     def process_diagnostics(self):
         job_api.GetExitCodeProcess.argtypes = [
@@ -208,10 +261,28 @@ class NativeCheckpointWorkflow(unittest.TestCase):
             time.sleep(.2)
         self.fail(f"Checkpoint operation timed out: {reply}")
 
-    def track_candidate(self, port):
+    def track_serving(self, port):
         self.ports.add(port)
         info = self.get(port, "/_checkpoint_fixture/info")
         self.assertEqual(os.path.normcase(str(Path(info["fixture"]))), os.path.normcase(str(self.case)))
+        self.track_process(info)
+        return info
+
+    def track_candidate(self, trial):
+        proof = self.candidate_command(trial, "proof", {"nonce": str(uuid.uuid4())})
+        self.assertTrue(proof["nonserving"])
+        self.assertEqual(proof["profiles"], [])
+        self.assertEqual(proof["role"], "candidate")
+        self.assertIsNone(trial["temporary"])
+        self.assertEqual(proof["health"]["console"], [])
+        self.assertEqual([row for row in self.owned_network_rows() if row[0] == proof["pid"]], [])
+        self.assertEqual(self.socket_violations, [])
+        info = {**proof["health"], "pid": proof["pid"], "status": proof["identity"],
+                "configuration": proof["identity"]["configuration"], "nativeTVA": proof["nativeTVA"]}
+        self.track_process(info)
+        return info
+
+    def track_process(self, info):
         self.assertNotEqual(info["pid"], self.ready["pid"])
         k = ctypes.WinDLL("kernel32", use_last_error=True)
         k.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
@@ -225,7 +296,6 @@ class NativeCheckpointWorkflow(unittest.TestCase):
             win_check(job_api.IsProcessInJob(self.child_handles[info["pid"]],
                 self.controller_job, ctypes.byref(in_controller_job)))
             self.assertFalse(in_controller_job.value, "Native SWI candidate must break away from the owned job")
-        return info
 
     def test_native_trial_busy_cancel_takeover_and_repeat_save(self):
         catalog = self.api("catalog")
@@ -268,24 +338,19 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         tried = self.operation(self.api("try", {"id": state["id"], "generation": state["generation"]}))
         trial = tried["result"]
         self.assertEqual(trial["phase"], "trial_ready", trial)
-        candidate = self.track_candidate(trial["temporary"])
+        candidate = self.track_candidate(trial)
         self.assertEqual(candidate["status"]["counts"], self.baseline["counts"])
         self.assertEqual(candidate["nativeTVA"], self.info["nativeTVA"])
-        self.assertEqual(candidate["nativeRecords"], self.info["nativeRecords"])
-        self.assertEqual(candidate["configuration"]["sourcePacks"]["packs"],
+        self.assertEqual(candidate["configuration"]["sourcePacks"],
                          self.info["configuration"]["sourcePacks"]["packs"])
         self.assertFalse(candidate["debug"]["enabled"])
-        self.assertIsNone(candidate["credentialHash"])
         self.assertEqual(candidate["runtime"]["debug"], self.info["debug"])
         self.assertTrue(candidate["tty"], "Native launch must create fresh console stdin")
-        self.assertEqual(candidate["console"], ["main"])
-        query = self.request(trial["temporary"], self.base + "api/query",
+        self.assertEqual(candidate["console"], [])
+        query = self.candidate_command(trial, "query",
                              {"query": "(grandparent ?X ?Y)", "mt": "x_OneMt", "limit": 5, "timeout": 2})
         self.assertEqual(len(query["solutions"]), 1)
-        for action in ["kb/unload", "tva/reset", "catalog/cancel", "kb/packs/save"]:
-            with self.assertRaises(urllib.error.HTTPError) as refused:
-                self.request(trial["temporary"], self.base + "api/" + action, {})
-            self.assertEqual(refused.exception.code, 409)
+        self.assertEqual(self.socket_violations, [])
         original = self.get(self.primary, "/_checkpoint_fixture/info")
         self.assertEqual(original["pid"], self.ready["pid"])
         self.assertEqual(original["credentialHash"], self.info["credentialHash"])
@@ -295,9 +360,10 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         tried = self.operation(self.api("try", {"id": state["id"], "generation": state["generation"]}))
         trial = tried["result"]
         self.assertEqual(trial["phase"], "trial_ready", trial)
-        candidate = self.track_candidate(trial["temporary"])
+        candidate = self.track_candidate(trial)
         marker = self.case / "reject-candidate-bind"
         marker.write_text("test-owned bind failure", encoding="utf-8")
+        self.promoting_pids.add(candidate["pid"])
         self.api("promote", {"run": trial["id"], "revision": trial["revision"],
                              "confirm": "take-over-original-ports"})
         deadline = time.monotonic() + 60
@@ -321,7 +387,8 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         tried = self.operation(self.api("try", {"id": state["id"], "generation": state["generation"]}))
         trial = tried["result"]
         self.assertEqual(trial["phase"], "trial_ready", trial)
-        candidate = self.track_candidate(trial["temporary"])
+        candidate = self.track_candidate(trial)
+        self.promoting_pids.add(candidate["pid"])
         self.api("promote", {"run": trial["id"], "revision": trial["revision"],
                              "confirm": "take-over-original-ports"})
         deadline = time.monotonic() + 60
@@ -381,7 +448,7 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         deadline = time.monotonic() + 40
         while time.monotonic() < deadline:
             try:
-                resumed = self.track_candidate(resumed_port)
+                resumed = self.track_serving(resumed_port)
                 if resumed["console"] == ["main"]:
                     break
             except (OSError, ValueError):
@@ -399,8 +466,13 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         self.assertFalse(resumed["debug"]["enabled"])
         self.assertIsNone(resumed["credentialHash"])
         self.assertEqual(self.get(self.extra, "/_checkpoint_fixture/info")["pid"], resumed["pid"])
+        self.assertEqual(self.socket_violations, [])
 
     def tearDown(self):
+        if hasattr(self, "monitor_stop"):
+            self.monitor_stop.set()
+        if hasattr(self, "monitor"):
+            self.monitor.join(timeout=5)
         for port in list(getattr(self, "ports", [])):
             try:
                 self.request(port, "/_checkpoint_fixture/stop", {})

@@ -94,7 +94,7 @@ test('real browser keeps create, select, trial, cancel and explicit takeover sep
             available: true, selectedNextStart: false }];
         } else {
           catalog.runs = [{ id: `trial-${sequence}`, checkpoint: 's-fixture', phase: 'trial_ready', revision: 1,
-            primary: 4050, temporary: 4052, targets: [{ port: 4050 }, { port: 4051 }],
+            primary: 4050, temporary: null, targets: [{ port: 4050 }, { port: 4051 }],
             message: 'Candidate verified; original instance remains untouched.' }];
         }
         catalog.operations = [operation]; reply = operation;
