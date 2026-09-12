@@ -4,6 +4,7 @@
 :- use_module('../kb_catalog_index',[build_source_data/5]).
 :- use_module(library(assoc)).
 :- use_module(library(http/json)).
+:- use_module(library(terms),[term_size/2]).
 
 proof(e('KBs/taxonomy.krf',a1,1,x_BaseKB,[])).
 taxonomy(Extra,Taxonomy) :-
@@ -126,6 +127,33 @@ test(unsupported_proof_structure_is_losslessly_inert) :-
     extension(D,T,E),declared(E,x_p,[Proof]),
     Proof.targetSlotEvidence=[Json],assertion(Json.functor==unknown_proof),
     assertion(Json.arguments=[_,false,[]]).
+
+test(duplicate_global_slot_paths_do_not_multiply_local_evidence) :-
+    taxonomy([],Base),proof(P),
+    length(Repeated,300),maplist(=(P),Repeated),
+    Witness=target_evidence(P,[meta(x_MetaRelation,Repeated)|Repeated],[Repeated,Repeated],[]),
+    length(Duplicates,300),maplist(=(slot(2,Witness)),Duplicates),
+    put_assoc(x_rolesForEventType,Base.targetSlots,Duplicates,Slots),
+    T=Base.put(targetSlots,Slots),
+    findall(s(N,Id,N,Mt,[],0),(between(1,300,N),format(atom(Id),'a~16r',[N]),
+      (0 is N mod 2->Mt=x_EvenMt;Mt=x_OddMt)),Sentences),
+    findall(a(N,x_rolesForEventType,2,[]),between(1,300,N),Apps),
+    findall(h(N,[args,1],constant,semantic),between(1,300,N),Hits),
+    D=source{dialect:krf,sentences:Sentences,claims:[],applications:Apps,
+      terms:[t(x_p,300,300,0,[],[],Hits)]},
+    extension(D,T,E),declared(E,x_p,Proofs),length(Proofs,300),
+    findall(Mt,(member(X,Proofs),Mt=X.mt),Mts),sort(Mts,[x_EvenMt,x_OddMt]),
+    assertion(E.coverage.proofAlternativesExhaustive==false),
+    term_size(E,Cells),assertion(Cells<1000000).
+
+test(diamond_and_cyclic_types_keep_source_occurrences_not_path_products) :-
+    proof(P),taxonomy([claim(genls,x_Left,x_Predicate,P),claim(genls,x_Right,x_Predicate,P),
+      claim(genls,x_Diamond,x_Left,P),claim(genls,x_Diamond,x_Right,P),
+      claim(genls,x_Left,x_Diamond,P)],T),
+    data([c(isa,x_p,x_Diamond,1,[]),c(isa,x_p,x_Diamond,2,[])],[],[],D),
+    extension(D,T,E),declared(E,x_p,Proofs),length(Proofs,2),
+    findall(Id,(member(X,Proofs),Id=X.id),Ids),sort(Ids,[a10,a11]),
+    forall(member(X,Proofs),assertion(X.proofAlternativesExhaustive==false)).
 
 test(actual_catalog_projection_excludes_negation_implication_and_quote) :-
     taxonomy([],T),

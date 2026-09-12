@@ -34,6 +34,7 @@ explicit unavailable/unknown results, not successful empty provider lists.
 source_provider_extensions(Source0,Data,Taxonomy,Extensions) :-
     source_atom(Source0,Source),must_be(dict,Data),must_be(dict,Taxonomy),
     must_be(ground,Data),must_be(ground,Taxonomy),
+    (acyclic_term(Data),acyclic_term(Taxonomy)->true;domain_error(acyclic_provider_input,Source)),
     findall(Key,(required_data(Key),\+get_dict(Key,Data,_)),MissingData),
     findall(Key,(required_taxonomy(Key),\+get_dict(Key,Taxonomy,_)),MissingTaxonomy),
     (MissingData\=[];MissingTaxonomy\=[]),!,
@@ -72,15 +73,18 @@ supported_extensions(Source,Data,Taxonomy,Extensions) :-
     pairs_keys(Sorted,Keys),sort(Keys,Unique),
     (same_length(Keys,Unique)->true;domain_error(duplicate_sentence_ordinals,Keys)),
     list_to_assoc(Sorted,Sentences),
+    sort(Data.claims,Claims),sort(Data.applications,Applications),
+    type_templates(Claims,Taxonomy,TypeTemplates),
+    slot_templates(Applications,Taxonomy,SlotTemplates),
     findall(Symbol-Evidence,
-      type_declaration(Source,Data.claims,Taxonomy,Sentences,Symbol,Evidence),Types),
-    target_requests(Data.applications,Taxonomy,Requests),
+      type_declaration(Source,Claims,TypeTemplates,Sentences,Symbol,Evidence),Types),
+    target_requests(Applications,SlotTemplates,Requests),
     target_hits(Data.terms,Requests,Hits),
     findall(Symbol-Evidence,
-      target_declaration(Source,Requests,Hits,Sentences,Symbol,Evidence),Targets),
+      target_declaration(Source,Requests,Hits,Sentences,SlotTemplates,Symbol,Evidence),Targets),
     findall(Reason,target_gap(Source,Requests,Hits,Sentences,Reason),TargetGaps),
-    findall(Reason,application_gap(Data.applications,Taxonomy,Reason),ApplicationGaps),
-    findall(Reason,type_gap(Data.claims,Taxonomy,Sentences,Reason),TypeGaps),
+    findall(Reason,application_gap(Applications,Taxonomy,Reason),ApplicationGaps),
+    findall(Reason,type_gap(Claims,Taxonomy,Sentences,Reason),TypeGaps),
     append(Types,Targets,All),group_declarations(All,Declared),
     append([TypeGaps,TargetGaps,ApplicationGaps],Reasons0),sort(Reasons0,Reasons),
     (Reasons==[]->Status=complete;Status=partial),
@@ -89,25 +93,64 @@ supported_extensions(Source,Data,Taxonomy,Extensions) :-
     Extensions=provider_extensions{
       schema:'powder.catalog-provider-extensions.v1',source:Source,status:Status,
       declared:Declared,coverage:coverage{types:TypeCoverage,schemaTargets:TargetCoverage,
-        scope:explicit_catalog_taxonomy,implements:false},reasons:Reasons}.
+        scope:explicit_catalog_taxonomy,implements:false,
+        proofAlternativesExhaustive:false,proofPolicy:representative_justification},
+      reasons:Reasons}.
 data_list(Data,Key) :- get_dict(Key,Data,Value),must_be(list,Value).
 sentence_pair(S,N-S) :-
     S=s(N,Id,Line,Mt,Names,Offset),must_be(positive_integer,N),
     must_be(atom,Id),must_be(positive_integer,Line),must_be(atom,Mt),
     must_be(list,Names),maplist(must_be(string),Names),must_be(nonneg,Offset).
 
-type_declaration(Source,Claims,Taxonomy,Sentences,Symbol,Evidence) :-
+type_declaration(Source,Claims,Templates,Sentences,Symbol,Evidence) :-
     member(c(isa,Symbol,Type,N,Path),Claims),provider_symbol(Symbol),
-    get_assoc(Type,Taxonomy.categories,Memberships),
-    member(membership(Group,Root,Chain),Memberships),
-    callable_group(Type,Group),
+    get_assoc(Type,Templates,Memberships),
+    member(type_witness(Group,Root,Hierarchy),Memberships),
     sentence_evidence(Source,Sentences,N,Path,Local),
-    (get_assoc(Symbol,Taxonomy.types,AllTypes)->true;AllTypes=[]),
-    findall(Proof,member(type(Type,Proof),AllTypes),TypeProofs),
-    proof_json(Chain,Hierarchy),proof_json(TypeProofs,Assertions),
+    proof_json(e(Source,Local.id,Local.line,Local.mt,Path),Assertion),
     Evidence=Local.put(evidence{kind:typed_declaration,role:declaration,polarity:positive,
       arity:null,type:Type,callableRole:Group,typeRoot:Root,
-      typeHierarchy:Hierarchy,typeAssertions:Assertions,implementation:unknown}).
+      typeHierarchy:Hierarchy,typeAssertions:[Assertion],
+      proofAlternativesExhaustive:false,implementation:unknown}).
+
+% Templates are compacted once before joining them to local assertion slots.
+% Global duplicate declarations are not copied into every local declaration.
+type_templates(Claims,Taxonomy,Templates) :-
+    findall(Type,member(c(isa,_,Type,_,_),Claims),Raw),sort(Raw,Types),
+    empty_assoc(Empty),foldl(type_template(Taxonomy),Types,Empty,Templates).
+type_template(Taxonomy,Type,Before,After) :-
+    (get_assoc(Type,Taxonomy.categories,Memberships)->
+      empty_assoc(Empty),foldl(type_witness(Type),Memberships,Empty,Witnesses),
+      assoc_to_values(Witnesses,Values),put_assoc(Type,Before,Values,After)
+    ;After=Before).
+type_witness(Type,membership(Group,Root,Chain),Before,After) :-
+    (callable_group(Type,Group),\+get_assoc(Group-Root,Before,_)->
+      unique_path(Chain,Unique),proof_json(Unique,Hierarchy),
+      put_assoc(Group-Root,Before,type_witness(Group,Root,Hierarchy),After)
+    ;After=Before).
+
+slot_templates(Applications,Taxonomy,Templates) :-
+    findall(Head,member(a(_,Head,_,_),Applications),Raw),sort(Raw,Heads),
+    empty_assoc(Empty),foldl(slot_template(Taxonomy),Heads,Empty,Templates).
+slot_template(Taxonomy,Head,Before,After) :-
+    (get_assoc(Head,Taxonomy.targetSlots,Slots)->
+      empty_assoc(Empty),foldl(slot_witness,Slots,Empty,Witnesses),
+      assoc_to_list(Witnesses,Values),put_assoc(Head,Before,Values,After)
+    ;After=Before).
+slot_witness(slot(Slot,Proof),Before,After) :-
+    (\+get_assoc(Slot,Before,_)->
+      representative_proof(Proof,Representative),proof_json(Representative,Json),
+      put_assoc(Slot,Before,Json,After)
+    ;After=Before).
+representative_proof(target_evidence(Declaration,Meta,Types,Sub),Representative) :- !,
+    first_witness(Meta,MetaWitness),first_witness(Types,TypeWitness),
+    unique_path(Sub,SubWitness),
+    Representative=target_evidence(Declaration,MetaWitness,TypeWitness,SubWitness).
+representative_proof(Proof,Proof).
+first_witness([],[]).
+first_witness([meta(Type,Path)|_],[meta(Type,Unique)]) :- !,unique_path(Path,Unique).
+first_witness([First|_],[Unique]) :- unique_path(First,Unique).
+unique_path(Path,Unique) :- (is_list(Path)->list_to_set(Path,Unique);Unique=Path).
 callable_group(_,predicates).
 callable_group(Type,functions) :- Type\==x_MetaFunction.
 provider_symbol(Symbol) :-
@@ -125,14 +168,12 @@ type_gap(Claims,Taxonomy,Sentences,Reason) :-
     ;fail),
     Reason=reason{code:Code,ordinal:N,path:Path,subject:Symbol,type:Type}.
 
-target_requests(Applications,Taxonomy,Requests) :-
-    findall((N-TargetPath)-request(N,Head,Slot,Path,Proofs),
+target_requests(Applications,Templates,Requests) :-
+    findall((N-TargetPath)-request(N,Head,Slot,Path),
       (member(a(N,Head,Arity,Path),Applications),
        must_be(nonneg,Arity),must_be(list,Path),
-       definition_slots(Head,Taxonomy,Slots),member(Slot,Slots),
+       get_assoc(Head,Templates,Slots),member(Slot-_,Slots),
        must_be(positive_integer,Slot),Slot=<Arity,
-       get_assoc(Head,Taxonomy.targetSlots,SlotEvidence),
-       findall(Proof,member(slot(Slot,Proof),SlotEvidence),Proofs),
        Index is Slot-1,append(Path,[args,Index],TargetPath)),Pairs),
     group_assoc(Pairs,Requests).
 target_hits(Terms,Requests,Hits) :-
@@ -148,16 +189,17 @@ application_gap(Applications,Taxonomy,Reason) :-
     ;member(Slot,Slots),Slot>Arity,
        Reason=reason{code:target_slot_out_of_range,ordinal:N,path:Path,
          schemaPredicate:Head,targetPosition:Slot,arity:Arity}).
-target_declaration(Source,Requests,Hits,Sentences,Symbol,Evidence) :-
+target_declaration(Source,Requests,Hits,Sentences,Templates,Symbol,Evidence) :-
     gen_assoc(Key,Requests,Wants),get_assoc(Key,Hits,Symbols),member(Symbol,Symbols),
-    provider_symbol(Symbol),member(request(N,Head,Slot,Path,Proofs),Wants),
+    provider_symbol(Symbol),member(request(N,Head,Slot,Path),Wants),
     sentence_evidence(Source,Sentences,N,Path,Local),
-    Key=(_-TargetPath),proof_json(Proofs,SlotProofs),
+    Key=(_-TargetPath),get_assoc(Head,Templates,Slots),memberchk(Slot-Representative,Slots),
     Evidence=Local.put(evidence{kind:ontology_schema_declaration,role:declaration,
       polarity:positive,arity:null,schemaPredicate:Head,targetPosition:Slot,
-      targetPath:TargetPath,targetSlotEvidence:SlotProofs,implementation:unknown}).
+      targetPath:TargetPath,targetSlotEvidence:[Representative],
+      proofAlternativesExhaustive:false,implementation:unknown}).
 target_gap(Source,Requests,Hits,Sentences,Reason) :-
-    gen_assoc(Key,Requests,Wants),member(request(N,Head,Slot,Path,_),Wants),
+    gen_assoc(Key,Requests,Wants),member(request(N,Head,Slot,Path),Wants),
     (get_assoc(N,Sentences,_)->
        (get_assoc(Key,Hits,Symbols),include(provider_symbol,Symbols,[_|_])->fail
        ;Code=no_atomic_semantic_target)
