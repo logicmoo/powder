@@ -15,7 +15,7 @@ a provider. Compound targets remain explicitly unresolved, not their functors.
 The ground JSON DTO has schema, source, status, declared, coverage and reasons.
 Declared entries have symbol, arities, roles, polarities, evidenceCount and
 evidence. Each evidence retains its local assertion location/names and one
-representative justification per callable category/root or definition slot.
+representative justification per callable category or definition slot.
 Alternative global taxonomy proofs are not multiplied into local occurrences;
 proofAlternativesExhaustive is explicitly false. The authoritative catalog still
 retains those global claims. These are declarations, never implementations or

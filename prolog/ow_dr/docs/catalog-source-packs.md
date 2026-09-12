@@ -28,7 +28,8 @@ schema: powder.catalog-provider-extensions.v1
 source: catalog source path
 status: complete | partial | unavailable
 declared: [{symbol, arities, roles, polarities, evidenceCount, evidence, implementation}]
-coverage: {types, schemaTargets, scope, implements:false}
+coverage: {types, schemaTargets, scope, implements:false,
+           proofAlternativesExhaustive:false, proofPolicy:representative_justification}
 reasons: [{code, ...}]
 ```
 
@@ -37,12 +38,23 @@ reasons: [{code, ...}]
 completeness or executable readiness. Unsupported compound/variable targets are
 reported as partial coverage.
 
-Evidence preserves assertion ID, original line, MT key, variable spellings,
-ordinal and semantic path. It includes all relevant type assertions/hierarchy
-proofs or complete target-slot evidence. Unknown proof constructors are serialized
-as inert `{functor, arguments}` data. Historical source paths are not recoverable
-from sentence locators alone: `sourcePathKind:catalog_source` and
-`originalSourceFile:null` make that distinction explicit.
+Evidence preserves each distinct local assertion ID, original line, MT key,
+variable spellings, ordinal and semantic path. Type evidence contains the local
+type assertion and one representative hierarchy justification per callable
+category; target evidence contains one representative justification per proven
+argument slot. Global alternative proofs remain in the authoritative catalog,
+not copied into every local occurrence. `proofAlternativesExhaustive:false`
+explicitly distinguishes this projection from an exhaustive proof listing.
+Unknown proof constructors are serialized as inert `{functor, arguments}` data.
+Historical source paths are not recoverable from sentence locators alone:
+`sourcePathKind:catalog_source` and `originalSourceFile:null` make that distinction
+explicit.
+
+Type and target-slot templates are compacted before the local evidence joins.
+Duplicate global declarations, equivalent category roots, taxonomy cycles and
+diamond paths do not multiply local evidence. This avoids a cross-file
+proof-count × local-occurrence allocation while preserving distinct local
+assertions and MTs.
 
 Entries are grouped by canonical symbol, never split by observed arity. Unknown
 arity remains unknown; a predicate type name is not converted to an arity here.
