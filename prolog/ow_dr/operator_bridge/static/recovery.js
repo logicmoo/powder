@@ -45,12 +45,12 @@ function renderStatus(value) {
   $('copilot').textContent = value.state.replaceAll('_', ' ');
   $('prolog').textContent = value.application.configured ? (value.application.online ? 'Online' : 'Offline') : 'Not registered';
   const available = connected && value.adapter.available;
-  $('start').disabled = !available || value.stopped || value.state !== 'offline';
+  $('start').disabled = !available || (value.stopped && !value.canRestart) || value.state !== 'offline';
   $('prompt').disabled = !connected;
   $('send').disabled = !available || value.stopped || value.state === 'offline';
-  if (!value.adapter.available) notice(`${providerName} adapter is not configured. Executable discovery does not mean a live session or authenticated account.`);
+  if (!value.adapter.available) notice(value.adapter.reason || `${providerName} adapter is not configured. Executable discovery does not mean a live session or authenticated account.`);
   else if (value.stopOutcome === 'unknown') notice('Native stop outcome is unknown. Inspect the owned CLI session; no automatic retry will occur.', true);
-  else if (value.stopped) notice('Operator stopped explicitly. History remains available; a new bridge start is required for another native session.');
+  else if (value.stopped) notice(value.canRestart ? 'Operator stopped. Start explicitly to resume its history; the other provider stays independent.' : 'Operator stopped explicitly. History remains available.');
   else if (!connected) notice('Reconnecting to the bridge. Output will replay; commands will not.', true);
   else notice(`${providerName} is independent of Prolog. Each native permission needs your explicit decision.`);
   const identity = $('identity'); identity.replaceChildren();

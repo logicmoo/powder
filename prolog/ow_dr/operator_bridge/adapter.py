@@ -26,11 +26,12 @@ class UnavailableAdapter:
     name = "not-configured"
     available = False
 
-    def __init__(self, provider: str = "copilot"):
+    def __init__(self, provider: str = "copilot", reason: str = "The native adapter is not configured."):
         self.provider = provider
         provider_label(provider)
         self.name = f"{provider}-not-configured"
         self.executable = discover_executable(provider)
+        self.reason = reason
 
     async def start(self, resume_id: str | None, *, cwd: str) -> dict:
         raise BridgeError("adapter_unavailable", f"The live {self.provider} adapter is not configured.", 503)
@@ -47,4 +48,23 @@ class UnavailableAdapter:
     def status(self) -> dict:
         return {"name": self.name, "available": False, "connected": False,
                 "sessionId": None, "ownedPids": [], "resumeSupported": False,
-                "provider": self.provider, "executable": self.executable, "authentication": "not_checked"}
+                "provider": self.provider, "executable": self.executable, "authentication": "not_checked",
+                "reason": self.reason}
+
+
+def configured_adapter(provider: str, journal, *, executable: str | None = None,
+                       model: str | None = None, offline: bool = False):
+    if offline:
+        return UnavailableAdapter(provider, "Native providers are explicitly disabled.")
+    try:
+        from .native import resolve_native
+        command = resolve_native(provider, executable)
+        if provider == "copilot":
+            from .copilot_adapter import CopilotAdapter
+            return CopilotAdapter(command, journal, model=model)
+        from .codex_adapter import CodexAdapter
+        return CodexAdapter(command, journal, model=model)
+    except BridgeError as error:
+        return UnavailableAdapter(provider, error.message)
+    except ImportError:
+        return UnavailableAdapter(provider, "Install the pinned project-local dependencies.")

@@ -1,19 +1,19 @@
-# Independent Copilot + Codex operator bridge — foundation
+# Independent Copilot + Codex operator bridge
 
 This directory owns a Python process and recovery view, **not a Prolog job**.
 It does not alter the existing pools, loader, application UI, server, Teacher,
 Symbolic agent, source corpus, or shared registries.
 
-**Current state:** authenticated transport, durable journal, permission protocol,
-recovery assets, native instance lock and an explicit independent launcher work.
-Both production adapters are deliberately **unavailable**. There is no live Copilot
-or Codex protocol integration in this stage; the fake adapters exist only in tests. No
-model prompt, session creation, code edit or production process start was used
-to demonstrate this foundation.
+**Current state:** authenticated transport, durable journals, recovery view and
+separate native adapters are implemented. Real **protocol health only** passed for
+Copilot CLI **1.0.82** with Python SDK **1.0.13**, and Codex CLI **0.149.0**.
+Native session/turn/permission behavior is covered with explicit fake SDK/protocol
+fixtures, not real model activity. No real session, thread, prompt, code edit or
+production bridge activation was used to demonstrate this stage.
 
 ## Install and authorized activation
 
-Python 3.11+ and one project-local HTTP dependency:
+Python 3.11+, project-local `aiohttp` and the pinned official Copilot SDK:
 
 ```powershell
 python -m venv prolog\ow_dr\operator_bridge\.venv
@@ -43,6 +43,12 @@ do not modify system DNS/hosts or substitute the Prolog application's hostname.
 `python -m prolog.ow_dr.operator_bridge --help` is safe: no listener, CLI,
 authentication prompt or model task is started.
 
+Optional CLI-only settings: `--copilot-bin=PATH`, `--codex-bin=PATH`,
+`--copilot-model=ID`, `--codex-model=ID`, and `--offline` for recovery-only mode.
+Models remain independent of the Teacher and one another; omission uses that
+provider's native default. No SDK-bundled CLI, global installer, automatic
+download, login endpoint or global PATH change is used.
+
 ## Two operators, one bridge
 
 One Python resident hosts two independent `OperatorService` actors:
@@ -60,11 +66,14 @@ authentication is provider-owned: there is no sharing of Copilot credentials,
 models or protocol assumptions with Codex. The common local pairing cookie
 authenticates the **human to the bridge**, not either native provider account.
 
-Executable discovery is passive `shutil.which("copilot"|"codex")`. Found paths,
-`protocolVerified:false` and `authentication:"not_checked"` are shown explicitly;
-discovery does not start a CLI, install anything, run a prompt or change auth.
-Both executables were found on the development machine, but that does not prove
-protocol compatibility or authentication.
+Executable discovery is passive. Windows npm CMD/PowerShell shims are resolved
+through the installed official package metadata to their native `.exe`; shims
+are never passed to Win32 `Popen` or a shell. Missing/ambiguous installations
+remain unavailable. Before explicit Start, `protocolVerified` is false; discovery
+and SDK import do not start a CLI. Start verifies the actual native `--version`,
+not just npm package metadata, and rejects unvalidated versions. Authentication
+stays native-CLI-managed; neither discovery nor protocol health proves account
+or model access.
 
 Both native process startup and each new/resumed session/thread must use
 `C:\snet\PeTTa\repos\openworld_dr`, the trusted installed primary checkout.
@@ -72,9 +81,10 @@ Browser `cwd`, workspace, executable and provider override fields are rejected.
 The internal adapter receives a mandatory server-owned `cwd` and must return
 verified `processCwd` and session/thread `cwd`; mismatches or missing evidence
 leave an unknown outcome, disconnected actor and **no prompt dispatch**.
-Actual SDK/process/thread enforcement remains to be implemented separately using
-each documented native contract. No checkout, worktree or edit-overwrite action
-is performed by this guard.
+Native metadata is checked before resume and after creation/resume. Remote,
+foreign-repository, foreign-branch or unverified contexts fail closed; Codex
+additionally requires an idle durable thread.
+No checkout or worktree action is performed by this guard.
 
 Starting a second actor while another is active/pending returns
 `409 operator_conflict`, including `conflicts`, `requiresConfirmation:true` and
@@ -86,8 +96,10 @@ requests from both missing the warning; it does **not** serialize their native
 execution, reserve the workspace exclusively or prohibit running both.
 
 Concurrent editing is **not race-proof**. Both actors share the same checkout;
-external editors/operators are not tracked. SDK-supported optimistic edit
-guards will require their actual documented APIs; none are invented here.
+external editors/operators are not tracked. Proposed file writes are hashed
+before human review and checked again before approval; changed files are denied.
+This bounded optimistic guard is not an atomic transaction or a guarantee against
+changes after approval. Native edit safeguards still apply.
 
 ### Four-chip parent contract
 
@@ -153,7 +165,7 @@ the application process is still alive.
   recognized token/private-key patterns are redacted, but redaction is **not**
   a universal secret detector. Never paste credentials into prompts.
 * SDK authentication objects, raw exceptions and unrestricted SDK event payloads
-  must never be forwarded. The future adapter supplies only the bounded,
+  are not forwarded. Adapters supply only the bounded,
   reviewed output/permission projection. Oversized or redacted permission
   details are denied rather than asking a user to approve an incomplete view.
 
@@ -218,8 +230,10 @@ only when the adapter confirms it (queued cancellation is known before
 dispatch); otherwise it is unknown. Explicit stop denies pending permissions,
 cancels queued input, and asks only the owned adapter to stop. A stop exception
 is reported as an unknown native outcome, not successful termination; repeated
-stop requests do not repeat native operations. After explicit stop, use a new
-authorized bridge start for another session. Closing the
+stop requests do not repeat native operations. After a **confirmed** stop, explicit
+Start creates a fresh adapter and resumes only that provider's saved identity;
+it does not restart the bridge or the other provider. Unknown stops cannot be
+automatically retried or replaced. Closing the
 browser or Prolog does not stop that adapter. The bridge does not claim it can
 preserve in-flight native execution across its own OS/process crash.
 
@@ -227,27 +241,89 @@ Workspace identity is checked before dispatch and permission decisions. It is
 not a sandbox for a human-approved native command; the adapter must preserve
 the primary working directory and expose native permissions without auto-allow.
 
-## Native SDK contract still required
+## Implemented native contracts
 
-`OperatorAdapter` in `adapter.py` is an internal typed seam, **not a guessed
-Copilot or Codex API**. The coordinator must supply official documentation for
-both native protocols; they need not use the same RPC, session or model scheme:
+`OperatorAdapter` remains an internal seam, not a common external RPC scheme.
 
-1. supported CLI process startup/ownership, clean shutdown and session IDs;
-2. documented create/resume/load capabilities and restart limitations;
-3. async event lifecycle and correlation with each submitted request;
-4. permission callbacks that can await a human decision without auto-approval;
-5. cancellation/idle completion semantics and safe unknown-outcome inspection;
-6. credentials and model configuration confined to CLI/SDK ownership.
-7. explicit process plus new/resumed session/thread cwd and any optimistic
-   mutation/version safeguards actually supported by that provider.
+### Copilot
 
-No SDK dependency is installed yet. No Copilot App internals are inspected.
-Teacher model selection (`gpt-5.6-sol` / port 8801) does not select or configure
-the operator model. Parent lifecycle registration is also pending: an app
-restart button must remain unavailable until target instance/PID/generation
-checks and the existing lifecycle API are agreed. Availability probes cannot
-authorize restart.
+The **installed, pinned 1.0.13** Python API uses
+`CopilotClient(connection=RuntimeConnection.for_stdio(path=EXE),
+working_directory=ROOT)`. Older `CopilotClient({"cli_path": ...})` examples are
+not used. Both create/resume pass `working_directory=ROOT`. Named session IDs
+are journaled before creation; resume uses `continue_pending_work=False`.
+`get_session_metadata` checks native context without scanning all conversations.
+Events are received through the SDK's `on_event` session handler.
+
+The permission callback waits for the paired human and returns only
+`PermissionDecisionApproveOnce(approved_interactively=True)` or rejection.
+Read/write/shell/URL requests are supported; managed approvals and unsupported
+capabilities are rejected. There is no `approve_all`. File hooks, host-managed
+Git operations and schedule management are disabled for these sessions.
+
+Stop uses `session.disconnect()` (preserves history) and `client.stop()` on the
+SDK-owned **stdio** runtime only. No `delete_session` operation exists. The
+version-pinned `_cli_process` Popen handle is the sole private SDK adapter seam,
+used to attach native process-tree ownership; no Copilot App internals are read.
+
+### Codex
+
+The installed native executable runs `app-server --listen stdio://` with private
+pipes and explicit process cwd. `initialize` plus `initialized` completes before
+thread methods. This implementation uses the official app-server protocol, not
+a guessed Copilot RPC or an implicitly downloaded Python-SDK CLI.
+
+`thread/start` requests durable `ephemeral:false`; resume uses `thread/read`
+first, then the actual `threadId` and explicit cwd. The confirmed policy must be
+`approvalPolicy:"untrusted"`, `approvalsReviewer:"user"`, and a read-only sandbox.
+Every `turn/start` supplies its thread ID, text input, cwd and the same policy.
+Only matching thread/turn events reach that provider's output.
+
+Command and file-change approval requests pause for the human; responses permit
+only the current request (`accept`), never session/persistent grants. File changes
+must include the matching announced change set. Unsupported capability/profile
+grants return no permissions; authentication refresh, elicitation and unknown
+methods fail closed. `approvalPolicy:"never"` is not used and is not an
+approve-all policy. Cancellation requires matching `turn/completed` evidence,
+not merely a `turn/interrupt` acknowledgment.
+
+### Ownership and genuine limits
+
+On Windows each runtime is assigned its own native job before any thread/session
+creation. Explicit Stop terminates only that owned tree; job-handle closure has
+**no kill-on-close** policy. App restart never invokes this path. Persisted PID
+records are observations, not authority to kill reused PIDs after bridge restart.
+Only Windows process-tree behavior has been verified.
+
+Native RPC operations are bounded; interrupted or unknown outcomes are not
+resent. A diagnostic alone is not proof of native completion. Unknown native
+work prevents further prompt dispatch. Pending permission callbacks expire when
+their command or transport ends. Copilot named-create uncertainty is inspected
+by that exact ID before resume. A lost Codex create response without a known
+thread ID requires native inspection, not another automatic create.
+
+Permission projections over 4 KiB, unsupported requests and unverifiable writes
+are denied, not partially approved. The write-review guard is bounded to 32 files
+of at most 8 MiB each. No full terminal/ConPTY surface is claimed: this is an
+event-chat adapter with native permission prompts.
+
+Actual create/resume/send permission flows and visible independent-console
+activation still require an authorized interactive acceptance run. Real model
+access has **not** been tested. Parent lifecycle registration remains pending:
+an app restart button must stay unavailable until target instance/PID/generation
+checks and the existing lifecycle API are agreed. Availability is not authority.
+
+Official references used:
+* [Copilot SDK local CLI](https://github.com/github/copilot-sdk/blob/main/docs/setup/local-cli.md)
+* [Copilot Python client](https://github.com/github/copilot-sdk/blob/main/python/copilot/client.py)
+* [Copilot Python session](https://github.com/github/copilot-sdk/blob/main/python/copilot/session.py)
+* [Codex Python protocol client](https://github.com/openai/codex/blob/main/sdk/python/src/openai_codex/client.py)
+* [Codex thread protocol](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/thread.rs)
+* [Codex turn protocol](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/turn.rs)
+
+Codex 0.149.0's own `app-server generate-json-schema` export was checked as well.
+Experimental `historyMode` and permissions-profile fields from newer documents
+are deliberately not sent to this pinned stable protocol.
 
 ## Validation
 
@@ -273,3 +349,17 @@ simultaneous-start admission, independent session/auth markers/history/drafts,
 permission/cancellation isolation, provider-tagged output-only replay, passive
 discovery, explicit new/resumed cwd and rejection of cross-repository native
 contexts. They make no real model request or source edit.
+
+The explicit native-health command starts only owned health runtimes, verifies
+SDK/status or app-server initialize, then stops them:
+
+```powershell
+prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m prolog.ow_dr.operator_bridge.tests.native_health
+```
+
+The verified run created **zero sessions/threads and sent zero prompts**.
+When SWI-Prolog is available, it also starts, stops and restarts only the isolated
+no-KB Prolog fixture while the same native runtime PID and transport stay alive.
+All owned native PIDs exit after health cleanup.
+Do not turn this health command into a demo model task or run it as an implicit
+browser-connect/startup action.

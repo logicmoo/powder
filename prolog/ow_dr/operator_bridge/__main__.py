@@ -11,11 +11,16 @@ def main() -> None:
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--state-dir", type=Path, default=Path(__file__).with_name(".state"))
     parser.add_argument("--application-status-url", help="Optional read-only loopback Prolog status URL; no restart authority")
+    parser.add_argument("--copilot-bin", help="Explicit installed native Copilot executable or official npm shim")
+    parser.add_argument("--codex-bin", help="Explicit installed native Codex executable or official npm shim")
+    parser.add_argument("--copilot-model", help="Optional operator-only native Copilot model identifier")
+    parser.add_argument("--codex-model", help="Optional operator-only native Codex model identifier")
+    parser.add_argument("--offline", action="store_true", help="Recovery view only; disable both native adapters")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be between 1024 and 65535")
     from aiohttp import web
-    from .adapter import UnavailableAdapter
+    from .adapter import configured_adapter
     from .journal import Journal
     from .hub import OperatorHub
     from .monitor import ApplicationMonitor
@@ -37,14 +42,17 @@ def main() -> None:
         phrase = getpass.getpass("Local bridge pairing phrase (16+ characters; NOT provider credentials): ")
         auth = Auth(phrase)
         del phrase
-        service = OperatorHub({
-            "copilot": OperatorService(Journal(state / "operator.sqlite3", workspace, provider="copilot"),
-                                      workspace, UnavailableAdapter("copilot")),
-            "codex": OperatorService(Journal(state / "codex.sqlite3", workspace, provider="codex"),
-                                    workspace, UnavailableAdapter("codex")),
-        })
+        services = {}
+        for provider, filename in (("copilot", "operator.sqlite3"), ("codex", "codex.sqlite3")):
+            journal = Journal(state / filename, workspace, provider=provider)
+            def adapter_factory(provider=provider, journal=journal):
+                return configured_adapter(provider, journal, executable=getattr(args, provider + "_bin"),
+                                          model=getattr(args, provider + "_model"), offline=args.offline)
+            services[provider] = OperatorService(journal, workspace, adapter_factory(),
+                                                 adapter_factory=adapter_factory)
+        service = OperatorHub(services)
         print(f"Recovery view: http://{HOST}:{args.port}/")
-        print("Copilot and Codex native adapters are not configured. No model prompt or CLI process will be started.")
+        print("Native providers start only after explicit human Start. No automatic sessions or prompts.")
         app = create_app(service, auth, args.port)
         if args.application_status_url:
             monitor = ApplicationMonitor(service, args.application_status_url)

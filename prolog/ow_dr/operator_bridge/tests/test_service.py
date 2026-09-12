@@ -118,10 +118,11 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.close()
         self.assertEqual(self.adapter.stops, 0)
         resumed = Journal(self.directory / "journal.sqlite3", self.service.workspace)
-        self.assertEqual(resumed.command("interrupted")["state"], "unknown")
-        self.assertEqual(resumed.get("sdk_session_id"), "documented-test-session")
-        self.service.journal = resumed
-        self.service.task = None
+        try:
+            self.assertEqual(resumed.command("interrupted")["state"], "unknown")
+            self.assertEqual(resumed.get("sdk_session_id"), "documented-test-session")
+        finally:
+            resumed.close()
 
     async def test_workspace_change_prevents_input(self):
         def changed():

@@ -59,6 +59,25 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hub.get("codex").status()["role"],
             "Codex operator — Maintain code, inspect failures and manage services")
 
+    async def test_confirmed_provider_stop_can_resume_without_restarting_other(self):
+        first, second = self.hub.get("copilot"), self.hub.get("codex")
+        first.adapter_factory = lambda: FakeAdapter("copilot")
+        await self.start("copilot")
+        await self.start("codex", startAnyway=True)
+        prior_id = first.native_session_id()
+        prior_adapter = first.adapter
+        await first.stop_operator("human", "STOP OPERATOR")
+        self.assertTrue(first.status()["canRestart"])
+        with self.assertRaises(BridgeError):
+            await self.hub.submit("copilot", "human", {"id": "restart", "kind": "start_session"})
+        await self.hub.submit("copilot", "human",
+            {"id": "restart", "kind": "start_session", "startAnyway": True})
+        await settle(first)
+        self.assertIsNot(first.adapter, prior_adapter)
+        self.assertEqual(first.adapter.starts, [prior_id])
+        self.assertEqual(second.adapter.stops, 0)
+        self.assertEqual(len(second.adapter.starts), 1)
+
     async def test_simultaneous_start_admission_does_not_silently_skip_warning(self):
         results = await asyncio.gather(
             self.hub.submit("copilot", "human", {"id": "cop-start", "kind": "start_session"}),

@@ -10,17 +10,19 @@ from .adapter import OperatorAdapter
 from .journal import Journal
 from .security import public_text
 from .providers import provider_label
+from .native import NativeOutcome
 from .workspace import BridgeError, Workspace
 
 
 class OperatorService:
     def __init__(self, journal: Journal, workspace: Workspace, adapter: OperatorAdapter,
-                 *, verify: Callable[[], None] | None = None):
+                 *, verify: Callable[[], None] | None = None, adapter_factory=None):
         self.journal, self.workspace, self.adapter = journal, workspace, adapter
         self.provider = journal.provider
         if adapter.provider != self.provider:
             raise BridgeError("adapter_provider_mismatch", "Native adapters, authentication and sessions cannot cross providers.")
         self.verify = verify or workspace.verify
+        self.adapter_factory = adapter_factory
         self.instance_id = str(uuid.uuid4())
         self.connections: dict[str, int] = {}
         self.waiters: dict[str, asyncio.Future] = {}
@@ -31,6 +33,7 @@ class OperatorService:
         self.task: asyncio.Task | None = None
         self.connected = False
         self.stopped = False
+        self.closed = False
         self.stop_outcome = None
         self.journal.set("bridge_process", {"pid": os.getpid(), "instanceId": self.instance_id})
         self.app = {"configured": False, "online": False, "identityVerified": False,
@@ -81,6 +84,14 @@ class OperatorService:
         previous = self.journal.existing(payload.get("id"), kind, text)
         if previous is not None:
             return previous
+        if self.stopped and kind == "start_session" and self.stop_outcome == "confirmed" and self.adapter_factory:
+            replacement = self.adapter_factory()
+            if replacement.provider != self.provider or not replacement.available:
+                raise BridgeError("adapter_unavailable", "The selected native provider cannot be restarted.", 503)
+            self.adapter = replacement
+            self.stopped = False
+            self.stop_outcome = None
+            self.connected = False
         if self.stopped or not self.adapter.available:
             raise BridgeError("adapter_unavailable", f"No live {self.provider} adapter is connected.", 503)
         command, created = self.journal.submit(payload.get("id"), kind, text)
@@ -138,12 +149,20 @@ class OperatorService:
                 if self.active:
                     self.journal.state(command_id, "unknown", "Bridge dispatch was interrupted; no automatic retry.")
                 raise
+            except NativeOutcome as outcome:
+                self.journal.state(command_id, outcome.state, outcome.message)
+                if outcome.state == "unknown":
+                    self.connected = False
             except BridgeError as error:
                 self.journal.state(command_id, "unknown" if dispatched else "failed", error.message)
+                if dispatched:
+                    self.connected = False
             except Exception:
                 # Do not serialize arbitrary SDK exceptions: they may contain credentials.
                 self.journal.state(command_id, "unknown", "Adapter outcome is unknown. Inspect the native session; do not resend.")
+                self.connected = False
             finally:
+                self._expire_permissions()
                 self.active = None
                 self.queue.task_done()
                 await self.notify()
@@ -172,6 +191,15 @@ class OperatorService:
             return await future
         finally:
             self.waiters.pop(request_id, None)
+            if not self.closed and self.journal.decision(request_id) == "pending":
+                self.journal.decide(request_id, "interrupted")
+
+    def _expire_permissions(self) -> None:
+        for request_id, future in list(self.waiters.items()):
+            if self.journal.decision(request_id) == "pending":
+                self.journal.decide(request_id, "interrupted")
+            if not future.done():
+                future.set_result(False)
 
     async def decide(self, principal: str, request_id: str, decision: str) -> dict:
         self.human(principal)
@@ -188,7 +216,8 @@ class OperatorService:
         if changed and not future.done():
             future.set_result(decision == "allow")
             if self.active:
-                self.journal.state(self.active, "running")
+                state = "awaiting_permission" if any(not item.done() for item in self.waiters.values()) else "running"
+                self.journal.state(self.active, state)
         await self.notify()
         return {"id": request_id, "decision": decision}
 
@@ -210,8 +239,9 @@ class OperatorService:
                 confirmed = await self.adapter.cancel()
             except Exception:
                 confirmed = False
-            self.journal.state(command_id, "cancelled" if confirmed else "unknown",
-                               "Cancellation confirmed." if confirmed else "Cancellation outcome is unknown; do not resend.")
+            if self.journal.command(command_id)["state"] in ("running", "awaiting_permission"):
+                self.journal.state(command_id, "cancelled" if confirmed else "unknown",
+                                   "Cancellation confirmed." if confirmed else "Cancellation outcome is unknown; do not resend.")
         await self.notify()
         return self.journal.command(command_id)
 
@@ -252,10 +282,13 @@ class OperatorService:
         adapter = self.adapter.status()
         state = ("awaiting_permission" if self.waiters else "busy" if self.active
                  else "idle" if self.connected and not self.stopped else "offline")
+        if state == "idle" and adapter.get("connected") is False:
+            state = "offline"
         return {"schema": "powder.operator.v1", "agentType": "operator", "provider": self.provider,
                 "name": provider_label(self.provider), "role": provider_label(self.provider),
                 "outputSource": self.provider,
                 "state": state, "stopped": self.stopped, "stopOutcome": self.stop_outcome,
+                "canRestart": self.stopped and self.stop_outcome == "confirmed" and self.adapter_factory is not None,
                 "bridge": {"online": True, "pid": os.getpid(), "instanceId": self.instance_id},
                 "workspace": self.workspace.json(), "conversationId": self.journal.get("conversation_id"),
                 "nativeSessionId": self.native_session_id(),
@@ -278,10 +311,14 @@ class OperatorService:
 
     async def close(self) -> None:
         # Transport/bridge cleanup is NOT permission to stop the independent native CLI.
+        if self.closed:
+            return
+        self._expire_permissions()
         if self.task:
             self.task.cancel()
             try:
                 await self.task
             except asyncio.CancelledError:
                 pass
+        self.closed = True
         self.journal.close()
