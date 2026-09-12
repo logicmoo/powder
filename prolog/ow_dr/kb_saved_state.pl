@@ -264,18 +264,16 @@ configuration_with_native(Native,Identity) :-
     crypto_data_hash(JSON,Hash,[algorithm(sha256),encoding(utf8)]),
     Identity=Material.put(hash,Hash).
 effective_configuration(Configuration) :-
-    settings_file(SettingsFile),
-    (exists_file(SettingsFile)->server_settings(Settings)
-    ;restored_server_settings(Settings)->true;server_settings(Settings)),
+    kb_config:export_settings_snapshot(SettingsSnapshot),
+    Settings=SettingsSnapshot.settings.put(_{revision:SettingsSnapshot.revision,issues:[]}),
     kb_source_packs:packs_file(PacksFile),
     (exists_file(PacksFile)->kb_source_packs:list_packs(Packs)
     ;restored_source_packs(Packs)->true;kb_source_packs:list_packs(Packs)),
     Configuration=configuration{settings:Settings,sourcePacks:Packs}.
-% Immutable image data is only a missing-sidecar fallback, never a second
-% mutable registry. Existing validated sidecars remain authoritative.
+% The config module owns its imported fallback; metadata remains immutable evidence.
 restored_server_settings(Settings) :-
-    image_manifest(Metadata),
-    Settings=Metadata.configuration.settings.put(_{revision:none,issues:[]}).
+    kb_config:restored_settings_snapshot(Snapshot),
+    Settings=Snapshot.settings.put(_{revision:none,issues:[]}).
 restored_source_packs(Packs) :-
     image_manifest(Metadata),
     Packs=packs{revision:none,packs:Metadata.configuration.sourcePacks}.
@@ -424,12 +422,18 @@ install_image_data(Snapshot,Work,Metadata) :-
     read_term_file(Snapshot,snapshot(InputMetadata,OriginalSources,Utility,Native)),
     adapt_snapshot_data(InputMetadata,OriginalSources,Metadata,Sources),
     compatibility(Current),require_compatible(Metadata.compatibility,Current),
+    kb_config:import_settings_snapshot(settings_snapshot{
+      schema:1,settings:Metadata.configuration.settings,revision:none}),
     maplist(install_snapshot_source(Work),Sources),
     kb_store:rebuild_rankings,
     retractall(kb_store:generation(_)),assertz(kb_store:generation(Metadata.generation)),
     kb_rule_utility:import_telemetry(Utility),verify_saved_utility(Metadata,_),
     kb_native_annotations:import_native_state(Native),verify_saved_native(Metadata,_),
     retain_restored_metadata.
+verify_saved_settings(Metadata) :-
+    (kb_config:restored_settings_snapshot(Snapshot),
+     json_value_equal(Snapshot.settings,Metadata.configuration.settings)->true;
+      throw(error(saved_state_settings_snapshot_mismatch,_))).
 adapt_snapshot_data(InputMetadata,OriginalSources,Metadata,Sources) :-
     forall(member(source(_,_,Records),OriginalSources),maplist(validate_record,Records)),
     verify_snapshot_digest(OriginalSources,InputMetadata.snapshotDigest),
@@ -509,6 +513,7 @@ restore_saved_data(Metadata) :-
        retain_restored_metadata,
        kb_rule_utility:reset_transient,
        verify_saved_utility(Metadata,_),
+       verify_saved_settings(Metadata),
        verify_saved_native(Metadata,_),
        (validate_restored_store->true;throw(error(saved_state_restored_store_invalid,_))),
        snapshot(Metadata.generation,Sources,_),verify_snapshot_digest(Sources,ExpectedDigest),

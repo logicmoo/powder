@@ -1,5 +1,7 @@
 :- module(kb_config, [server_settings/1, save_server_settings/3, startup_selection/3,
-                       settings_file/1,pool_profile/3]).
+                       settings_file/1,pool_profile/3,
+                       export_settings_snapshot/1,import_settings_snapshot/1,
+                       restored_settings_snapshot/1]).
 :- use_module(kb_limits).
 :- use_module(kb_paths).
 :- use_module(kb_activity,[with_application/1]).
@@ -7,6 +9,7 @@
 :- use_module(library(http/json)).
 :- use_module(library(filesex)).
 :- use_module(library(error)).
+:- dynamic settings_snapshot/1.
 
 settings_file(File) :-
     (getenv('POWDER_SERVER_SETTINGS',Given),Given\==''->
@@ -16,19 +19,99 @@ settings_file(File) :-
 server_settings(Settings) :-
     settings_file(File),
     (exists_file(File)->
-      read_settings_consistent(File,3,Config,Revision)
-    ;server_defaults(Config),Revision=none),
-    findall(_{path:Path,message:"Source is missing; startup will report a failed load."},
-      (member(Path,Config.startupFiles),\+exists_file(Path)),Issues),
+      read_settings_consistent(File,3,Config,Revision),source_issues(Config,Issues)
+    ;require_absent_settings_file(File),
+     (restored_settings_snapshot(Snapshot)->Config=Snapshot.settings,Issues=[]
+     ;server_defaults(Config),source_issues(Config,Issues)),
+     Revision=none),
     Settings=Config.put(_{revision:Revision,issues:Issues}).
 
-read_settings_consistent(_,0,_,_) :- !,throw(error(server_settings_changing,_)).
 read_settings_consistent(File,Attempts,Config,Revision) :-
+    read_settings_data(File,Attempts,Saved,Revision),validate_settings(Saved,Config).
+read_settings_data(_,0,_,_) :- !,throw(error(server_settings_changing,_)).
+read_settings_data(File,Attempts,Saved,Revision) :-
     file_digest(File,Before),
-    setup_call_cleanup(open(File,read,S,[encoding(utf8)]),json_read_dict(S,Saved),close(S)),
+    read_settings_document(File,Read),
     file_digest(File,After),
-    (Before==After->validate_settings(Saved,Config),Revision=After;
-     Left is Attempts-1,read_settings_consistent(File,Left,Config,Revision)).
+    (Before==After->Saved=Read,Revision=After;
+     Left is Attempts-1,read_settings_data(File,Left,Saved,Revision)).
+read_settings_document(File,Saved) :-
+    setup_call_cleanup(open(File,read,S,[encoding(utf8)]),
+      (json_read_dict(S,Saved),read_string(S,_,Tail),string_codes(Tail,Codes),
+       (forall(member(C,Codes),memberchk(C,[9,10,13,32]))->true;
+         syntax_error(trailing_server_settings_data))),
+      close(S)).
+source_issues(Config,Issues) :-
+    findall(_{path:Path,message:"Source is missing; startup will report a failed load."},
+      (member(Path,Config.startupFiles),\+exists_file(Path)),Issues).
+require_absent_settings_file(File) :-
+    (exists_file(File)->throw(error(server_settings_changing,_))
+    ;exists_directory(File)->type_error(server_settings_file,File)
+    ;read_link(File,_,_)->type_error(server_settings_file,File)
+    ;catch(setup_call_cleanup(open(File,read,S,[encoding(utf8)]),
+        throw(error(server_settings_changing,_)),close(S)),
+      error(existence_error(source_sink,_),_),true)).
+
+export_settings_snapshot(Snapshot) :-
+    settings_file(File),
+    (exists_file(File)->
+       read_settings_data(File,3,Saved,Revision),
+       validate_snapshot_settings(Saved,Settings)
+    ;require_absent_settings_file(File),
+     (restored_settings_snapshot(Restored)->Settings=Restored.settings
+     ;server_defaults(Defaults),validate_snapshot_settings(Defaults,Settings)),
+     Revision=none),
+    Snapshot=settings_snapshot{schema:1,settings:Settings,revision:Revision}.
+import_settings_snapshot(Input) :-
+    validate_settings_snapshot(Input,Validated),
+    Snapshot=Validated.put(revision,none),
+    (kb_activity:owns_admission_lease->
+      install_settings_snapshot(Snapshot)
+    ;with_application(install_settings_snapshot(Snapshot))).
+install_settings_snapshot(Snapshot) :-
+    with_mutex(powder_settings_snapshot,
+      transaction((retractall(settings_snapshot(_)),assertz(settings_snapshot(Snapshot))))).
+restored_settings_snapshot(Snapshot) :-
+    with_mutex(powder_settings_snapshot,
+      (findall(S,settings_snapshot(S),Stored),
+       (Stored=[]->fail;Stored=[One]->validate_settings_snapshot(One,Snapshot)
+       ;throw(error(server_settings_snapshot_conflict,_))))).
+validate_settings_snapshot(Input,Snapshot) :-
+    must_be(dict,Input),dict_pairs(Input,_,Pairs),
+    findall(Key,member(Key-_,Pairs),Keys),
+    (Keys==[revision,schema,settings]->true;domain_error(settings_snapshot_fields,Keys)),
+    (Input.schema==1->true;domain_error(settings_snapshot_schema,Input.schema)),
+    snapshot_revision(Input.revision,Revision),
+    validate_snapshot_settings(Input.settings,Settings),
+    Snapshot=settings_snapshot{schema:1,settings:Settings,revision:Revision},
+    must_be(ground,Snapshot).
+snapshot_revision(Input,Revision) :-
+    (atom(Input)->Revision=Input;string(Input)->atom_string(Revision,Input);
+      type_error(text,Input)),
+    (valid_snapshot_revision(Revision)->true;domain_error(settings_snapshot_revision,Input)).
+valid_snapshot_revision(none) :- !.
+valid_snapshot_revision(Revision) :-
+    atom_codes(Revision,Codes),length(Codes,64),
+    forall(member(C,Codes),(between(0'0,0'9,C);between(0'a,0'f,C))).
+validate_snapshot_settings(Input,Settings) :-
+    must_be(dict,Input),
+    (Input.startupConfigured==true->true;Input.startupConfigured==false->true;
+      domain_error(boolean,Input.startupConfigured)),
+    must_be(list,Input.startupFiles),maplist(snapshot_source,Input.startupFiles,Paths),
+    unique_order(Paths,[],Unique),
+    must_be(dict,Input.pools),
+    maplist(snapshot_pool(Input.pools),[loader,inference,http],Pairs),
+    dict_pairs(Pools,pools,Pairs),
+    Settings=server_settings{startupConfigured:Input.startupConfigured,startupFiles:Unique,pools:Pools}.
+snapshot_pool(Pools,Name,Pair) :-
+    (get_dict(Name,Pools,_)->pool_setting(Pools,Name,Pair);
+      existence_error(settings_pool,Name)).
+snapshot_source(Input,Source) :-
+    (atom(Input)->Path=Input;string(Input)->atom_string(Path,Input);type_error(text,Input)),
+    atom_codes(Path,Codes),
+    (Codes\=[],forall(member(C,Codes),C>=32)->true;domain_error(startup_source_path,Input)),
+    (is_absolute_file_name(Path)->Source=Path;
+      repo_root(Root),directory_file_path(Root,Path,Source)).
 
 save_server_settings(Input,Expected,Settings) :-
     with_application(save_settings_guarded(Input,Expected,Settings)).
