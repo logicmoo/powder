@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from .security import public_text
+from .providers import provider_label
 from .workspace import BridgeError, Workspace
 
 COMMAND_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
@@ -16,7 +17,9 @@ UNFINISHED = ("queued", "running", "awaiting_permission")
 
 
 class Journal:
-    def __init__(self, path: Path, workspace: Workspace):
+    def __init__(self, path: Path, workspace: Workspace, *, provider: str = "copilot"):
+        provider_label(provider)
+        self.provider = provider
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
@@ -37,6 +40,11 @@ class Journal:
         if previous is not None and previous != workspace.json():
             self.db.close()
             raise BridgeError("workspace_mismatch", "The journal belongs to a different workspace.")
+        previous_provider = self.get("provider") or ("copilot" if self.get("conversation_id") else provider)
+        if previous_provider != provider:
+            self.db.close()
+            raise BridgeError("provider_mismatch", "A native provider cannot resume another provider's journal.")
+        self.set("provider", provider)
         self.set("workspace", workspace.json())
         if self.get("conversation_id") is None:
             self.set("conversation_id", str(uuid.uuid4()))
@@ -60,7 +68,8 @@ class Journal:
 
     def _event(self, kind: str, payload: dict) -> int:
         return self.db.execute("INSERT INTO events(created,kind,payload) VALUES(?,?,?)",
-                               (time.time(), kind, json.dumps(payload, ensure_ascii=False))).lastrowid
+                               (time.time(), kind, json.dumps({**payload, "provider": self.provider},
+                                                            ensure_ascii=False))).lastrowid
 
     def event(self, kind: str, payload: dict) -> int:
         with self.db:
@@ -94,7 +103,7 @@ class Journal:
             raise BridgeError("unknown_command", "No command with that identifier.", 404)
         return dict(row)
 
-    def submit(self, command_id: str, kind: str, text: str) -> tuple[dict, bool]:
+    def existing(self, command_id: str, kind: str, text: str) -> dict | None:
         if not isinstance(command_id, str) or not COMMAND_ID.fullmatch(command_id):
             raise BridgeError("invalid_command_id", "Supply a stable command identifier.", 400)
         digest = hashlib.sha256(json.dumps([kind, text]).encode()).hexdigest()
@@ -102,7 +111,14 @@ class Journal:
         if old:
             if old["digest"] != digest:
                 raise BridgeError("idempotency_conflict", "That identifier has different input.")
-            return self.command(command_id), False
+            return self.command(command_id)
+        return None
+
+    def submit(self, command_id: str, kind: str, text: str) -> tuple[dict, bool]:
+        old = self.existing(command_id, kind, text)
+        if old is not None:
+            return old, False
+        digest = hashlib.sha256(json.dumps([kind, text]).encode()).hexdigest()
         pending = self.db.execute("SELECT COUNT(*) FROM commands "
                                   "WHERE state IN ('queued','running','awaiting_permission')").fetchone()[0]
         if pending >= 20:

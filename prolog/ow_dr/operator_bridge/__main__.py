@@ -17,6 +17,7 @@ def main() -> None:
     from aiohttp import web
     from .adapter import UnavailableAdapter
     from .journal import Journal
+    from .hub import OperatorHub
     from .monitor import ApplicationMonitor
     from .security import Auth, HOST, InstanceLock, private_directory
     from .server import create_app
@@ -33,13 +34,17 @@ def main() -> None:
     private_directory(state)
     lock = InstanceLock(state)
     try:
-        phrase = getpass.getpass("Local bridge pairing phrase (16+ characters; NOT a GitHub password): ")
+        phrase = getpass.getpass("Local bridge pairing phrase (16+ characters; NOT provider credentials): ")
         auth = Auth(phrase)
         del phrase
-        journal = Journal(state / "operator.sqlite3", workspace)
-        service = OperatorService(journal, workspace, UnavailableAdapter())
+        service = OperatorHub({
+            "copilot": OperatorService(Journal(state / "operator.sqlite3", workspace, provider="copilot"),
+                                      workspace, UnavailableAdapter("copilot")),
+            "codex": OperatorService(Journal(state / "codex.sqlite3", workspace, provider="codex"),
+                                    workspace, UnavailableAdapter("codex")),
+        })
         print(f"Recovery view: http://{HOST}:{args.port}/")
-        print("No live Copilot adapter is configured. No model prompt or CLI process will be started.")
+        print("Copilot and Codex native adapters are not configured. No model prompt or CLI process will be started.")
         app = create_app(service, auth, args.port)
         if args.application_status_url:
             monitor = ApplicationMonitor(service, args.application_status_url)

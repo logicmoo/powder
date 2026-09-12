@@ -8,15 +8,24 @@ from aiohttp import WSMsgType, web
 
 from .security import Auth, COOKIE, HOST
 from .service import OperatorService
+from .hub import OperatorHub
 from .workspace import BridgeError
 
 STATIC = Path(__file__).with_name("static")
 PRINCIPAL = web.RequestKey("operator_principal", str)
 
 
-def create_app(service: OperatorService, auth: Auth, port: int) -> web.Application:
+def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int) -> web.Application:
     authority = f"{HOST}:{port}"
     origin = f"http://{authority}"
+
+    def selected(request) -> OperatorService:
+        provider = request.match_info.get("provider", "copilot")
+        if isinstance(service, OperatorHub):
+            return service.get(provider)
+        if provider != service.provider:
+            raise BridgeError("unknown_provider", "This test instance does not contain that provider.", 404)
+        return service
 
     @web.middleware
     async def boundary(request: web.Request, handler):
@@ -28,9 +37,10 @@ def create_app(service: OperatorService, auth: Auth, port: int) -> web.Applicati
             supplied_origin = request.headers.get("Origin")
             if supplied_origin is not None and supplied_origin != origin:
                 raise BridgeError("invalid_origin", "Cross-origin operator access is forbidden.", 403)
-            sensitive = request.path.startswith("/api/") or request.path == "/events"
+            event_channel = request.path == "/events" or request.path.startswith("/events/")
+            sensitive = request.path.startswith("/api/") or event_channel
             mutating = request.method not in ("GET", "HEAD")
-            if (mutating or request.path == "/events") and supplied_origin != origin:
+            if (mutating or event_channel) and supplied_origin != origin:
                 raise BridgeError("origin_required", "An exact operator Origin is required.", 403)
             if sensitive and request.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
                 raise BridgeError("invalid_fetch_site", "Cross-site operator requests are forbidden.", 403)
@@ -38,7 +48,7 @@ def create_app(service: OperatorService, auth: Auth, port: int) -> web.Applicati
                 request[PRINCIPAL] = auth.require(request.cookies.get(COOKIE))
             response = await handler(request)
         except BridgeError as error:
-            response = web.json_response({"error": {"code": error.code, "message": error.message}},
+            response = web.json_response({"error": {"code": error.code, "message": error.message, **error.details}},
                                          status=error.status)
         except (ValueError, TypeError, json.JSONDecodeError):
             response = web.json_response({"error": {"code": "invalid_request", "message": "Invalid request."}},
@@ -93,26 +103,37 @@ def create_app(service: OperatorService, auth: Auth, port: int) -> web.Applicati
         return value
 
     async def status(request):
-        return web.json_response(service.status())
+        return web.json_response(selected(request).status())
+
+    async def operators(request):
+        if isinstance(service, OperatorHub):
+            return web.json_response(service.overview())
+        return web.json_response({"schema": "powder.operators.v1", "operators": [service.status()]})
 
     async def command(request):
-        return web.json_response(await service.submit(request[PRINCIPAL], await payload(request)), status=202)
+        operator = selected(request)
+        body = await payload(request)
+        if isinstance(service, OperatorHub):
+            result = await service.submit(operator.provider, request[PRINCIPAL], body)
+        else:
+            result = await operator.submit(request[PRINCIPAL], body)
+        return web.json_response(result, status=202)
 
     async def command_status(request):
-        return web.json_response(service.journal.command(request.match_info["id"]))
+        return web.json_response(selected(request).journal.command(request.match_info["id"]))
 
     async def permission(request):
         data = await payload(request)
-        return web.json_response(await service.decide(request[PRINCIPAL], request.match_info["id"],
+        return web.json_response(await selected(request).decide(request[PRINCIPAL], request.match_info["id"],
                                                      data.get("decision")))
 
     async def cancel(request):
         await payload(request)
-        return web.json_response(await service.cancel(request[PRINCIPAL], request.match_info["id"]))
+        return web.json_response(await selected(request).cancel(request[PRINCIPAL], request.match_info["id"]))
 
     async def stop(request):
         data = await payload(request)
-        return web.json_response(await service.stop_operator(request[PRINCIPAL], data.get("confirmation")))
+        return web.json_response(await selected(request).stop_operator(request[PRINCIPAL], data.get("confirmation")))
 
     async def logout(request):
         await payload(request)
@@ -126,37 +147,38 @@ def create_app(service: OperatorService, auth: Auth, port: int) -> web.Applicati
             data = await payload(request)
             if "text" not in data or not isinstance(data["text"], str):
                 raise BridgeError("invalid_draft", "Draft text is required.", 400)
-            return web.json_response(service.draft(data["text"]))
-        return web.json_response(service.draft())
+            return web.json_response(selected(request).draft(data["text"]))
+        return web.json_response(selected(request).draft())
 
     async def websocket(request):
+        operator = selected(request)
         principal = request[PRINCIPAL]
-        if service.connections.get(principal, 0) >= 4:
+        if operator.connections.get(principal, 0) >= 4:
             raise BridgeError("connection_limit", "At most four views per paired session.", 429)
         cursor = int(request.query.get("since", "0"))
-        service.journal.events(cursor, 1)
+        operator.journal.events(cursor, 1)
         ws = web.WebSocketResponse(heartbeat=20, max_msg_size=1024)
         await ws.prepare(request)
         sockets.add(ws)
-        service.attach(principal)
+        operator.attach(principal)
 
         async def output_events():
             nonlocal cursor
-            await ws.send_json({"type": "status", "data": service.status()})
+            await ws.send_json({"type": "status", "provider": operator.provider, "data": operator.status()})
             while not ws.closed:
                 auth.require(request.cookies.get(COOKIE))
-                batch = service.journal.events(cursor)
+                batch = operator.journal.events(cursor)
                 if batch["events"]:
-                    await asyncio.wait_for(ws.send_json({"type": "events", **batch}), timeout=5)
+                    await asyncio.wait_for(ws.send_json({"type": "events", "provider": operator.provider, **batch}), timeout=5)
                     cursor = batch["lastSequence"]
                 else:
-                    async with service.changed:
-                        if service.journal.latest() <= cursor:
+                    async with operator.changed:
+                        if operator.journal.latest() <= cursor:
                             try:
-                                await asyncio.wait_for(service.changed.wait(), timeout=0.5)
+                                await asyncio.wait_for(operator.changed.wait(), timeout=0.5)
                             except TimeoutError:
                                 pass
-                if cursor >= service.journal.latest():
+                if cursor >= operator.journal.latest():
                     await asyncio.sleep(0.05)
 
         async def output():
@@ -178,7 +200,7 @@ def create_app(service: OperatorService, auth: Auth, port: int) -> web.Applicati
         finally:
             writer.cancel()
             await asyncio.gather(writer, return_exceptions=True)
-            service.detach(principal)
+            operator.detach(principal)
             sockets.discard(ws)
         return ws
 
@@ -205,6 +227,16 @@ def create_app(service: OperatorService, auth: Auth, port: int) -> web.Applicati
     app.router.add_get("/api/draft", draft)
     app.router.add_post("/api/draft", draft)
     app.router.add_get("/events", websocket)
+    app.router.add_get("/api/operators", operators)
+    app.router.add_get("/api/operators/{provider}/status", status)
+    app.router.add_post("/api/operators/{provider}/commands", command)
+    app.router.add_get("/api/operators/{provider}/commands/{id}", command_status)
+    app.router.add_post("/api/operators/{provider}/commands/{id}/cancel", cancel)
+    app.router.add_post("/api/operators/{provider}/permissions/{id}", permission)
+    app.router.add_post("/api/operators/{provider}/stop", stop)
+    app.router.add_get("/api/operators/{provider}/draft", draft)
+    app.router.add_post("/api/operators/{provider}/draft", draft)
+    app.router.add_get("/events/{provider}", websocket)
     app.on_startup.append(start)
     app.on_cleanup.append(close)
     app.on_shutdown.append(shutdown)

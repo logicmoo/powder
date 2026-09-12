@@ -10,25 +10,35 @@ FIRST VIEWPORT: Top navigation; connection summary; transcript/composer alongsid
 FORM: Narrow independent recovery surface; not a pretend terminal or replacement main application. -->
 <a class="skip" href="#transcript">Skip to operator transcript</a>
 <header><a class="brand" href="/">powder <span>Operator recovery</span></a>
-<nav aria-label="Recovery navigation"><a href="#transcript" aria-current="page">Operator / Copilot</a>
+<nav aria-label="Recovery navigation">
+<a id="copilot-chip" class="provider-chip" href="/?provider=copilot">Copilot operator</a>
+<a id="codex-chip" class="provider-chip" href="/?provider=codex">Codex operator</a>
 <a href="#inspector">Session inspector</a><button id="logout" type="button">Unpair browser</button></nav></header>
 <main>
 <section class="summary" aria-labelledby="title">
-<div><h1 id="title">Human operator</h1><p>Separate from Teacher / LLM and Symbolic / Cyc-only. No commands cross between agents.</p></div>
+<div><h1 id="title">Human operators</h1><p>Separate from Teacher / LLM and Symbolic / Cyc-only. Provider histories and permissions never cross.</p></div>
 <dl class="connections"><div><dt>Bridge</dt><dd id="bridge">Connecting</dd></div>
-<div><dt>Copilot</dt><dd id="copilot">Not connected</dd></div>
+<div><dt id="native-label">Native operator</dt><dd id="copilot">Not connected</dd></div>
 <div><dt>Prolog</dt><dd id="prolog">Not registered</dd></div></dl>
 </section>
 <p id="notice" class="notice" role="status">Loading the independent operator session…</p>
+<section id="conflict" class="notice" hidden aria-labelledby="conflict-title">
+<h2 id="conflict-title">Another operator is active in this checkout</h2>
+<p id="conflict-message"></p>
+<p>We recommend one operator at a time. You may run both; edits are not race-proof.
+Starting anyway does not approve any native tool permission.</p>
+<button id="start-anyway" type="button">Start anyway</button>
+<button id="dismiss-conflict" type="button">Do not start</button>
+</section>
 <div class="workspace">
 <section class="conversation" aria-labelledby="transcript-title">
 <div class="section-heading"><h2 id="transcript-title">Operator transcript</h2><button id="start" type="button" disabled>Start / resume session</button></div>
 <p id="empty" class="muted empty">No recorded operator messages. Nothing is sent automatically.</p>
 <ol id="transcript" tabindex="0" aria-label="Sequenced operator events"></ol>
 <form id="composer">
-<label for="prompt">Message to Operator / Copilot</label>
+<label id="prompt-label" for="prompt">Message to selected operator</label>
 <textarea id="prompt" rows="5" maxlength="65536" placeholder="Describe the action you want the human-operated Copilot session to consider." disabled></textarea>
-<div class="compose-actions"><span class="muted">Reconnect replays output only. An uncertain command is never resent automatically.</span>
+<div class="compose-actions"><span class="muted">Reconnect replays this provider’s output only. An uncertain command is never resent automatically.</span>
 <button id="send" type="submit" disabled>Send to operator</button></div>
 </form>
 </section>

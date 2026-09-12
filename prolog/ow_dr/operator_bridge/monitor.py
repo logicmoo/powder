@@ -34,9 +34,7 @@ class ApplicationMonitor:
                 state.update(online=True, generation=generation,
                     message="Prolog status responds; process identity and restart authority are not registered.")
             if state != self.service.app:
-                self.service.app = state
-                self.service.journal.event("application.availability", state)
-                await self.service.notify()
+                await self.service.update_application(state)
             await asyncio.sleep(self.interval)
 
     def probe(self):

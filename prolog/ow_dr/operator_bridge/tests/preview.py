@@ -5,6 +5,9 @@ import socket
 from aiohttp import web
 
 from ..adapter import UnavailableAdapter
+from ..hub import OperatorHub
+from ..journal import Journal
+from ..service import OperatorService
 from ..security import Auth, HOST
 from ..server import create_app
 from .support import fixture, remove
@@ -13,6 +16,9 @@ from .support import fixture, remove
 async def main():
     directory, journal, _, service = fixture()
     service.adapter = UnavailableAdapter()
+    service = OperatorHub({"copilot": service, "codex": OperatorService(
+        Journal(directory / "codex.sqlite3", service.workspace, provider="codex"),
+        service.workspace, UnavailableAdapter("codex"), verify=lambda: None)})
     auth = Auth("isolated fixture pairing phrase")
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))

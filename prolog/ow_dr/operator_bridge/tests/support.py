@@ -15,18 +15,26 @@ class FakeAdapter:
     name = "test-only-fake"
     available = True
 
-    def __init__(self):
+    def __init__(self, provider="copilot"):
+        self.provider = provider
         self.sent = []
         self.starts = []
+        self.start_cwds = []
+        self.return_cwd = None
+        self.return_process_cwd = None
+        self.session_id = "documented-test-session"
+        self.owned_pids = []
         self.stops = 0
         self.cancelled = 0
         self.gate = asyncio.Event()
         self.approved = None
         self.mode = "normal"
 
-    async def start(self, resume_id):
+    async def start(self, resume_id, *, cwd):
         self.starts.append(resume_id)
-        return {"sessionId": resume_id or "documented-test-session"}
+        self.start_cwds.append(cwd)
+        return {"sessionId": resume_id or self.session_id, "cwd": self.return_cwd or cwd,
+                "processCwd": self.return_process_cwd or cwd}
 
     async def send(self, text, emit, permission):
         self.sent.append(text)
@@ -49,8 +57,8 @@ class FakeAdapter:
 
     def status(self):
         return {"name": self.name, "available": True, "connected": bool(self.starts),
-                "sessionId": "documented-test-session" if self.starts else None,
-                "resumeSupported": True, "ownedPids": []}
+                "sessionId": self.session_id if self.starts else None,
+                "resumeSupported": True, "ownedPids": self.owned_pids}
 
 
 def fixture():

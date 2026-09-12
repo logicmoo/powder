@@ -4,10 +4,12 @@ import asyncio
 import os
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 
 from .adapter import OperatorAdapter
 from .journal import Journal
 from .security import public_text
+from .providers import provider_label
 from .workspace import BridgeError, Workspace
 
 
@@ -15,6 +17,9 @@ class OperatorService:
     def __init__(self, journal: Journal, workspace: Workspace, adapter: OperatorAdapter,
                  *, verify: Callable[[], None] | None = None):
         self.journal, self.workspace, self.adapter = journal, workspace, adapter
+        self.provider = journal.provider
+        if adapter.provider != self.provider:
+            raise BridgeError("adapter_provider_mismatch", "Native adapters, authentication and sessions cannot cross providers.")
         self.verify = verify or workspace.verify
         self.instance_id = str(uuid.uuid4())
         self.connections: dict[str, int] = {}
@@ -32,11 +37,15 @@ class OperatorService:
                     "restartAvailable": False, "message": "Prolog is not registered with this bridge."}
 
     async def run(self) -> None:
-        self.task = asyncio.create_task(self._worker(), name="operator-dispatch")
+        self.task = asyncio.create_task(self._worker(), name=f"operator-dispatch-{self.provider}")
 
     async def notify(self) -> None:
         async with self.changed:
             self.changed.notify_all()
+
+    def native_session_id(self):
+        return self.journal.get("native_session_id") or (
+            self.journal.get("sdk_session_id") if self.provider == "copilot" else None)
 
     def attach(self, principal: str) -> None:
         self.connections[principal] = self.connections.get(principal, 0) + 1
@@ -52,17 +61,28 @@ class OperatorService:
         if not self.connections.get(principal):
             raise BridgeError("browser_disconnected", "Connect the operator view before sending input.")
 
-    async def submit(self, principal: str, payload: dict) -> dict:
-        self.human(principal)
+    def validate_payload(self, payload: dict) -> tuple[str, str]:
+        if set(payload) - {"id", "kind", "text", "startAnyway"}:
+            raise BridgeError("unsupported_fields", "Provider, process and thread working directories are server-owned.", 400)
         kind = payload.get("kind")
         if kind not in ("start_session", "prompt"):
             raise BridgeError("unsupported_command", "Only operator session start or prompt is supported.", 400)
         text = payload.get("text", "")
         if not isinstance(text, str) or len(text) > 65536 or (kind == "prompt" and not text.strip()):
             raise BridgeError("invalid_prompt", "Supply 1–65536 characters.", 400)
+        if "startAnyway" in payload and (kind != "start_session" or type(payload["startAnyway"]) is not bool):
+            raise BridgeError("invalid_start_confirmation", "Start anyway is a boolean session-start acknowledgement only.", 400)
+        return kind, text
+
+    async def submit(self, principal: str, payload: dict) -> dict:
+        self.human(principal)
+        kind, text = self.validate_payload(payload)
         self.verify()
+        previous = self.journal.existing(payload.get("id"), kind, text)
+        if previous is not None:
+            return previous
         if self.stopped or not self.adapter.available:
-            raise BridgeError("adapter_unavailable", "No live Copilot adapter is connected.", 503)
+            raise BridgeError("adapter_unavailable", f"No live {self.provider} adapter is connected.", 503)
         command, created = self.journal.submit(payload.get("id"), kind, text)
         if created:
             self.queue.put_nowait((command["id"], kind, text))
@@ -87,14 +107,24 @@ class OperatorService:
                     raise BridgeError("browser_disconnected", "No browser is connected; command was not dispatched.")
                 if kind == "start_session":
                     if self.connected:
-                        session = {"sessionId": self.journal.get("sdk_session_id")}
+                        session = {"sessionId": self.native_session_id(),
+                                   "cwd": self.workspace.root, "processCwd": self.workspace.root}
                     else:
                         dispatched = True
-                        session = await self.adapter.start(self.journal.get("sdk_session_id"))
+                        session = await self.adapter.start(self.native_session_id(), cwd=self.workspace.root)
+                    native_cwd = session.get("cwd")
+                    process_cwd = session.get("processCwd")
+                    if (not isinstance(native_cwd, str) or not isinstance(process_cwd, str)
+                            or Path(native_cwd).resolve() != Path(self.workspace.root).resolve()
+                            or Path(process_cwd).resolve() != Path(self.workspace.root).resolve()):
+                        raise BridgeError("session_workspace_mismatch",
+                            "Native session/thread working directory is unverified or belongs to another repository. No prompt was sent.")
                     session_id = session.get("sessionId")
                     if not isinstance(session_id, str) or not session_id:
                         raise BridgeError("invalid_session", "Adapter did not return a documented session identifier.")
-                    self.journal.set("sdk_session_id", session_id)
+                    self.journal.set("native_session_id", session_id)
+                    if self.provider == "copilot":
+                        self.journal.set("sdk_session_id", session_id)
                     self.connected = True
                     self.journal.event("session.connected", {"sessionId": session_id, "adapter": self.adapter.name})
                 else:
@@ -119,7 +149,8 @@ class OperatorService:
                 await self.notify()
 
     async def output(self, text: str) -> None:
-        self.journal.event("assistant.output", {"commandId": self.active, "text": public_text(text)})
+        self.journal.event("assistant.output", {"commandId": self.active, "source": self.provider,
+                                              "text": public_text(text)})
         await self.notify()
 
     async def permission(self, kind: str, title: str, detail: str) -> bool:
@@ -221,13 +252,22 @@ class OperatorService:
         adapter = self.adapter.status()
         state = ("awaiting_permission" if self.waiters else "busy" if self.active
                  else "idle" if self.connected and not self.stopped else "offline")
-        return {"schema": "powder.operator.v1", "agentType": "operator", "name": "Operator / Copilot",
+        return {"schema": "powder.operator.v1", "agentType": "operator", "provider": self.provider,
+                "name": provider_label(self.provider), "role": provider_label(self.provider),
+                "outputSource": self.provider,
                 "state": state, "stopped": self.stopped, "stopOutcome": self.stop_outcome,
                 "bridge": {"online": True, "pid": os.getpid(), "instanceId": self.instance_id},
                 "workspace": self.workspace.json(), "conversationId": self.journal.get("conversation_id"),
-                "sdkSessionId": self.journal.get("sdk_session_id"), "adapter": adapter,
+                "nativeSessionId": self.native_session_id(),
+                "sdkSessionId": self.native_session_id() if self.provider == "copilot" else None,
+                "adapter": adapter,
                 "application": self.app, "lastSequence": self.journal.latest(),
                 "permissions": self.journal.pending(), "commands": self.journal.commands()}
+
+    async def update_application(self, state: dict) -> None:
+        self.app = state
+        self.journal.event("application.availability", state)
+        await self.notify()
 
     def draft(self, text: str | None = None) -> dict:
         if text is not None:

@@ -1,6 +1,14 @@
 'use strict';
 const $ = id => document.getElementById(id);
+const selectedProvider = new URLSearchParams(location.search).get('provider');
+const provider = ['copilot', 'codex'].includes(selectedProvider) ? selectedProvider : 'copilot';
+const providerName = provider === 'codex' ? 'Codex operator' : 'Copilot operator';
+const prefix = `/api/operators/${provider}`;
 let socket, sequence = 0, connected = false, state, reconnect, refreshTimer, draftTimer, pendingSend;
+let draftLoaded = false, draftWrites = Promise.resolve();
+$(`${provider}-chip`).setAttribute('aria-current', 'page');
+$('native-label').textContent = providerName;
+$('prompt-label').textContent = `Message to ${providerName}`;
 function text(tag, value, className) {
   const node = document.createElement(tag); node.textContent = value;
   if (className) node.className = className;
@@ -9,13 +17,22 @@ function text(tag, value, className) {
 function notice(message, error = false) {
   $('notice').textContent = message; $('notice').classList.toggle('error', error);
 }
+function saveDraft(value) {
+  draftWrites = draftWrites.catch(() => {}).then(() => api('/api/draft', {text: value}));
+  return draftWrites;
+}
 async function api(path, body) {
-  const response = await fetch(path, body === undefined ? {cache: 'no-store'} : {
+  const scopedPath = path === '/api/logout' ? path
+    : path === '/api/operator/stop' ? `${prefix}/stop` : prefix + path.slice(4);
+  const response = await fetch(scopedPath, body === undefined ? {cache: 'no-store'} : {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
   });
   if (response.status === 401) { location.assign('/'); throw new Error('Browser pairing expired.'); }
   const value = await response.json();
-  if (!response.ok) throw new Error(value.error?.message || 'Bridge request failed.');
+  if (!response.ok) {
+    const error = new Error(value.error?.message || 'Bridge request failed.');
+    error.code = value.error?.code; error.details = value.error; throw error;
+  }
   return value;
 }
 function renderStatus(value) {
@@ -23,22 +40,25 @@ function renderStatus(value) {
     sequence = 0; $('transcript').replaceChildren(); $('empty').hidden = false;
   }
   state = value;
+  $('title').textContent = value.role;
   $('bridge').textContent = connected ? 'Online' : 'Reconnecting';
   $('copilot').textContent = value.state.replaceAll('_', ' ');
   $('prolog').textContent = value.application.configured ? (value.application.online ? 'Online' : 'Offline') : 'Not registered';
   const available = connected && value.adapter.available;
   $('start').disabled = !available || value.stopped || value.state !== 'offline';
-  $('prompt').disabled = !available || value.state === 'offline';
-  $('send').disabled = $('prompt').disabled;
-  if (!value.adapter.available) notice('Live Copilot adapter is not configured. This recovery transport is online, but it is not a live CLI.');
+  $('prompt').disabled = !connected;
+  $('send').disabled = !available || value.stopped || value.state === 'offline';
+  if (!value.adapter.available) notice(`${providerName} adapter is not configured. Executable discovery does not mean a live session or authenticated account.`);
   else if (value.stopOutcome === 'unknown') notice('Native stop outcome is unknown. Inspect the owned CLI session; no automatic retry will occur.', true);
   else if (value.stopped) notice('Operator stopped explicitly. History remains available; a new bridge start is required for another native session.');
   else if (!connected) notice('Reconnecting to the bridge. Output will replay; commands will not.', true);
-  else notice('Operator session is independent of Prolog. Each native permission needs your explicit decision.');
+  else notice(`${providerName} is independent of Prolog. Each native permission needs your explicit decision.`);
   const identity = $('identity'); identity.replaceChildren();
   for (const [label, item] of [['Workspace', value.workspace.root], ['Branch', value.workspace.branch],
-    ['Conversation', value.conversationId], ['Native session', value.sdkSessionId || 'Not started'],
+    ['Conversation', value.conversationId], ['Native session / thread', value.nativeSessionId || 'Not started'],
     ['Bridge PID', value.bridge.pid], ['CLI PIDs', value.adapter.ownedPids.join(', ') || 'None'],
+    ['Provider', value.provider], ['Executable', value.adapter.executable?.path || 'Not discovered / test adapter'],
+    ['Native authentication', value.adapter.authentication || 'Provider-owned; not shared'],
     ['Application lifecycle', value.application.message || 'No restart authority']]) {
     identity.append(text('dt', label), text('dd', String(item)));
   }
@@ -84,7 +104,7 @@ function event(item) {
   sequence = item.sequence;
   $('empty').hidden = true;
   const node = document.createElement('li');
-  node.append(text('div', `${item.sequence} · ${item.kind}`, 'event-label'));
+  node.append(text('div', `${provider} · ${item.sequence} · ${item.kind}`, 'event-label'));
   node.append(text('pre', item.data.text || item.data.message || item.data.title ||
     [item.data.id, item.data.state || item.data.decision || item.data.sessionId].filter(Boolean).join(' · ')));
   $('transcript').append(node);
@@ -92,10 +112,11 @@ function event(item) {
 }
 function connect() {
   clearTimeout(reconnect);
-  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/events?since=${sequence}`);
+  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/events/${provider}?since=${sequence}`);
   socket.addEventListener('open', () => { connected = true; refresh(); });
   socket.addEventListener('message', message => {
     const value = JSON.parse(message.data);
+    if (value.provider !== provider) return;
     if (value.type === 'status') renderStatus(value.data);
     if (value.type === 'events') {
       value.events.forEach(event);
@@ -108,18 +129,27 @@ function connect() {
     reconnect = setTimeout(connect, document.hidden ? 10000 : 1500);
   });
 }
-async function submit(kind, content = '') {
+async function submit(kind, content = '', startAnyway = false) {
   if (pendingSend?.sending) return;
   const id = pendingSend && pendingSend.kind === kind && pendingSend.text === content
     ? pendingSend.id : crypto.randomUUID();
   pendingSend = {id, kind, text: content, sending: true};
   try {
-    await api('/api/commands', {id, kind, text: content});
-    if (kind === 'prompt') { $('prompt').value = ''; await api('/api/draft', {text: ''}); }
+    const body = {id, kind, text: content};
+    if (kind === 'start_session' && startAnyway) body.startAnyway = true;
+    await api('/api/commands', body);
+    $('conflict').hidden = true;
+    if (kind === 'prompt' && $('prompt').value === content) {
+      clearTimeout(draftTimer); $('prompt').value = ''; await saveDraft('');
+    }
     pendingSend = null;
     await refresh();
   } catch (error) {
     pendingSend.sending = false;
+    if (error.code === 'operator_conflict') {
+      $('conflict-message').textContent = `${error.message} Active: ${error.details.conflicts.join(', ')}.`;
+      $('conflict').hidden = false; $('start-anyway').focus(); return;
+    }
     // Query only: a timeout is not permission to repeat a model/tool request.
     try {
       const command = await api(`/api/commands/${encodeURIComponent(id)}`);
@@ -132,10 +162,16 @@ async function submit(kind, content = '') {
 $('composer').addEventListener('submit', event => { event.preventDefault(); submit('prompt', $('prompt').value); });
 $('prompt').addEventListener('input', () => {
   clearTimeout(draftTimer);
-  draftTimer = setTimeout(() => api('/api/draft', {text: $('prompt').value})
+  draftTimer = setTimeout(() => saveDraft($('prompt').value)
     .catch(error => notice(`Draft not saved: ${error.message}`, true)), 400);
 });
 $('start').addEventListener('click', () => submit('start_session'));
+$('start-anyway').addEventListener('click', () => {
+  if (pendingSend?.kind === 'start_session') submit('start_session', pendingSend.text, true);
+});
+$('dismiss-conflict').addEventListener('click', () => {
+  $('conflict').hidden = true; pendingSend = null;
+});
 $('stop').addEventListener('click', async () => {
   try { await api('/api/operator/stop', {confirmation: $('confirmation').value}); $('confirmation').value = ''; await refresh(); }
   catch (error) { notice(error.message, true); }
@@ -144,5 +180,15 @@ $('logout').addEventListener('click', async () => {
   try { await api('/api/logout', {}); location.assign('/'); }
   catch (error) { notice(error.message, true); }
 });
-api('/api/draft').then(value => { $('prompt').value = value.text; }).catch(error => notice(error.message, true));
+document.querySelectorAll('.provider-chip').forEach(link => {
+  link.addEventListener('click', async event => {
+    event.preventDefault(); clearTimeout(draftTimer);
+    try {
+      if (draftLoaded) await saveDraft($('prompt').value);
+      location.assign(link.href);
+    } catch (error) { notice(`Provider switch paused: draft was not saved. ${error.message}`, true); }
+  });
+});
+api('/api/draft').then(value => { $('prompt').value = value.text; draftLoaded = true; })
+  .catch(error => notice(error.message, true));
 connect();
