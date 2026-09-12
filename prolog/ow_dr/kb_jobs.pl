@@ -631,7 +631,7 @@ job_status(Id,Status) :-
 detail_status(M,Outcome,Status) :-
     findall(P,unit_progress(M.id,_,P),Active),
     Base=M.put(progress,M.progress.put(activeFiles,Active)),
-    (Outcome=result(Result)->Status=Base.put(result,Result)
+    (Outcome=result(Result)->json_value(Result,PublicResult),Status=Base.put(result,PublicResult)
     ;Outcome=failed(Error)->error_details(Error,Details),Status=Base.put(error,Details)
     ;Status=Base).
 error_details(error(compile_incomplete(Summary),_),Details) :- !,

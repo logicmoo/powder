@@ -70,4 +70,11 @@ test(failed_compile_summary_is_complete_json_with_native_diagnostics) :-
     Read.summary.results=[Result],Result.mapping_rows=[Mapped],
     assertion(Mapped.type=="warnings"),assertion(Mapped.message=="Mapping shape mismatch").
 
+test(successful_index_summary_also_normalizes_native_diagnostics) :-
+    Meta=job{id:'json-fixture',progress:json{}},
+    kb_jobs:detail_status(Meta,result(json{mapping_rows:[warnings("Shape mismatch")]}),Status),
+    with_output_to(string(Text),json_write_dict(current_output,Status)),
+    atom_json_dict(Text,Read,[]),
+    Read.result.mapping_rows=[Mapped],assertion(Mapped.type=="warnings").
+
 :- end_tests(worker_jobs).
