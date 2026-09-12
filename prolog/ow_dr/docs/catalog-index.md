@@ -97,6 +97,10 @@ This builds `tmp\catalog\query.data` and versioned, immutable per-source posting
 files. Each term posting has its own validated digest and exact source/MT/ID/
 position locators. Requests seek the selected term rather than parsing entire
 per-source occurrence indexes. Old projections remain usable during publication.
+Publication verifies that the current eligible source manifest still matches
+the catalog; removed directories cannot be reintroduced as global providers
+from retained artifacts. The CLI reports measured projection time, and progress
+retains its known source denominator through the postings phase.
 
 `kb_catalog_schema` combines positive type and hierarchy claims with explicit
 provenance. Multiple categories are retained. MetaRelation schema predicates
@@ -110,6 +114,9 @@ Term queries accept `scope=all|loaded|unloaded`, `facet=definition|semantic|cont
 source/MT filters and pagination. Counts apply before pagination; repeated
 positions and distinct assertion counts are separate. Visible assertion details
 recheck authorized original paths and source/normalized hashes.
+Catalog assertion cards expose exact matching structural paths. MT blocks offer
+an all-indexed context view, including unloaded sources; this does not load the
+MT or change the active generation.
 
 ## External job visibility
 

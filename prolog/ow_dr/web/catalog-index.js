@@ -1,4 +1,4 @@
-import { expressionText, renderExpression, routeHref } from './render.js';
+import { expressionText, groupAssertions, renderExpression, routeHref } from './render.js';
 
 export const CATALOG_SCOPES = Object.freeze([
   ['all', 'All indexed files'], ['loaded', 'Loaded files'], ['unloaded', 'Unloaded files'],
@@ -29,6 +29,12 @@ export function catalogAssertionHref(item, term) {
   return item.loaded ? routeHref('assertion', { id: item.id })
     : routeHref('catalog-assertion', { term, source: item.source, id: item.id });
 }
+export function catalogJobText(label, job = {}) {
+  return `${label}: ${job.state ?? 'not started'}; phase ${job.phase ?? 'not started'}; ${job.completed ?? '?'} of ${job.total ?? '?'} files processed.`;
+}
+export function catalogContextHref(mt, scope = 'all') {
+  return routeHref('definitions', { term: mt, facet: 'context', scope });
+}
 
 function filters(host, route, values, fields) {
   const { element: el } = host;
@@ -53,9 +59,10 @@ async function available(host, signal, page) {
   page.append(coveragePanel(host, status),
     host.element('p', { className: 'empty-state', role: 'status' },
       'The query catalog has not been published yet. Indexing does not load files into the active KB.'),
-    status.progress && host.element('p', { className: 'muted' },
-      `External catalog indexer: ${status.progress.state ?? 'unknown'}; phase ${status.progress.phase ?? 'not started'}; ${status.progress.completed ?? 0} of ${status.progress.total ?? status.progress.expectedFiles ?? '?'} files processed.`),
+    host.element('p', { className: 'muted' }, catalogJobText('Source catalog', status.progress)),
+    host.element('p', { className: 'muted' }, catalogJobText('Query publication', status.projectionProgress)),
     status.progress?.error && host.element('p', { className: 'statistics-error', role: 'alert' }, status.progress.error.message),
+    status.projectionProgress?.error && host.element('p', { className: 'statistics-error', role: 'alert' }, status.projectionProgress.error.message),
     host.element('p', { className: 'muted' }, 'This external process is tracked separately from the app file-task queue. A saved count does not mean a worker is still running.'),
     host.link('Task progress', 'tasks', {}, 'button secondary'));
   return false;
@@ -81,7 +88,8 @@ export async function catalogSearchPage(host, route, signal) {
       el('tbody', {}, data.items.map(item => el('tr', {},
         el('td', {}, renderExpression(item.expression)),
         el('td', {}, item.groups.join(', '),
-          el('div', { className: 'muted' }, (item.typeEntries ?? []).map(type => renderExpression(type.expression, { inline: true })))),
+          el('div', { className: 'muted' }, (item.typeEntries ?? []).flatMap((type, index) =>
+            [index ? ', ' : '', renderExpression(type.expression, { inline: true })]))),
         el('td', {}, `${item.files} files; ${item.sentences} assertions; ${item.occurrences} occurrences`),
         el('td', {}, link(`Definitional Info (${item.definitions})`, 'definitions', { term: item.term, scope: params.scope }),
           el('div', {}, link('All occurrences', 'definitions', { term: item.term, facet: 'semantic', scope: params.scope })))))))));
@@ -90,8 +98,13 @@ export async function catalogSearchPage(host, route, signal) {
   return page;
 }
 
-function catalogCards(host, items, term, detail = false) {
-  const cards = host.assertions(items, { term, detail });
+function catalogCards(host, items, term, { detail = false, offset = 0, scope = 'all' } = {}) {
+  const cards = host.assertions(items, { term, detail, offset });
+  const groups = groupAssertions(items);
+  for (const [index, header] of [...cards.querySelectorAll('.assertion-group-heading')].entries()) {
+    const mt = groups[index]?.mt;
+    if (mt) header.append(host.element('a', { href: catalogContextHref(mt, scope) }, 'All indexed MT assertions'));
+  }
   const byId = new Map(items.map(item => [String(item.id), item]));
   for (const card of cards.querySelectorAll('.assertion-view')) {
     const item = byId.get(card.dataset.assertionId);
@@ -100,6 +113,10 @@ function catalogCards(host, items, term, detail = false) {
     card.prepend(host.element('p', { className: 'muted' },
       item.loaded ? 'Loaded source · catalog evidence' : 'Unloaded source · catalog evidence',
       ' · ', host.file(item.source, item.line)));
+    if (item.positions?.length) card.append(host.element('details', { className: 'catalog-positions' },
+      host.element('summary', {}, `Matching structural positions (${item.positions.length})`),
+      host.element('ul', {}, item.positions.map(path => host.element('li', {},
+        host.element('code', {}, JSON.stringify(path)))))));
   }
   return cards;
 }
@@ -138,7 +155,7 @@ export async function catalogTermPage(host, route, signal) {
       ` ${entry.sentences} assertions · `,
       link('Filter to file', route.name, { ...params, source: entry.source, offset: 0 }),
       ' · ', link('Plan load with dependencies', 'packs', { root: entry.source }))))));
-  if (data.items.length) page.append(catalogCards(host, data.items, data.term));
+  if (data.items.length) page.append(catalogCards(host, data.items, data.term, { offset: params.offset, scope: params.scope }));
   else page.append(el('p', { className: 'empty-state' }, 'No matching assertions in this indexed snapshot. Incomplete file coverage is not proof that definitions are absent.'));
   page.append(pagination(data, route),
     el('p', { className: 'muted' }, 'Schema targets use declared argument roles, not mention-only matches. MetaRelation taxonomy evidence is not MT inheritance or permission to execute source rules.'));
@@ -152,7 +169,7 @@ export async function catalogAssertionPage(host, route, signal) {
   }, { signal });
   return host.element('div', { className: 'catalog-index' },
     host.heading('Catalog assertion', 'Read-only original-file evidence. Loading a provider is a separate, explicit action.'),
-    catalogCards(host, [item], term, true),
+    catalogCards(host, [item], term, { detail: true }),
     host.link('Definitional Info', 'definitions', { term }),
     ' · ', host.link('Plan load with dependencies', 'packs', { root: item.source }));
 }

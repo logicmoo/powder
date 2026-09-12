@@ -47,11 +47,13 @@ build_query_catalog(Report) :-
         Error,(kb_catalog_index:fail_catalog_run(Progress,Error),throw(Error))),
       kb_cache:release_lock(Lock)).
 build_query_locked(File,Report) :-
+    statistics(walltime,[Start,_]),nb_setval(powder_projection_started,Start),
     kb_catalog_index:catalog_paths(CatalogFile,_),
     kb_cache:file_digest(CatalogFile,Revision),
     kb_catalog_index:read_data(CatalogFile,catalog_snapshot(Catalog)),
+    verify_catalog_manifest(Catalog.expected),
     include(fresh,Catalog.files,Files),
-    length(Files,Total),flag(powder_projection_completed,_,0),
+    length(Files,Total),nb_setval(powder_projection_total,Total),flag(powder_projection_completed,_,0),
     maplist(file_evidence(Total),Files,Chunks),append(Chunks,Evidence),
     projection_progress(taxonomy,'',Total,Total),
     build_catalog_schema(Evidence,Schema),
@@ -67,11 +69,20 @@ build_query_locked(File,Report) :-
     keysort(FilePairs,SortedFiles),list_to_assoc(SortedFiles,ByFile),
     kb_cache:file_digest(CatalogFile,After),
     (After==Revision->true;throw(error(catalog_changed_during_projection,_))),
+    verify_catalog_manifest(Catalog.expected),
+    (forall(member(SourceFile,Files),file_stats_current(SourceFile))->true;
+      throw(error(catalog_stale(source_changed_during_projection),_))),
     Projection=query_catalog{schema:catalog_query_v1,revision:Revision,
       taxonomy:SchemaHash,coverage:Catalog.coverage,verifiedAt:Catalog.verifiedAt,
       expected:Catalog.expected,terms:ByTerm,postings:Terms,ranked:Order,files:ByFile},
     kb_catalog_index:atomic_data(File,catalog_query(Projection)),
-    length(Entries,N),Report=json{terms:N,coverage:Catalog.coverage,revision:Revision}.
+    statistics(walltime,[End,_]),Seconds is (End-Start)/1000,
+    length(Entries,N),Report=json{terms:N,coverage:Catalog.coverage,revision:Revision,seconds:Seconds}.
+verify_catalog_manifest(Expected) :-
+    directory_manifest('KBs',_,Manifest),pairs_keys(Manifest,Paths),
+    maplist(path_key,Paths,CurrentKeys0),sort(CurrentKeys0,CurrentKeys),
+    maplist(path_key,Expected,ExpectedKeys0),sort(ExpectedKeys0,ExpectedKeys),
+    (CurrentKeys==ExpectedKeys->true;throw(error(catalog_stale(source_manifest),_))).
 fresh(File) :- File.status==fresh.
 file_evidence(Total,File,Evidence) :-
     flag(powder_projection_completed,N,N),projection_progress(taxonomy_inputs,File.path,N,Total),
@@ -80,7 +91,9 @@ file_evidence(Total,File,Evidence) :-
     flag(powder_projection_completed,_,N+1).
 projection_progress(Phase,Path,Completed,Total) :-
     query_progress(File),kb_catalog_index:check_catalog_cancel(File),
-    kb_catalog_index:write_progress(File,json{phase:Phase,path:Path,completed:Completed,total:Total}).
+    (Total==null->nb_getval(powder_projection_total,Expected);Expected=Total),
+    nb_getval(powder_projection_started,Start),statistics(walltime,[Now,_]),Elapsed is (Now-Start)/1000,
+    kb_catalog_index:write_progress(File,json{phase:Phase,path:Path,completed:Completed,total:Expected,elapsed:Elapsed}).
 read_source(File,Data) :-
     kb_catalog_index:read_data(File.cache,source_catalog(Data)),
     (Data.identity==File.identity->true;throw(error(catalog_stale(File.path),_))).

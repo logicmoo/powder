@@ -109,5 +109,21 @@ test(source_pack_accessor_is_current_and_detects_removed_source,
     assertion(is_dict(File.dependencySummary)),
     delete_file(Source),source_pack_snapshot(Stale),assertion(Stale.status==stale),
     assertion(Stale.coverage.complete==false).
+test(removed_sources_prevent_republishing_ghost_global_providers,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(arity p 1)\n",Source),build,
+    kb_catalog_query:query_file(File),kb_cache:file_digest(File,Before),
+    delete_file(Source),
+    catch(build_query_catalog(_),Error,true),
+    assertion(Error=error(catalog_stale(source_manifest),_)),
+    kb_cache:file_digest(File,Before).
+test(query_publication_has_measured_elapsed_and_known_denominator,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(arity p 1)\n",_),refresh_catalog(all,_),
+    build_query_catalog(Report),assertion(Report.seconds>=0),
+    catalog_query_status(Status),
+    assertion(Status.projectionProgress.total==1),
+    assertion(Status.projectionProgress.completed==1),
+    assertion(Status.projectionProgress.state==succeeded).
 
 :- end_tests(catalog_query).
