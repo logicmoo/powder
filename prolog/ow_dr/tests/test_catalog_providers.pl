@@ -154,6 +154,30 @@ test(diamond_and_cyclic_types_keep_source_occurrences_not_path_products) :-
     extension(D,T,E),declared(E,x_p,Proofs),length(Proofs,2),
     findall(Id,(member(X,Proofs),Id=X.id),Ids),sort(Ids,[a10,a11]),
     forall(member(X,Proofs),assertion(X.proofAlternativesExhaustive==false)).
+test(equivalent_roots_do_not_duplicate_one_local_type_role) :-
+    taxonomy([],Base),proof(P),
+    put_assoc(x_UnaryFunction,Base.categories,
+      [membership(functions,x_Function,[P]),
+       membership(functions,'x_Function-Denotational',[P])],Classes),
+    T=Base.put(categories,Classes),
+    data([c(isa,x_f,x_UnaryFunction,1,[])],[],[],D),
+    extension(D,T,E),declared(E,x_f,[_]).
+
+test(global_type_duplicates_are_not_copied_into_each_local_assertion) :-
+    taxonomy([],Base),
+    findall(type(x_BinaryPredicate,e('KBs/remote.krf',Id,N,x_RemoteMt,[])),
+      (between(1,300,N),format(atom(Id),'a~16r',[N])),GlobalTypes),
+    put_assoc(x_p,Base.types,GlobalTypes,Types),T=Base.put(types,Types),
+    findall(s(N,Id,N,x_LocalMt,[],0),
+      (between(1,300,N),Number is N+1000,format(atom(Id),'a~16r',[Number])),Sentences),
+    findall(c(isa,x_p,x_BinaryPredicate,N,[]),between(1,300,N),Claims),
+    D=source{dialect:krf,sentences:Sentences,claims:Claims,applications:[],terms:[]},
+    extension(D,T,E),declared(E,x_p,Proofs),length(Proofs,300),
+    forall(member(Proof,Proofs),
+      (get_dict(typeAssertions,Proof,[Assertion]),get_dict(id,Proof,Id),
+       assertion(Assertion.id==Id),assertion(Assertion.sourceFile=='KBs/does-not-exist.krf'))),
+    term_size(E,Cells),assertion(Cells<100000),
+    get_assoc(x_p,T.types,Unchanged),assertion(Unchanged==GlobalTypes).
 
 test(actual_catalog_projection_excludes_negation_implication_and_quote) :-
     taxonomy([],T),

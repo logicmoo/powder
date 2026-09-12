@@ -14,10 +14,13 @@ a provider. Compound targets remain explicitly unresolved, not their functors.
 
 The ground JSON DTO has schema, source, status, declared, coverage and reasons.
 Declared entries have symbol, arities, roles, polarities, evidenceCount and
-evidence. Each evidence retains the local assertion location/names, all matching
-type proofs or the complete target-slot proof. These are declarations, never
-implementations or executable-rule claims. Source is a catalog path; historical
-source paths absent from this projection are explicitly unknown.
+evidence. Each evidence retains its local assertion location/names and one
+representative justification per callable category/root or definition slot.
+Alternative global taxonomy proofs are not multiplied into local occurrences;
+proofAlternativesExhaustive is explicitly false. The authoritative catalog still
+retains those global claims. These are declarations, never implementations or
+executable-rule claims. Historical source paths absent from this projection are
+explicitly unknown.
 
 No files, clocks, caches, global registries, query modules or KB bodies are read
 or changed. Missing projection fields/taxonomy and unsupported dialects yield
@@ -124,9 +127,9 @@ type_template(Taxonomy,Type,Before,After) :-
       assoc_to_values(Witnesses,Values),put_assoc(Type,Before,Values,After)
     ;After=Before).
 type_witness(Type,membership(Group,Root,Chain),Before,After) :-
-    (callable_group(Type,Group),\+get_assoc(Group-Root,Before,_)->
+    (callable_group(Type,Group),\+get_assoc(Group,Before,_)->
       unique_path(Chain,Unique),proof_json(Unique,Hierarchy),
-      put_assoc(Group-Root,Before,type_witness(Group,Root,Hierarchy),After)
+      put_assoc(Group,Before,type_witness(Group,Root,Hierarchy),After)
     ;After=Before).
 
 slot_templates(Applications,Taxonomy,Templates) :-

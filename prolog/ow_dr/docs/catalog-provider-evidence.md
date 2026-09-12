@@ -8,7 +8,8 @@ implementation.
 Before joining taxonomy evidence to local assertions, the producer:
 
 1. Deduplicates local claims and application positions.
-2. Builds one compact witness per type/group/root and per schema predicate/slot.
+2. Builds one compact witness per type/group and per schema predicate/slot.
+   Equivalent hierarchy roots do not duplicate a local type-role declaration.
 3. Carries only ordinal/head/slot/path in target requests, not entire proof trees.
 4. Uses the local `isa` assertion as its type-declaration source, rather than
    copying all other files' declarations into that local evidence.
