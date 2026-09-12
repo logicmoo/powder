@@ -7,7 +7,8 @@
                     publish_staged_sources/4,publish_staged_addition/3,
                     prepare_source/2,prepare_cached_source/2,stage_source/2,cleanup_staged/1,
                     term_assertions/2, mt_assertions/2, term_exists/1, microtheories/1,
-                    metadata_retention_stats/1,apply_metadata_retention_locked/1]).
+                    metadata_retention_stats/1,apply_metadata_retention_locked/1,
+                    apply_metadata_retention/2]).
 :- use_module(kb_paths).
 :- use_module(kb_activity).
 :- use_module(kb_runtime, []).
@@ -16,6 +17,7 @@
 :- use_module(kb_index, []).
 :- use_module(kb_reader, []).
 :- use_module(kb_metadata_policy, []).
+:- use_module(kb_metadata_audit, []).
 :- use_module(kb_terms).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
@@ -291,57 +293,91 @@ activate_record(Source, Module, record(Id,Semantic,RawMetadata)) :-
     assertz(mt_locator(Mt,Id)).
 
 metadata_retention_stats(Report) :-
-    with_mutex(openworld_store,
-      (findall(Origin-Store-Stats,retained_metadata_measurement(Origin,Store,Stats),Measurements),
-       findall(Row,(member(Origin,[sumo,non_sumo,unknown]),
-          member(Store,[native,json]),sum_metadata_stats(Measurements,Origin,Store,Row)),Rows),
-       kb_metadata_policy:retention_policy(Policy),
-       Report=_{policy:Policy,byteMetric:serialized_utf8,byOrigin:Rows})).
-retained_metadata_measurement(Origin,native,Stats) :-
-    source_module(Source,Module,_),source_info(Source,Info),
-    kb_metadata_policy:origin_context(Info,Origin),
-    kb_runtime:module_assertion(Module,Id,_,_),
-    kb_runtime:module_metadata_terms(Module,Id,Terms),
-    kb_metadata_policy:metadata_stats(Origin,Terms,Stats).
-retained_metadata_measurement(Origin,json,Stats) :-
-    source_module(Source,Module,_),source_info(Source,Info),
-    kb_metadata_policy:origin_context(Info,Origin),
-    kb_runtime:module_assertion(Module,Id,_,_),assertion(Id,Data),
-    kb_metadata_policy:json_metadata_stats(Origin,Data.properties,Stats).
-sum_metadata_stats(Measurements,Origin,Store,Row) :-
-    findall(S,member(Origin-Store-S,Measurements),Stats),
-    length(Stats,Count),
-    findall(Key-Total,
-      (member(Key,[propertyCount,retainedPropertyCount,droppedPropertyCount,addedCompactPropertyCount,
-                   metadataBytes,retainedMetadataBytes,removedMetadataBytes]),
-       findall(N,(member(S,Stats),get_dict(Key,S,N)),Ns),sum_list(Ns,Total)),Pairs),
-    dict_pairs(Totals,_,Pairs),Row=Totals.put(_{origin:Origin,store:Store,assertions:Count}).
+    kb_metadata_audit:audit([],Report).
 
-% Called explicitly by the host inside its drained, guarded source mutation.
-% It changes no source manifest, generation, semantic clauses, IDs or caches.
+:- meta_predicate retention_admission(0),retention_mutex(+,0).
+
+% Explicit parent maintenance action, never an audit side effect. A completed
+% audit's identity is required; stale generation/selection/IDs/policy rejects.
+apply_metadata_retention(Expected,Report) :-
+    must_be(dict,Expected),
+    retention_admission(retention_mutex(openworld_code_reload,
+      retention_mutex(openworld_store,
+        (retention_locked_preconditions,
+         (get_dict(generation,Expected,G),generation(G)->true;
+           throw(error(metadata_retention_stale_audit(Expected),_))),
+         retain_metadata(Expected,Report))))).
+
+retention_admission(Goal) :-
+    (kb_activity:owns_admission_lease->call(Goal);
+      setup_call_cleanup(kb_activity:begin_admission_lease(Token),
+        Goal,kb_activity:end_admission_lease(Token))).
+retention_mutex(Mutex,Goal) :-
+    (mutex_trylock(Mutex)->setup_call_cleanup(true,Goal,mutex_unlock(Mutex));
+     throw(error(metadata_retention_busy(Mutex),_))).
+
+% Compatibility for isolated saved-state restoration. The caller owns both
+% mutexes; this acquires/verifies the admission lease before touching metadata.
 apply_metadata_retention_locked(Report) :-
+    retention_locked_preconditions,
+    retention_admission(retain_metadata(any,Report)).
+
+retention_locked_preconditions :-
     thread_self(Self),
     (owns_store_mutex,mutex_property(openworld_code_reload,status(locked(Self,_)))->true;
      throw(error(permission_error(apply,unguarded_metadata_retention,store),_))),
     ((query_snapshot(_,_,_,_);native_query_refs(_,_);retired_native(_))->
-      throw(error(metadata_retention_busy(native_snapshots),_));true),
-    metadata_retention_stats(Before),
-    transaction((
-      forall(source_module(Source,Module,_),retain_source_metadata(Source,Module)),
-      (current_predicate(kb_term_roles:clear_term_role_cache/0)->
-        kb_term_roles:clear_term_role_cache;true)
-    )),
-    metadata_retention_stats(After),Report=_{before:Before,after:After}.
+      throw(error(metadata_retention_busy(native_snapshots),_));true).
+
+retain_metadata(Expected,Report) :-
+    kb_metadata_audit:collect_current([serialized(none)],Before),
+    (Expected==any;Expected==Before.identity),!,
+    redundant_counts(Before,NativeBefore,JsonBefore),
+    (NativeBefore=:=0,JsonBefore=:=0->
+      After=Before,Changed=false
+    ;transaction((
+       forall(source_module(Source,Module,_),retain_source_metadata(Source,Module)),
+       kb_metadata_audit:collect_current([serialized(none)],After),
+       (Before.identity==After.identity->true;throw(error(metadata_retention_identity_changed,_))),
+       (redundant_counts(After,0,0)->true;
+         throw(error(metadata_retention_incomplete,_))),
+       (current_predicate(kb_term_roles:clear_term_role_cache/0)->
+         kb_term_roles:clear_term_role_cache;true))),
+     Changed=true),
+    redundant_counts(After,NativeAfter,JsonAfter),
+    RemovedNative is NativeBefore-NativeAfter,RemovedJson is JsonBefore-JsonAfter,
+    Report=_{changed:Changed,before:Before,after:After,
+             removed:_{nativeProperties:RemovedNative,jsonProperties:RemovedJson}}.
+retain_metadata(Expected,_) :-
+    throw(error(metadata_retention_stale_audit(Expected),_)).
+
+redundant_counts(Report,Native,Json) :-
+    findall(N,(member(Row,Report.byOrigin),Row.store==native,N=Row.redundantPropertyCount),Ns),
+    findall(N,(member(Row,Report.byOrigin),Row.store==json,N=Row.redundantPropertyCount),Js),
+    sum_list(Ns,Native),sum_list(Js,Json).
 
 retain_source_metadata(Source,Module) :-
-    source_info(Source,Info),kb_metadata_policy:origin_context(Info,Origin),
-    kb_runtime:prune_module_metadata(Module,Origin),
-    forall((kb_runtime:module_assertion(Module,Id,_,_),assertion(Id,Data)),
+    source_info(Source,Info),kb_metadata_audit:source_origin(Source,Info,Origin),
+    (Origin==sumo->true;retain_non_sumo_metadata(Source,Module,Info,Origin)).
+
+retain_non_sumo_metadata(Source,Module,Info,Origin) :-
+    Changed=changed(false),
+    (once((current_predicate(Module:Name/2),atom_concat(xc_,_,Name),
+           kb_metadata_policy:redundant_property(Name),functor(Head,Name,2),
+           \+predicate_property(Module:Head,imported_from(_)),
+           predicate_property(Module:Head,number_of_clauses(N)),N>0))->
+      kb_runtime:prune_module_metadata(Module,Origin),nb_setarg(1,Changed,true);true),
+    kb_metadata_audit:source_ids(Module,Ids),
+    forall((member(Id,Ids),clause(assertion(Id,Data),true,Ref),
+            once((member(P,Data.properties),kb_metadata_policy:redundant_property(P.name)))),
       (kb_metadata_policy:filter_json_properties(Origin,Data.properties,Properties),
-       retractall(assertion(Id,_)),assertz(assertion(Id,Data.put(properties,Properties))))),
-    kb_metadata_policy:retention_policy(Policy),
-    retractall(source_info(Source,_)),
-    assertz(source_info(Source,Info.put(_{sourceOrigin:Origin,retentionPolicy:Policy}))).
+       erase(Ref),assertz(assertion(Id,Data.put(properties,Properties))),
+       nb_setarg(1,Changed,true))),
+    (arg(1,Changed,true)->
+      kb_metadata_policy:retention_policy(Policy),
+      retractall(source_info(Source,_)),
+      assertz(source_info(Source,Info.put(_{sourceOrigin:Origin,retentionPolicy:Policy})))
+    ;true).
 
 record_messages(Metadata,Id,Property,Messages) :-
     atom_concat(xc_,Property,Name),Fact=..[Name,Id,Values],
