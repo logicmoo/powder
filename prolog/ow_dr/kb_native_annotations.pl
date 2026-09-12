@@ -46,7 +46,7 @@ See docs/native-tva.md for the exact DTO, conflict, restore and scope contracts.
 :- initialization(restore_annotations,restore).
 
 native_access(Goal) :-
-    kb_activity:with_application(with_mutex(powder_native_annotations,Goal)).
+    kb_activity:with_application(kb_native_annotations:with_mutex(powder_native_annotations,Goal)).
 restore_access(Goal) :-
     (kb_activity:owns_admission_lease->with_mutex(powder_native_annotations,Goal)
     ;native_access(Goal)).

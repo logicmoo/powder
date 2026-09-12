@@ -45,6 +45,18 @@ native_memory_image(Image) :-
       (member(Name-Arity,[nars_tva-2,oc_tva-2,cyc_bayes_value-3,baseline-4,snapshot_cache-3,storage_binding-1]),
        functor(Head,Name,Arity),findall((Head:-Body),clause(kb_native_annotations:Head,Body),Clauses)),Image).
 
+test(public_facade_keeps_native_context_after_real_module_reload,
+     [setup(fixture(F)),cleanup(dispose(F))]) :-
+    revision(R),initialize_defaults(R,_),native_status(Before),
+    source_file(kb_activity:with_application(_),Activity),
+    source_file(kb_native_annotations:native_status(_),Native),
+    load_files(kb_activity:Activity,[if(true),silent(true),register(false)]),
+    load_files(kb_native_annotations:Native,[if(true),silent(true),register(false)]),
+    native_status(After),assertion(After.revision==Before.revision),
+    native_pair_settings(null,Pairs),
+    assertion(Pairs.families.nars.exact.summary.frequency=:=0.5),
+    assertion(Pairs.families.opencog.exact.summary.confidence=:=0.0).
+
 test(copy_only_cold_empty_creates_no_state_or_directory,[setup(fixture(F)),cleanup(dispose(F))]) :-
     F=fixture(Directory,_,_),directory_file_path(Directory,'never-created',Missing),
     directory_file_path(Missing,'native.pl',File),setenv('POWDER_NATIVE_TVA_FILE',File),
