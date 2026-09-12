@@ -31,20 +31,33 @@ The projection is an index of data, not an additional native KB generation.
 query_file(File) :-
     kb_catalog_index:catalog_paths(Catalog,_),file_directory_name(Catalog,Dir),
     directory_file_path(Dir,'query.data',File).
+query_progress(File) :-
+    query_file(Query),file_directory_name(Query,Dir),
+    directory_file_path(Dir,'query-progress.data',File).
 build_query_catalog(Report) :-
     query_file(File),atom_concat(File,'.lock',LockPath),kb_cache:try_lock(LockPath,Lock),
     (Lock==busy->throw(error(catalog_busy,_));true),
-    setup_call_cleanup(true,build_query_locked(File,Report),kb_cache:release_lock(Lock)).
+    query_progress(Progress),
+    setup_call_cleanup(kb_catalog_index:begin_catalog_run(Progress,query),
+      catch((build_query_locked(File,Report)->
+               kb_catalog_index:write_progress(Progress,json{state:succeeded,phase:completed,
+                 completed:Report.coverage.freshFiles,total:Report.coverage.expectedFiles,coverage:Report.coverage})
+             ;throw(error(catalog_projection_failed,_))),
+        Error,(kb_catalog_index:fail_catalog_run(Progress,Error),throw(Error))),
+      kb_cache:release_lock(Lock)).
 build_query_locked(File,Report) :-
     kb_catalog_index:catalog_paths(CatalogFile,_),
     kb_cache:file_digest(CatalogFile,Revision),
     kb_catalog_index:read_data(CatalogFile,catalog_snapshot(Catalog)),
     include(fresh,Catalog.files,Files),
-    maplist(file_evidence,Files,Chunks),append(Chunks,Evidence),
+    length(Files,Total),flag(powder_projection_completed,_,0),
+    maplist(file_evidence(Total),Files,Chunks),append(Chunks,Evidence),
+    projection_progress(taxonomy,'',Total,Total),
     build_catalog_schema(Evidence,Schema),
     kb_cache:terms_digest([catalog_query_v1,Schema],SchemaHash),
     file_directory_name(File,Dir),atomic_list_concat([Revision,'-',SchemaHash],Version),
     directory_file_path(Dir,Version,VersionDir),make_directory_path(VersionDir),
+    flag(powder_projection_completed,_,0),
     empty_assoc(Empty),foldl(project_source(Schema,VersionDir),Files,
       projected(Empty,[]),projected(Terms,FilePairs)),
     maplist(classify_entry(Schema),Catalog.terms,Entries),
@@ -59,14 +72,20 @@ build_query_locked(File,Report) :-
     kb_catalog_index:atomic_data(File,catalog_query(Projection)),
     length(Entries,N),Report=json{terms:N,coverage:Catalog.coverage,revision:Revision}.
 fresh(File) :- File.status==fresh.
-file_evidence(File,Evidence) :-
+file_evidence(Total,File,Evidence) :-
+    flag(powder_projection_completed,N,N),projection_progress(taxonomy_inputs,File.path,N,Total),
     kb_catalog_index:current_source(File),read_source(File,Data),
-    source_schema_evidence(File.path,Data,Evidence).
+    source_schema_evidence(File.path,Data,Evidence),
+    flag(powder_projection_completed,_,N+1).
+projection_progress(Phase,Path,Completed,Total) :-
+    query_progress(File),kb_catalog_index:check_catalog_cancel(File),
+    kb_catalog_index:write_progress(File,json{phase:Phase,path:Path,completed:Completed,total:Total}).
 read_source(File,Data) :-
     kb_catalog_index:read_data(File.cache,source_catalog(Data)),
     (Data.identity==File.identity->true;throw(error(catalog_stale(File.path),_))).
 
 project_source(Schema,Directory,File,projected(Before,Files),projected(After,[Key-Info|Files])) :-
+    flag(powder_projection_completed,N,N),projection_progress(postings,File.path,N,null),
     read_source(File,Data),source_views(Data,Sentences,Applications),
     crypto_data_hash(File.path,Name,[algorithm(sha256),encoding(utf8)]),
     atom_concat(Name,'.postings',Base),directory_file_path(Directory,Base,Path),
@@ -83,7 +102,8 @@ project_source(Schema,Directory,File,projected(Before,Files),projected(After,[Ke
        kb_catalog_index:install_catalog_stage(Stage,Path,0)),
       kb_cache:remove_if_exists(Stage)),
     path_key(File.path,Key),Info=File.put(json{postings:Path,postingsDigest:Digest,
-      termSchema:Data.termSchema}).
+      termSchema:Data.termSchema}),
+    flag(powder_projection_completed,_,N+1).
 source_views(Data,Sentences,Applications) :-
     maplist(sentence_pair,Data.sentences,SentencePairs),list_to_assoc(SentencePairs,Sentences),
     findall((N-Path)-Head,member(a(N,Head,_,Path),Data.applications),AppPairs),
@@ -137,7 +157,8 @@ catalog_query_status(Reply) :-
     (exists_file(File)->kb_catalog_index:file_stamp(File,stamp(Size,Time)),
        Projection=json{available:true,sizeBytes:Size,publishedAt:Time};
        Projection=json{available:false}),
-    Reply=Status.put(projection,Projection).
+    query_progress(Progress),kb_catalog_index:external_job_status(File,Progress,Job),
+    Reply=Status.put(json{projection:Projection,projectionProgress:Job}).
 model(Model) :-
     query_file(File),kb_catalog_index:file_stamp(File,Stamp),
     (nb_current(powder_catalog_query,cache(File,Stamp,Model))->true

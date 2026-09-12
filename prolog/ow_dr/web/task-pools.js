@@ -1,10 +1,11 @@
 export async function renderTaskPools(host, route, signal) {
   const { api, element: el, button, link, heading, sourceLink } = host;
   const panel = el('div', {}, heading('Task pools', 'Shared file indexing/loading and independent reasoning/KB-question workers. Configuration changes never reset the KB.'));
-  const profiles = el('section'), tasks = el('section'), feedback = el('p', { role: 'status', 'aria-live': 'polite' });
+  const profiles = el('section'), tasks = el('section'), external = el('section'),
+    feedback = el('p', { role: 'status', 'aria-live': 'polite' });
   const controls = new Map();
   let latest, sequence = 0, saving = false, dirty = false, timer;
-  panel.append(profiles, feedback, tasks);
+  panel.append(profiles, feedback, external, tasks);
   const alive = () => !signal.aborted;
   async function mutate(path, body) {
     if (saving) return;
@@ -60,12 +61,35 @@ export async function renderTaskPools(host, route, signal) {
     if (document.hidden || saving) { timer = setTimeout(refresh, 3000); return; }
     const current = ++sequence;
     try {
-      const [data, jobs] = await Promise.all([
+      const [data, jobs, catalog] = await Promise.all([
         api('pools', {}, { signal }),
         api('tasks', { pool: route.params.get('pool') || 'all', state: route.params.get('state') || 'active', offset: route.offset, limit: Math.min(route.limit, 100) }, { signal }),
+        api('catalog/status', {}, { signal }).catch(error => ({ unavailable: error.message })),
       ]);
       if (!alive() || current !== sequence) return;
       latest = data; drawProfiles(data);
+      external.replaceChildren(el('h2', {}, 'External catalog indexer'),
+        el('p', { className: 'muted' }, 'Separate SWI processes, not queued file-pool jobs. Live ownership is checked with a native process lock.'));
+      if (catalog.unavailable) external.append(el('p', { className: 'statistics-error' }, `Status unavailable: ${catalog.unavailable}`));
+      else for (const [phase, job] of [['catalog', catalog.progress], ['query', catalog.projectionProgress]]) {
+        if (!job || job.state === 'not_started') continue;
+        const age = Number.isFinite(job.heartbeatAge) ? `${Math.round(job.heartbeatAge)} seconds ago` : 'unknown';
+        external.append(el('h3', {}, phase === 'catalog' ? 'Source occurrences' : 'Definition/query projection'),
+          el('p', {}, `${job.state}; ${job.completed ?? 0}/${job.total ?? '?'} files; phase ${job.phase ?? 'unknown'}. ` +
+            `${job.ownerLockHeld ? 'Owner lock held' : 'No live owner lock'}; PID ${job.ownerPid ?? 'unknown'}; last activity ${age}.`),
+          job.path && el('p', {}, 'Last reported file: ', sourceLink(job.path, 1, job.path)),
+          job.error && el('p', { className: 'statistics-error', role: 'alert' }, job.error.message),
+          job.workerProgress?.length && el('ul', {}, job.workerProgress.map(worker => el('li', {},
+            `PID ${worker.ownerPid ?? '?'} · ${worker.processState ?? 'unknown'} · ${worker.completed ?? 0}/${worker.total ?? '?'} · `,
+            worker.path ? sourceLink(worker.path, 1, worker.path) : 'starting'))));
+        if (job.cancelable) external.append(button('Cancel external indexer', async () => {
+          try {
+            await api('catalog/cancel', {}, { method: 'POST', body: { phase, runId: job.runId }, signal });
+            feedback.textContent = 'Cancellation requested. Completed artifacts are retained; the current operation may need to finish.';
+            refresh();
+          } catch (error) { feedback.textContent = `Cancellation failed: ${error.message}`; }
+        }, 'button secondary'));
+      }
       tasks.replaceChildren(el('h2', {}, 'Task contents'),
         el('nav', { className: 'task-filters' },
           link('Active', 'tasks', { state: 'active' }), link('Completed history', 'tasks', { state: 'completed' }),

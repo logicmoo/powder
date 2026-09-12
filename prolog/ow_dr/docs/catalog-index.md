@@ -7,9 +7,13 @@ the active knowledge base. First run the explicit compiler/index job, then:
 swipl --stack-limit=8g prolog\ow_dr\index_catalog.pl -- --all
 ```
 
-This command does not compile, repair or load sources. Four bounded workers
-enrich sources; each holds only its current source lock. They share one serialized
-progress publisher and inherit the CLI's stack limit. Missing/stale companions,
+This command does not compile, repair or load sources. Four persistent, isolated
+SWI worker processes enrich sources; each holds only its current source lock.
+The parent is the sole aggregate progress publisher. Small selections run
+directly. Workers inherit the CLI's stack limit; no global runtime setting changes.
+Isolation keeps a native worker crash from losing the other workers' completed
+artifacts. Large tasks no longer share the in-process worker heap where an
+access violation was observed in the installed Windows SWI. Missing/stale companions,
 active compiler ownership and malformed artifacts appear as individual failures
 or deferred files. Other files continue. Exit 0 means the complete discovered
 eligible set was indexed; exit 1 means incomplete coverage or failure. A subset
@@ -106,3 +110,18 @@ Term queries accept `scope=all|loaded|unloaded`, `facet=definition|semantic|cont
 source/MT filters and pagination. Counts apply before pagination; repeated
 positions and distinct assertion counts are separate. Visible assertion details
 recheck authorized original paths and source/normalized hashes.
+
+## External job visibility
+
+The CLI catalog indexer is **not** an app file-pool queue item. Task Pools has a
+separate external-indexer panel. Status includes run/controller and worker PIDs,
+current/last files, completion counts, heartbeat age, native owner-lock state,
+terminal errors and cancellation. A saved `running` record without its live
+native owner lock is reported as **interrupted**, not as continuing work.
+
+`POST /api/catalog/cancel` accepts `{phase:"catalog"|"query", runId}` only for
+the matching live owner. The controller notices its cancellation record and
+stops only its own worker processes. Projection cancellation is observed
+between source operations. Completed source artifacts are retained. Stale run
+IDs cannot cancel a later invocation. Query projection has its own progress
+record and lock; source completion is not confused with query publication.

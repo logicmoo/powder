@@ -8,6 +8,7 @@
 :- http_handler(openworld_dr(api/catalog/search),catalog_endpoint(search),[method(get)]).
 :- http_handler(openworld_dr(api/catalog/term),catalog_endpoint(term),[method(get)]).
 :- http_handler(openworld_dr(api/catalog/assertion),catalog_endpoint(assertion),[method(get)]).
+:- http_handler(openworld_dr(api/catalog/cancel),catalog_endpoint(cancel),[method(post)]).
 
 catalog_endpoint(Name,Request) :-
     catch((kb_server:valid_origin(Request),
@@ -18,6 +19,9 @@ catalog_error(error(catalog_stale(Reason),_)) :- !,
     reply_json_dict(json{error:json{code:catalog_stale,message:Text}},[status(409)]).
 catalog_error(Error) :- kb_server:api_error(Error).
 catalog_action(status,_,Reply) :- catalog_query_status(Reply).
+catalog_action(cancel,Request,Reply) :-
+    kb_server:native_body(Request,[phase,runId],Body),
+    kb_catalog_index:request_catalog_cancel(Body.phase,Body.runId,Reply).
 catalog_action(search,Request,Reply) :-
     http_parameters(Request,[q(Query,[atom,default('')]),scope(Scope,[atom,default(all)]),
       group(Group,[atom,default(all)]),offset(Offset,[integer,default(0)]),

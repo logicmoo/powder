@@ -53,7 +53,9 @@ async function available(host, signal, page) {
     host.element('p', { className: 'empty-state', role: 'status' },
       'The query catalog has not been published yet. Indexing does not load files into the active KB.'),
     status.progress && host.element('p', { className: 'muted' },
-      `Catalog phase: ${status.progress.phase ?? 'finished'}; ${status.progress.completed ?? 0} of ${status.progress.total ?? status.progress.expectedFiles ?? '?'} files processed.`),
+      `External catalog indexer: ${status.progress.state ?? 'unknown'}; phase ${status.progress.phase ?? 'not started'}; ${status.progress.completed ?? 0} of ${status.progress.total ?? status.progress.expectedFiles ?? '?'} files processed.`),
+    status.progress?.error && host.element('p', { className: 'statistics-error', role: 'alert' }, status.progress.error.message),
+    host.element('p', { className: 'muted' }, 'This external process is tracked separately from the app file-task queue. A saved count does not mean a worker is still running.'),
     host.link('Task progress', 'tasks', {}, 'button secondary'));
   return false;
 }

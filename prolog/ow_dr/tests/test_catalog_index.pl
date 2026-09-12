@@ -142,6 +142,33 @@ test(subset_refresh_keeps_completion_denominator,
     refresh_catalog(['KBs/a.krf'],R),
     assertion(R.expectedFiles==2),assertion(R.freshFiles==1),assertion(R.complete==false),
     R.issues=[Issue],assertion(Issue.status==pending).
+test(bounded_worker_processes_preserve_complete_manifest,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    forall(between(1,5,N),
+      (format(atom(Name),'file~d.krf',[N]),compiled(Name,"(p a)\n",_))),
+    refresh_catalog(all,R),
+    assertion(R.complete==true),assertion(R.expectedFiles==5),assertion(R.freshFiles==5).
+test(dead_owner_is_interrupted_not_running,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    catalog_paths(Target,Progress),
+    kb_catalog_index:atomic_data(Progress,catalog_progress(json{state:running,phase:catalog,
+      runId:old_run,ownerPid:999999,completed:488,total:1117,heartbeat:0})),
+    external_job_status(Target,Progress,Job),
+    assertion(Job.state==interrupted),assertion(Job.ownerLockHeld==false),
+    assertion(Job.cancelable==false),assertion(Job.completed==488).
+test(cancellation_is_bound_to_live_owner_and_run,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    catalog_paths(Target,Progress),file_directory_name(Target,Dir),make_directory_path(Dir),
+    atom_concat(Target,'.lock',LockPath),kb_cache:try_lock(LockPath,Lock),
+    setup_call_cleanup(kb_catalog_index:begin_catalog_run(Progress,catalog),
+      (external_job_status(Target,Progress,Job),assertion(Job.state==running),
+       catch(request_catalog_cancel(catalog,wrong_run,_),Mismatch,true),
+       assertion(Mismatch=error(catalog_not_running(wrong_run),_)),
+       request_catalog_cancel(catalog,Job.runId,Requested),
+       assertion(Requested.state==cancellation_requested),
+       catch(kb_catalog_index:check_catalog_cancel(Progress),Cancelled,true),
+       assertion(Cancelled=error(catalog_cancelled,_))),
+      kb_cache:release_lock(Lock)).
 test(corrupt_artifact_is_diagnosed_then_rebuilt,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('a.krf',"(p a)\n",Source),source_catalog(Source,Before),
