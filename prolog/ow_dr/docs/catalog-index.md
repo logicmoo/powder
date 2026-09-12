@@ -76,8 +76,20 @@ is validated before the small manifest references it; failed upgrades leave the
 old directory intact. SHA-256, term/file counts, source ordinals, complete EOF,
 query revision, taxonomy and SWI version/architecture are validated. A missing
 view is explicitly pending, never a fallback to the monolithic model. One compact
-view and one filtered key list are cached per HTTP thread and replaced on revision
-changes. Exact lookup remains independently usable during this upgrade.
+view, one filtered key list and at most 16 selected buckets are cached per HTTP
+thread and replaced on revision changes. Bucket file stamps invalidate cached
+records. Exact lookup remains independently usable during this upgrade.
+
+Measured against the existing 978-file / 1,007,236-term publication on the
+development machine: the directory-only upgrade took **98.276 seconds** and wrote
+**61,974,128 bytes**. It reused every source, query, exact bucket and posting.
+In a fresh standalone reader, ten-row overview was **3,867 ms cold / 43 ms warm**;
+the first `diplomaticState` substring search was **1,218 ms** (three keys), and
+the lexical filter **1,218 ms** (89,900 keys). End-of-probe global heap was
+169,965,528 bytes, not a peak/RSS measurement. Isolated real HTTP tests forbid
+`model/1` and exercise overview, substring and lexical pagination; different HTTP
+workers can each incur their own compact-view cold read. These are backend
+measurements, not a claim that the separate browser static-startup queue is fixed.
 
 The `lexical_words` category recognizes the exact `x_*-TheWord` naming convention.
 It retains other categories and unknown/recorded types; it is not ontology

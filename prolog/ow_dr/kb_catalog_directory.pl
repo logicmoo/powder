@@ -190,7 +190,7 @@ lookup_term(Key,Model,Entry) :-
     must_be(atom,Key),manifest(Header),bucket_id(Key,Bucket),
     bucket_path(Header.directory,Bucket,Path),
     (exists_file(Path)->
-       read_record(Path,catalog_bucket(Header.revision,Header.taxonomy,Rows)),
+       read_bucket(Header,Bucket,Rows),
        (get_assoc(Key,Rows,row(Entry,Posts))->true;Entry=none,Posts=[])
     ;Entry=none,Posts=[]),
     list_to_assoc([Key-Posts],Postings),
@@ -209,9 +209,22 @@ lookup_terms(Header,Keys,Model) :-
       coverage:Header.coverage,verifiedAt:Header.verifiedAt,providerCoverage:Header.providerCoverage,
       directory:Header.directory,terms:Terms,postings:Postings}.
 selected_bucket(Header,Bucket-Keys,Selected) :-
-    bucket_path(Header.directory,Bucket,Path),
-    read_record(Path,catalog_bucket(Header.revision,Header.taxonomy,Rows)),
+    read_bucket(Header,Bucket,Rows),
     findall(Key-Row,(member(Key,Keys),get_assoc(Key,Rows,Row)),Selected).
+read_bucket(Header,Bucket,Rows) :-
+    bucket_path(Header.directory,Bucket,Path),kb_catalog_index:file_stamp(Path,Stamp),
+    Identity=directory(Header.directory,Header.revision,Header.taxonomy),
+    (nb_current(powder_catalog_buckets,cache(Identity,Entries))->true;Entries=[]),
+    (select(bucket(Bucket,Stamp,Rows),Entries,Remaining)->true;
+      read_record(Path,catalog_bucket(Header.revision,Header.taxonomy,Rows)),
+      exclude(same_bucket(Bucket),Entries,Remaining)),
+    bounded_buckets(15,Remaining,Tail),
+    nb_linkval(powder_catalog_buckets,cache(Identity,[bucket(Bucket,Stamp,Rows)|Tail])).
+same_bucket(Bucket,bucket(Bucket,_,_)).
+bounded_buckets(0,_,[]) :- !.
+bounded_buckets(_,[],[]) :- !.
+bounded_buckets(N,[Entry|Entries],[Entry|Tail]) :-
+    Next is N-1,bounded_buckets(Next,Entries,Tail).
 lookup_source(Model,Source,File) :-
     source_path(Model.directory,Source,Path),
     read_record(Path,catalog_source_descriptor(Model.revision,Model.taxonomy,File)),

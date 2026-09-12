@@ -119,13 +119,17 @@ read_search(Path,Info,Header,search(Files,Rows)) :-
     (setup_call_cleanup(open(Path,read,S,[type(binary)]),
        (fast_read(S,Payload),ground(Payload),acyclic_term(Payload),
         Payload=catalog_search(1,Version,Arch,Header.revision,Header.taxonomy,Files,Rows),
-        fast_read(S,search_end(Header.termCount)),fast_read(S,end_of_file),
+        fast_read(S,search_end(Header.termCount)),at_end_of_stream(S),
         length(Files,Header.fileCount),length(Rows,Header.termCount),
-        maplist(atom,Files),maplist(valid_row(Header.fileCount),Rows)),close(S))->true;
+        maplist(atom,Files),valid_rows(Rows,Header.fileCount)),close(S))->true;
       throw(error(invalid_catalog_search(Path),_))).
-valid_row(Count,s(Key,Mask,Files)) :-
-    atom(Key),integer(Mask),between(0,511,Mask),is_ordset(Files),
-    forall(member(N,Files),(integer(N),N>=0,N<Count)).
+valid_rows([],_).
+valid_rows([s(Key,Mask,Files)|Rows],Count) :-
+    atom(Key),integer(Mask),Mask>=0,Mask=<511,
+    valid_ordinals(Files,-1,Count),valid_rows(Rows,Count).
+valid_ordinals([],_,_).
+valid_ordinals([N|Rest],Before,Count) :-
+    integer(N),N>Before,N<Count,valid_ordinals(Rest,N,Count).
 search_status(Header,Status) :-
     (get_dict(search,Header,Info),exists_file(Info.path),
        size_file(Info.path,Info.sizeBytes)->

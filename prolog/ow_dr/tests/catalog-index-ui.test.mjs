@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { catalogParameters, catalogCoverageText, catalogAssertionHref, catalogJobText, catalogContextHref } from '../web/catalog-index.js';
+import { CATALOG_GROUPS, catalogParameters, catalogCoverageText, catalogAssertionHref, catalogJobText, catalogContextHref } from '../web/catalog-index.js';
 import { launchChromium } from './chromium.mjs';
 import { APP_BASE } from '../web/paths.js';
 
@@ -21,6 +21,12 @@ test('partial coverage cannot be presented as complete', () => {
 test('legacy remainder filters do not label unknown types as ontological individuals', () => {
   const route = { params: new URLSearchParams('group=individuals'), offset: 0, limit: 25 };
   assert.equal(catalogParameters(route).group, 'typed_other');
+});
+test('lexical word filtering is explicitly a naming convention', () => {
+  const choice = CATALOG_GROUPS.find(([key]) => key === 'lexical_words');
+  assert.match(choice[1], /name convention/u);
+  const route = { params: new URLSearchParams('group=lexical_words'), offset: 0, limit: 25 };
+  assert.equal(catalogParameters(route).group, 'lexical_words');
 });
 test('unloaded assertion links use catalog detail instead of a broken live ID link', () => {
   const item = { id: 'a123', source: 'KBs/some file.krf', loaded: false };
