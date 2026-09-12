@@ -118,6 +118,13 @@ Bodies, schemas and revisions are checked. No browser/model URL, credential,
 Prolog goal, file path, or administrative command is accepted.
 
 Start records immutable prompt/model/policy/scope snapshots and sends nothing.
+Importing these modules opens no listener and starts no worker/provider request;
+`kb_llm_http` only registers dispatch handlers. Saved-state candidates must remain
+**zero HTTP / no listening sockets** before promotion and use private IPC
+readiness only. The checkpoint host must gate all restored app/debug/agent hooks;
+neither Teacher nor debug is delegated to a candidate startup path. Main-process
+Refresh/Chat remain separate explicit user actions. Volatile worker state is
+never automatically resumed or replayed after image restoration.
 Chat requires explicit nonsensitive-export acknowledgement. The selected model
 must still occur in the real provider catalog before completion; an unavailable
 model fails visibly without fallback. Each round uses `stream:false`.

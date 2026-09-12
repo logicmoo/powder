@@ -112,7 +112,7 @@ wait_chat_loop(Id,Reply) :-
 :- begin_tests(llm_chat,[setup(fixture_setup(State)),cleanup(fixture_cleanup(State))]).
 test(start_snapshots_without_completion_and_chat_is_explicit) :-
     start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
-    assertion(\+fixture_request(chat,_)),assertion(C.status=="ready"),
+    assertion(\+fixture_request(_,_)),assertion(C.status=="ready"),
     start_chat(_{id:C.id,revision:C.revision,text:"Synthetic fixture Ω",approvedNonsensitive:true},_),
     wait_chat(C.id,After),assertion(After.status=="ready"),
     assertion(After.promptHash==C.promptHash),
@@ -163,6 +163,9 @@ wait_http(Id) :-
     (kb_llm_agent:owned_run(Id,_,_,http)->true;sleep(0.05),wait_http(Id)).
 
 :- begin_tests(llm_schema).
+test(import_opens_no_listener_or_agent_worker) :-
+    findall(Port,http_current_server(_,Port),Ports),
+    assertion(Ports==[]),assertion(\+kb_llm_agent:owned_run(_,_,_,_)).
 test(real_kee_registry_discovery_no_knowledge_execution) :-
     Config=_{conversation:"fixture-conversation",model:"gpt-5.6-sol",
       budgets:_{calls:4,seconds:5}},
