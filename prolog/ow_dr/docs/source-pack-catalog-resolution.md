@@ -57,6 +57,35 @@ present, physical normalized/index fingerprints when present, and the complete
 normalized payload. The legacy compiler fingerprint is never relabeled as raw
 SHA-256. Stat-compatible resolution alone is not permission to skip these checks.
 
+## User intent and generated selections
+
+Choices and members may carry `origin:user` or `origin:generated`. Missing origin
+means **user**, preserving legacy saved packs. Root paths are always explicit
+user intent. User choices and legacy/user members remain explicit selection
+anchors even when they have no incoming dependency.
+
+Generated choices/members are candidate preferences, **not roots**. Resolution
+starts from explicit anchors and adds a generated provider only for a currently
+required symbol with actual provider evidence. Every derived member receives
+`witness:{root,anchor,steps:[{consumer,symbol,provider},...]}`. Supplied witness
+metadata is never trusted to establish reachability; it is recomputed.
+
+Unused generated choices, orphan providers and rootless cycles are discarded.
+Changing an alternative or removing its consumer also removes that consumer's
+solely induced requirements. Cycles reachable from a genuine requirement remain
+valid. There is no filename-specific exclusion policy.
+
+New composition members derived from a user choice are generated artifacts;
+the explicit choice anchors them while present. Removing that choice does not
+silently turn its derived member into a permanent user selection. Explicitly
+tagging a member as user makes that independent intent persistent.
+
+Unavailable root or required generated-provider metadata defers pruning and reports
+`generatedReachability:unknown`; it is not evidence of an empty dependency set.
+An unavailable orphan is not a reason to preserve a known rootless component.
+Resolvable named-reference reachability does not establish support for unknown
+variable positions, external host methods, MT entailment or runtime execution.
+
 ## Validation
 
 Focused PL-Unit suites are `catalog_providers`, `source_pack_catalog` and
@@ -66,3 +95,5 @@ and full dependency/cache reads during catalog-backed resolution, and count one
 snapshot/manifest capture per operation. Other cases cover typed declarations,
 argument-two schema targets, ambiguity, removed choices, corrupt/stale/old
 projections, raw hashes, and native loading of fixture-only saved compositions.
+Additional regressions cover orphan/self/rootless cycles, changed alternatives,
+legacy origins, explicit choices, unknown root metadata and forged witnesses.

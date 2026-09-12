@@ -145,19 +145,34 @@ normalize_member(Input,Member) :-
     text_atom(Input.role,Role),(memberchk(Role,[root,dependency])->true;domain_error(pack_member_role,Role)),
     dict_default(Input,why,[],Why),dict_default(Input,identity,null,Identity),
     json_ground(Why,GroundWhy),json_ground(Identity,GroundIdentity),
-    Member=member{path:Path,role:Role,why:GroundWhy,identity:GroundIdentity}.
+    Base=member{path:Path,role:Role,why:GroundWhy,identity:GroundIdentity},
+    selection_metadata(Input,Base,Member).
 normalize_choices(Input,Choices) :-
     must_be(list,Input),maplist(normalize_choice,Input,Choices),
     findall(S,(member(C,Choices),S=C.symbol),Ss),sort(Ss,Unique),
     (same_length(Ss,Unique)->true;domain_error(duplicate_predicate_choices,Ss)).
-normalize_choice(Input,choice{symbol:Symbol,files:Files}) :-
+normalize_choice(Input,Choice) :-
     must_be(dict,Input),text_atom(Input.symbol,Symbol),
     atom_length(Symbol,L),(L>0,L=<8192->true;domain_error(predicate_symbol,Symbol)),
-    normalize_paths(Input.files,Files).
+    normalize_paths(Input.files,Files),
+    selection_metadata(Input,choice{symbol:Symbol,files:Files},Choice).
+selection_metadata(Input,Before,After) :-
+    (get_dict(origin,Input,Origin)->
+       text_atom(Origin,Kind),
+       (memberchk(Kind,[user,generated])->true;domain_error(source_pack_origin,Origin)),
+       One=Before.put(origin,Kind)
+    ;One=Before),
+    (get_dict(witness,Input,Witness)->json_ground(Witness,Ground),After=One.put(witness,Ground)
+    ;After=One).
+selection_origin(Item,Origin) :- (get_dict(origin,Item,Found)->Origin=Found;Origin=user).
 normalize_paths(Input,Paths) :- must_be(list,Input),maplist(pack_path,Input,Ps),sort(Ps,Paths).
 pack_paths(Pack,Paths) :-
     findall(P,(member(P,Pack.roots);member(M,Pack.members),P=M.path;
                member(C,Pack.choices),member(P,C.files)),Ps),sort(Ps,Paths).
+pack_seed_paths(Pack,Paths) :-
+    findall(P,(member(P,Pack.roots);
+      member(M,Pack.members),selection_origin(M,user),P=M.path;
+      member(C,Pack.choices),selection_origin(C,user),member(P,C.files)),Ps),sort(Ps,Paths).
 pack_path(Input,Path) :-
     text_atom(Input,Path),
     (atom_length(Path,N),N=<4096,\+sub_atom(Path,_,_,_,'\\'),
@@ -335,19 +350,38 @@ resolve_catalog(Pack,Index,Snapshot,Analyses,Plan) :-
      resolve_catalog(Pack,Index,Snapshot,All,Plan)).
 
 resolve_graph(Input,Index,Analyses,Resolution) :-
-    normalize_pack(Input,Pack),provider_lookup(Index,Indexed),
-    pack_paths(Pack,Seeds),closure(Seeds,Pack,Indexed,Analyses,Paths),
+    normalize_pack(Input,Pack),pack_seed_paths(Pack,Seeds),provider_lookup(Index,Indexed),
+    rooted_closure(Seeds,Pack,Indexed,Analyses,[],Paths,Edges),
+    (has_generated_selection(Pack),
+     pruning_unknown_paths(Pack,Paths,Analyses,Unknown),Unknown\=[]->
+       deferred_resolution(Pack,Index,Analyses,Unknown,Resolution)
+    ;rooted_resolution(Pack,Index,Indexed,Analyses,Seeds,Paths,Edges,Resolution)).
+deferred_resolution(Pack,Index,Analyses,Unknown,Resolution) :-
+    findall(Issue,(member(P,Unknown),analysis_issue(Analyses,P,Issue)),AnalysisIssues),
+    findall(Issue,choice_issue(Pack,Analyses,Issue),ChoiceIssues),
+    append(AnalysisIssues,ChoiceIssues,Issues),
+    Coverage=coverage{predicateAnalysis:false,globalProviders:Index.coverage,
+      generatedReachability:unknown,sourceFreshness:unverified_until_load,mtAutoResolution:false},
+    Summary=resolution{ready:false,state:needs_resolution,coverage:Coverage},
+    Resolution=source_pack_resolution{pack:Pack.put(resolution,Summary),ready:false,
+      state:needs_resolution,coverage:Coverage,unresolved:Issues,changes:[],
+      microtheoryDependencies:[]}.
+rooted_resolution(Pack,Index,Indexed,Analyses,Seeds,Paths,Edges,Resolution) :-
+    rooted_choices(Pack,Edges,Choices),ChosenPack=Pack.put(choices,Choices),
     pack_providers(Paths,Analyses,Providers),pack_references(Paths,Analyses,References),
     findall(U,(member(S,References),\+provider_symbol(Providers,S),
-               unresolved_symbol(S,Pack,Indexed,U)),DependencyIssues),
-    findall(U,choice_issue(Pack,Analyses,U),ChoiceIssues),
+               unresolved_symbol(S,ChosenPack,Indexed,U)),DependencyIssues),
+    findall(U,choice_issue(ChosenPack,Analyses,U),ChoiceIssues),
     findall(Issue,(member(P,Paths),analysis_issue(Analyses,P,Issue)),AnalysisIssues),
     append([DependencyIssues,ChoiceIssues,AnalysisIssues],Issues0),sort(Issues0,Issues),
-    maplist(composition_member(Pack,Providers,References,Analyses),Paths,Members),
+    maplist(composition_member(Pack,Providers,References,Analyses,Seeds,Edges),Paths,Members),
     findall(Change,
       (member(M,Members),member(Old,Pack.members),Old.path==M.path,
        json_ground(Old.identity,Before),json_ground(M.identity,After),Before\==After,
-       Change=change{path:M.path,reason:member_snapshot_changed}),Changes),
+       Change=change{path:M.path,reason:member_snapshot_changed}),SnapshotChanges),
+    findall(change{path:P,reason:unreachable_generated_member},
+      (member(M,Pack.members),selection_origin(M,generated),P=M.path,\+memberchk(P,Paths)),Pruned),
+    append(SnapshotChanges,Pruned,Changes),
     findall(support{symbol:S,providers:Ps},
       (member(S,References),\+defined_provider(Providers,S),
        findall(P,(member(P,Providers),P.symbol==S,P.kind==declared),Ps),Ps\=[]),DeclaredOnly),
@@ -355,11 +389,27 @@ resolve_graph(Input,Index,Analyses,Resolution) :-
       (member(P,Paths),analysis_at(Analyses,P,A),MT=A.info.microtheories.outbound),MTDependencies),
     (Issues==[]->Ready=true,State=resolved;Ready=false,State=needs_resolution),
     Coverage=coverage{predicateAnalysis:Ready,globalProviders:Index.coverage,
-      declaredOnly:DeclaredOnly,sourceFreshness:unverified_until_load,mtAutoResolution:false},
+      declaredOnly:DeclaredOnly,sourceFreshness:unverified_until_load,mtAutoResolution:false,
+      generatedReachability:rooted_known_references},
     Summary=resolution{ready:Ready,state:State,coverage:Coverage},
-    Resolved=Pack.put(pack{members:Members,resolution:Summary}),
+    Resolved=ChosenPack.put(pack{members:Members,resolution:Summary}),
     Resolution=source_pack_resolution{pack:Resolved,ready:Ready,state:State,coverage:Coverage,
       unresolved:Issues,changes:Changes,microtheoryDependencies:MTDependencies}.
+has_generated_selection(Pack) :-
+    (member(C,Pack.choices),selection_origin(C,generated);
+     member(M,Pack.members),selection_origin(M,generated)),!.
+generation_inputs_known(Paths,Analyses) :-
+    forall(member(P,Paths),(analysis_at(Analyses,P,A),A.info.status\==unavailable,
+                           A.info.coverage.records==complete)).
+pruning_unknown_paths(Pack,Reached,Analyses,Unknown) :-
+    pack_paths(Pack,Saved),
+    pack_references(Reached,Analyses,References),pack_providers(Reached,Analyses,Providers),
+    findall(Path,
+      ((member(Path,Reached),(analysis_at(Analyses,Path,_);memberchk(Path,Saved));
+        member(Symbol,References),\+provider_symbol(Providers,Symbol),
+        member_choice(Pack,Symbol,Choice),selection_origin(Choice,generated),member(Path,Choice.files)),
+       \+generation_inputs_known([Path],Analyses)),Paths),
+    sort(Paths,Unknown).
 analysis_at(Analyses,Path,A) :- member(A,Analyses),A.path==Path,!.
 analysis_issue(Analyses,Path,Issue) :-
     (analysis_at(Analyses,Path,A)->
@@ -376,15 +426,43 @@ pack_references(Paths,Analyses,References) :-
       S=E.symbol,\+logical_operator(S)),Ss),sort(Ss,References).
 provider_symbol(Providers,S) :- member(P,Providers),P.symbol==S,!.
 defined_provider(Providers,S) :- member(P,Providers),P.symbol==S,P.kind==defined,!.
-closure(Paths,Pack,Index,Analyses,Final) :-
+rooted_closure(Paths,Pack,Index,Analyses,Before,Final,Edges) :-
     pack_providers(Paths,Analyses,Providers),pack_references(Paths,Analyses,References),
     (forall(member(P,Paths),(analysis_at(Analyses,P,A),analysis_complete(A)))->Known=true;Known=false),
-    findall(Path,(member(S,References),\+provider_symbol(Providers,S),
-      \+member_choice(Pack,S,_),Index.coverage.complete==true,
-      Known==true,
-      candidates(Index,S,[Only]),Path=Only.path),Added),
+    findall(edge{consumer:Consumer,symbol:S,provider:Path},
+      (member(S,References),\+provider_symbol(Providers,S),
+       next_provider_paths(S,Pack,Index,Analyses,Known,Candidates),member(Path,Candidates),
+       \+memberchk(Path,Paths),reference_consumer(Paths,Analyses,S,Consumer)),New0),
+    sort(New0,New),findall(P,(member(E,New),P=E.provider),Added),
     append(Paths,Added,All),sort(All,Next),
-    (Next==Paths->Final=Paths;closure(Next,Pack,Index,Analyses,Final)).
+    append(Before,New,Accumulated),
+    (Next==Paths->Final=Paths,Edges=Accumulated;
+     rooted_closure(Next,Pack,Index,Analyses,Accumulated,Final,Edges)).
+reference_consumer(Paths,Analyses,Symbol,Path) :-
+    member(Path,Paths),analysis_at(Analyses,Path,A),
+    Entries=A.info.symbols.referenced,is_list(Entries),
+    member(E,Entries),E.symbol==Symbol,!.
+next_provider_paths(Symbol,Pack,Index,Analyses,Known,Paths) :-
+    (member_choice(Pack,Symbol,Choice),selection_origin(Choice,user)->Paths=[]
+    ;member_choice(Pack,Symbol,Choice),
+     include(supported_provider(Index,Analyses,Symbol),Choice.files,Preferred),Preferred\=[]->Paths=Preferred
+    ;findall(Path,(member(M,Pack.members),selection_origin(M,generated),Path=M.path,
+                   supported_provider(Index,Analyses,Symbol,Path)),Saved0),sort(Saved0,[OnlySaved])->
+       Paths=[OnlySaved]
+    ;Index.coverage.complete==true,Known==true,candidates(Index,Symbol,[Only])->Paths=[Only.path]
+    ;Paths=[]).
+supported_provider(Index,Analyses,Symbol,Path) :-
+    (analysis_at(Analyses,Path,_)->chosen_provider(Analyses,Path,Symbol)
+    ;candidates(Index,Symbol,Candidates),member(C,Candidates),C.path==Path).
+rooted_choices(Pack,Edges,Choices) :-
+    include(user_selection,Pack.choices,Users),
+    findall(S-P,(member(E,Edges),S=E.symbol,P=E.provider),Pairs),
+    sort(Pairs,Sorted),group_pairs_by_key(Sorted,Groups),
+    findall(choice{symbol:S,files:Paths,origin:generated},
+      member(S-Paths,Groups),Generated0),
+    exclude(overridden(Users),Generated0,Generated),
+    append(Users,Generated,Choices).
+user_selection(Item) :- selection_origin(Item,user).
 member_choice(Pack,S,C) :- member(C,Pack.choices),C.symbol==S,!.
 candidates(Index,S,Candidates) :-
     (get_assoc(S,Index.providerLookup,Rows)->true;Rows=[]),
@@ -410,7 +488,7 @@ choice_issue(Pack,Analyses,Issue) :-
     Issue=issue{symbol:C.symbol,path:Path,reason:chosen_file_no_longer_provides_symbol}.
 chosen_provider(Analyses,Path,Symbol) :-
     analysis_at(Analyses,Path,A),analysis_provider(A,P),P.symbol==Symbol,!.
-composition_member(Pack,Providers,References,Analyses,Path,Member) :-
+composition_member(Pack,Providers,References,Analyses,Seeds,Edges,Path,Member) :-
     (memberchk(Path,Pack.roots)->Role=root;Role=dependency),
     findall(Reason,
       (member(P,Providers),P.path==Path,memberchk(P.symbol,References),
@@ -421,7 +499,17 @@ composition_member(Pack,Providers,References,Analyses,Path,Member) :-
       optional_identity(A.info.cache,fileHash,normalizedHash,One,Two),
       optional_identity(A.info.cache,indexHash,indexHash,Two,Identity)
     ;Identity=null),
-    Member=member{path:Path,role:Role,why:Why,identity:Identity}.
+    (memberchk(Path,Pack.roots)->Origin=user
+    ;member(Old,Pack.members),Old.path==Path,selection_origin(Old,user)->Origin=user
+    ;Origin=generated),
+    selection_witness(Path,Seeds,Edges,Witness),
+    Member=member{path:Path,role:Role,why:Why,identity:Identity,origin:Origin,witness:Witness}.
+selection_witness(Path,Seeds,_,witness{root:Path,anchor:explicit_user_selection,steps:[]}) :-
+    memberchk(Path,Seeds),!.
+selection_witness(Path,Seeds,Edges,Witness) :-
+    member(Edge,Edges),Edge.provider==Path,!,
+    selection_witness(Edge.consumer,Seeds,Edges,Parent),
+    append(Parent.steps,[Edge],Steps),Witness=Parent.put(steps,Steps).
 optional_identity(Dict,From,To,Before,After) :-
     (get_dict(From,Dict,Value),Value\==null->put_dict(To,Before,Value,After);After=Before).
 

@@ -111,6 +111,86 @@ test(resolution_is_ground_json_and_does_not_mutate_shared_variables) :-
     index(true,[A],I),resolve_graph(P,I,[A],R),assertion(ground(R)),
     assertion(var(X)),with_output_to(string(_),json_write_dict(current_output,R)).
 
+generated_member(Path,member{path:Path,role:dependency,origin:generated,why:[],identity:null}).
+generated_cycle(Pack,RootTerms,[Root,A,B]) :-
+    empty_pack(['KBs/root.krf'],Base),
+    analysis('KBs/root.krf',RootTerms,Root),
+    analysis('KBs/a.krf',[(x_p:-and(x_q))],A),
+    analysis('KBs/b.krf',[(x_q:-and(x_p))],B),
+    maplist(generated_member,['KBs/a.krf','KBs/b.krf'],Members),
+    Pack=Base.put(pack{members:Members,choices:[
+      choice{symbol:x_p,files:['KBs/a.krf'],origin:generated},
+      choice{symbol:x_q,files:['KBs/b.krf'],origin:generated}]}).
+test(generated_rootless_cycle_and_its_induced_needs_are_pruned) :-
+    generated_cycle(P,[(x_root:-and)],As),index(true,As,I),resolve_graph(P,I,As,R),
+    assertion(R.ready==true),member_paths(R,['KBs/root.krf']),
+    assertion(R.pack.choices==[]),assertion(R.unresolved==[]),assertion(R.changes=[_,_]).
+test(generated_self_loop_is_not_a_root_witness) :-
+    empty_pack(['KBs/root.krf'],Base),analysis('KBs/root.krf',[(x_root:-and)],Root),
+    analysis('KBs/a.krf',[(x_p:-and(x_p))],A),generated_member('KBs/a.krf',M),
+    P=Base.put(pack{members:[M],choices:[choice{symbol:x_p,files:['KBs/a.krf'],origin:generated}]}),
+    index(true,[Root,A],I),resolve_graph(P,I,[Root,A],R),
+    member_paths(R,['KBs/root.krf']),assertion(R.pack.choices==[]).
+test(rooted_generated_cycle_retains_real_root_symbol_provider_chain) :-
+    generated_cycle(P,[(x_root:-and(x_p))],As),index(true,As,I),resolve_graph(P,I,As,R),
+    assertion(R.ready==true),member_paths(R,['KBs/a.krf','KBs/b.krf','KBs/root.krf']),
+    once((member(M,R.pack.members),M.path=='KBs/b.krf')),
+    assertion(M.origin==generated),assertion(M.witness.root=='KBs/root.krf'),
+    assertion(M.witness.steps=[
+      edge{consumer:'KBs/root.krf',symbol:x_p,provider:'KBs/a.krf'},
+      edge{consumer:'KBs/a.krf',symbol:x_q,provider:'KBs/b.krf'}]).
+test(changed_provider_alternative_discards_old_generated_consumers_and_choices) :-
+    generated_cycle(Base,[(x_root:-and(x_p))],[Root,A,B]),
+    analysis('KBs/replacement.krf',[(x_p:-and)],Replacement),
+    P=Base.put(choices,[choice{symbol:x_p,files:['KBs/replacement.krf']},
+      choice{symbol:x_q,files:['KBs/b.krf'],origin:generated}]),
+    index(true,[Root,A,B,Replacement],I),resolve_graph(P,I,[Root,A,B,Replacement],R),
+    assertion(R.ready==true),member_paths(R,['KBs/replacement.krf','KBs/root.krf']),
+    assertion(R.pack.choices=[choice{symbol:x_p,files:['KBs/replacement.krf']}]).
+test(legacy_untagged_members_and_choices_remain_explicit_user_selections) :-
+    generated_cycle(Base,[(x_root:-and)],As),
+    findall(M,(member(Old,Base.members),del_dict(origin,Old,_,M)),Members),
+    P=Base.put(pack{members:Members,choices:[choice{symbol:x_q,files:['KBs/b.krf']}]}),
+    index(true,As,I),resolve_graph(P,I,As,R),
+    member_paths(R,['KBs/a.krf','KBs/b.krf','KBs/root.krf']),
+    assertion(R.pack.choices=[choice{symbol:x_q,files:['KBs/b.krf']}]).
+test(explicit_user_choice_is_preserved_but_derived_member_drops_when_choice_removed) :-
+    empty_pack(['KBs/root.krf'],Base),analysis('KBs/root.krf',[(x_root:-and)],Root),
+    analysis('KBs/a.krf',[(x_p:-and)],A),index(true,[Root,A],I),
+    P=Base.put(choices,[choice{symbol:x_p,files:['KBs/a.krf']}]),
+    resolve_graph(P,I,[Root,A],First),member_paths(First,['KBs/a.krf','KBs/root.krf']),
+    Removed=First.pack.put(choices,[]),resolve_graph(Removed,I,[Root,A],Second),
+    member_paths(Second,['KBs/root.krf']).
+test(unavailable_root_metadata_defers_pruning_instead_of_claiming_no_dependencies) :-
+    generated_cycle(P,[(x_root:-and(x_p))],[_,A,B]),
+    kb_source_packs:unavailable_analysis(source_missing,"Unknown root",'KBs/root.krf',Root),
+    index(false,[Root,A,B],I),resolve_graph(P,I,[Root,A,B],R),
+    assertion(R.ready==false),assertion(R.coverage.generatedReachability==unknown),
+    assertion(R.pack.members==P.members),assertion(R.pack.choices==P.choices).
+test(unavailable_required_generated_provider_defers_pruning_of_its_induced_dependencies) :-
+    generated_cycle(P,[(x_root:-and(x_p))],[Root,_,B]),
+    kb_source_packs:unavailable_analysis(cache_unavailable,"Unknown provider",'KBs/a.krf',A),
+    index(false,[Root,A,B],I),resolve_graph(P,I,[Root,A,B],R),
+    assertion(R.ready==false),assertion(R.coverage.generatedReachability==unknown),
+    assertion(R.pack.members==P.members),assertion(R.pack.choices==P.choices).
+test(unavailable_orphan_does_not_prevent_known_rootless_pruning) :-
+    generated_cycle(P,[(x_root:-and)],[Root,_,B]),
+    kb_source_packs:unavailable_analysis(cache_unavailable,"Unknown orphan",'KBs/a.krf',A),
+    index(false,[Root,A,B],I),resolve_graph(P,I,[Root,A,B],R),
+    member_paths(R,['KBs/root.krf']),assertion(R.pack.choices==[]).
+test(selection_origin_and_witness_roundtrip_without_trusting_input_as_reachability) :-
+    generated_cycle(P,[(x_root:-and)],As),
+    P.members=[A,B],Fake=A.put(witness,witness{root:'KBs/root.krf',steps:[]}),
+    Input=P.put(members,[Fake,B]),kb_source_packs:normalize_pack(Input,Normalized),
+    Normalized.members=[Kept,_],assertion(Kept.origin==generated),
+    assertion(Kept.witness.root==Fake.witness.root),assertion(Kept.witness.steps==[]),
+    index(true,As,I),resolve_graph(Normalized,I,As,R),member_paths(R,['KBs/root.krf']).
+test(invalid_selection_origin_is_rejected) :-
+    empty_pack(['KBs/root.krf'],P),
+    Bad=P.put(choices,[choice{symbol:x_p,files:['KBs/a.krf'],origin:unrecognized}]),
+    catch(kb_source_packs:normalize_pack(Bad,_),Error,true),
+    assertion(Error=error(domain_error(source_pack_origin,_),_)).
+
 fixture(State) :-
     app_dir(OldApp),
     (getenv('POWDER_SOURCE_PACKS',Old)->Env=some(Old);Env=none),
