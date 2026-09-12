@@ -11,22 +11,27 @@
 :- use_module(library(readutil)).
 :- use_module(library(utf8)).
 :- meta_predicate locked_file(+,0).
+:- dynamic json_cache/3.
+:- volatile json_cache/3.
 
 agent_state_dir(Directory) :-
     (getenv('POWDER_AGENT_STATE',Given),Given\==''->
        absolute_file_name(Given,Directory,[access(none)])
     ;app_dir(App),directory_file_path(App,'.logos-state/agents',Directory)),
-    safe_owned_path(Directory),
-    (exists_directory(Directory)->true;make_directory_path(Directory),safe_owned_path(Directory)).
+    owned_name(Directory,_),
+    (exists_directory(Directory)->true;
+     safe_owned_path(Directory),make_directory_path(Directory),safe_owned_path(Directory)).
 
 % Only trusted host code chooses paths. No browser/model input reaches this API.
 safe_owned_path(Path) :-
-    repo_root(Root),absolute_file_name(Path,Absolute,[access(none)]),
-    atom_concat(Root,'/',Prefix),
-    (Absolute==Root;sub_atom(Absolute,0,_,_,Prefix)),!,
+    owned_name(Path,Absolute),
     (current_prolog_flag(windows,true)->windows_no_reparse(Absolute);
      no_symlink_ancestors(Absolute)).
-safe_owned_path(_) :- throw(error(permission_error(access,agent_path,outside_repository),_)).
+owned_name(Path,Absolute) :-
+    repo_root(Root),absolute_file_name(Path,Absolute,[access(none)]),
+    atom_concat(Root,'/',Prefix),
+    (Absolute==Root;sub_atom(Absolute,0,_,_,Prefix)),!.
+owned_name(_,_) :- throw(error(permission_error(access,agent_path,outside_repository),_)).
 no_symlink_ancestors(Path) :-
     (catch(read_link(Path,_,_),_,fail)->throw(error(permission_error(access,agent_path,symlink),_));true),
     file_directory_name(Path,Parent),
@@ -54,10 +59,21 @@ bytes_text(Bytes,Text) :-
     (phrase(utf8_codes(Codes),Bytes)->string_codes(Text,Codes);domain_error(utf8,agent_file)).
 bytes_hash(Bytes,Hash) :- crypto_data_hash(Bytes,Hash,[algorithm(sha256),encoding(octet)]).
 read_json(File,JSON) :-
-    read_bytes(File,1048576,Bytes),bytes_text(Bytes,Text),atom_json_dict(Text,JSON,[]).
+    owned_name(File,_),
+    crypto_file_hash(File,Current,[algorithm(sha256)]),
+    (json_cache(File,Current,JSON)->true;
+     read_bytes(File,1048576,Bytes),bytes_text(Bytes,Text),atom_json_dict(Text,JSON,[]),
+     bytes_hash(Bytes,Hash),cache_json(File,Hash,JSON)).
 atomic_json(File,JSON) :-
     atom_json_dict(Text,JSON,[as(string),width(0)]),string_codes(Text,Codes),
-    phrase(utf8_codes(Codes),Bytes),atomic_bytes(File,Bytes).
+    phrase(utf8_codes(Codes),Bytes),atomic_bytes(File,Bytes),
+    bytes_hash(Bytes,Hash),atom_json_dict(Text,Normalized,[]),cache_json(File,Hash,Normalized).
+cache_json(File,Hash,JSON) :-
+    with_mutex(powder_llm_json_cache,
+      (retractall(json_cache(File,_,_)),
+       findall(F,json_cache(F,_,_),Files),
+       (length(Files,N),N>=32,Files=[Old|_]->retractall(json_cache(Old,_,_));true),
+       assertz(json_cache(File,Hash,JSON)))).
 atomic_bytes(File,Bytes) :-
     safe_owned_path(File),stage_path(File,Stage),
     setup_call_cleanup(true,
@@ -67,4 +83,4 @@ atomic_bytes(File,Bytes) :-
 locked_file(File,Goal) :-
     atom_concat(File,'.lock',LockFile),safe_owned_path(LockFile),try_lock(LockFile,Lock),
     (Lock==busy->throw(error(agent_state_busy,_));
-     setup_call_cleanup(true,Goal,release_lock(Lock))).
+     setup_call_cleanup(true,once(Goal),release_lock(Lock))).

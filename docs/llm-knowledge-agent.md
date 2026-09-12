@@ -52,10 +52,81 @@ and undo. No raw Prolog, shell, debug, administrative, filesystem, arbitrary
 network, or credential tools are supplied. Unavailable KEE capabilities must be
 shown as unavailable, not replaced with fake functions.
 
-## Validation
+## Text chat and host integration
+
+The host imports `kb_llm_http` once to register `api/llm/*` beneath its existing
+`openworld_dr` URL prefix. It must provide its actual `kb_server:server_port/1`
+listener inventory. The UI router imports `renderLLMKnowledgeAgent` from
+`web/llm-knowledge-agent.js`, calls it with the normal
+`{api,element,button,heading}` host, route and abort signal, and mounts the
+returned element on `#/llm-knowledge`. The module loads its own CSS.
+No changes to `app.js` or `kb_server.pl` are included in this ownership stage.
+
+| Route suffix | Method | Contract |
+|---|---|---|
+| `llm/settings` | GET | Registered settings and revision |
+| `llm/settings/save` | POST | `{settings:{model,budgets},revision}` |
+| `llm/models` | GET | Actual provider catalog; never inference |
+| `llm/prompt` | GET | Current fixed prompt content and raw hash |
+| `llm/prompt/save` | POST | `{content,revision}` |
+| `llm/registry` | GET | Actual adapter availability/limitations |
+| `llm/start` | POST | `{scope:{terms:[],readMts:[],writeMts:[]}}`; no inference |
+| `llm/conversation?id=...` | GET | Status, text, events, raw reply and execution records |
+| `llm/chat` | POST | `{id,revision,text,approvedNonsensitive:true}` |
+| `llm/interrupt` | POST | `{id}`; interrupt current turn, retain conversation |
+| `llm/stop` | POST | `{id}`; close conversation |
+
+All routes require a real loopback peer and an exact owned HTTP Origin. Same-origin
+browser GETs may instead supply an owned Referer, because browsers omit Origin on
+many same-origin GETs. This is local browser-CSRF protection, not OS-user identity.
+Bodies, schemas and revisions are checked. No browser/model URL, credential,
+Prolog goal, file path, or administrative command is accepted.
+
+Start records immutable prompt/model/policy/scope snapshots and sends nothing.
+Chat requires explicit nonsensitive-export acknowledgement. The selected model
+must still occur in the real provider catalog before completion; an unavailable
+model fails visibly without fallback. Each round uses `stream:false`.
+History bytes, full response bytes, calls, rounds, conversation length and host
+deadline are bounded. `tokens` is the requested **per-response** output-token
+ceiling; provider behavior cannot be guaranteed, so independent byte limits
+remain enforced locally. There is no automatic retry.
+
+The worker holds application admission, checks interruption around network and
+tool boundaries, and best-effort aborts its own pending HTTP request. Stop does
+not promise provider cancellation, erasure or rollback. Received late tool
+calls are discarded. Tool execution is one-shot, with durable reservations
+before dispatch and durable outcomes afterward. Repeated call IDs reuse a
+recorded result; changed arguments conflict; reserved/unknown outcomes are never
+automatically re-executed. An interrupted/crashed conversation is not silently
+resumed after restart. Use Stop and a new conversation when needed.
+
+The real `kb_kee` API is used for actual discovery, context grants and invocation.
+The current export adapter connects only `kee_catalog_status`,
+`kee_definitions`, and `kee_occurrences` when available. Definitions/occurrences
+must match the real user's selected exact term and read-MT keys; no broad
+all-MT term search or file reads are exposed. Results pass a bounded semantic
+field projection, dropping source paths and arbitrary diagnostic metadata.
+Context tokens stay host-only and expire/close. Every tool argument is parsed
+as a JSON object and strictly schema-validated before invocation. Original
+assistant `tool_calls` and matching `role:tool` IDs are retained for later rounds.
+
+**Current limitation:** the managed mutation/audit/undo and todo bridge is
+another owner's unfinished integration. This adapter advertises no mutation,
+load, todo, GenerateComment or fake capability. The UI states this explicitly;
+execution records for read tools are not claimed to be managed KB changesets.
+The symbolic agent is separate and is not implemented by this module.
+
+Conversation files and the exact user-approved material they contain remain
+in the repository-local application state directory. They are not deleted by
+Stop. File reads reuse only a matching raw SHA-256 cache, capped at 32 entries;
+new/changed bytes undergo the same owned-path/reparse checks.
+
+## Validation commands
 
 ```powershell
 swipl -q -g run_tests -t halt prolog\ow_dr\tests\test_llm_agent.pl
+$env:LOGOS_CHROME='C:\Program Files\Google\Chrome\Application\chrome.exe'
+node --test prolog\ow_dr\tests\llm-agent-ui.test.mjs
 ```
 
 Tests launch an isolated loopback HTTP fixture, never the live emullm completion

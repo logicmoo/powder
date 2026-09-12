@@ -26,7 +26,11 @@ chat_completion(Config,Messages,Tools,Reply) :-
                max_tokens:Config.budgets.tokens},
     (Tools==[]->Payload=Payload0;Payload=Payload0.put(tools,Tools)),
     call_with_time_limit(Config.budgets.seconds,
-      provider_json(post,Config.baseURL,"chat/completions",Payload,Reply)).
+      (provider_json(get,Config.baseURL,"models",none,Catalog),
+       (is_dict(Catalog),get_dict(data,Catalog,Models),is_list(Models),
+        member(Model,Models),is_dict(Model),get_dict(id,Model,Config.model)->true;
+        throw(error(llm_model_unavailable,_))),
+       provider_json(post,Config.baseURL,"chat/completions",Payload,Reply))).
 
 provider_json(Method,Base,Route,Payload,Reply) :-
     host_provider(Approved),(Base==Approved->true;permission_error(connect,llm_route,unapproved)),
