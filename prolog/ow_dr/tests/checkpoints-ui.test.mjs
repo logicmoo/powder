@@ -88,6 +88,8 @@ test('real browser keeps create, select, trial, cancel and explicit takeover sep
             counts: { assertions: 12 }, files: [{ path: 'KBs/fixture.krf', count: 12 }],
             generation: 4, sizeBytes: 12345678, createdAt: 1700000000,
             stateHash: 'a'.repeat(64), path: '.logos-state/saved-states/s-fixture/image.state',
+            configuration: { settings: { startupConfigured: true, startupFiles: ['KBs/fixture.krf'] },
+              sourcePacks: [{ name: 'Saved composition', roots: ['KBs/fixture.krf'] }] },
             available: true, selectedNextStart: false }];
         } else {
           catalog.runs = [{ id: `trial-${sequence}`, phase: 'trial_ready', revision: 1,
@@ -111,6 +113,7 @@ test('real browser keeps create, select, trial, cancel and explicit takeover sep
     await wait(`document.querySelector('.checkpoint-image') !== null`);
     assert.equal(requests.some(item => item.action === 'select' || item.action === 'try' || item.action === 'promote'), false);
     assert.equal(await evaluate(`document.querySelectorAll('.checkpoint-image img').length`), 0);
+    assert.equal(await evaluate(`document.body.textContent.includes('Captured startup selection') && document.body.textContent.includes('Saved composition — roots: KBs/fixture.krf')`), true);
     await click('Select for next launch');
     await wait(`document.body.textContent.includes('Selected for next launch')`);
     assert.equal(requests.some(item => item.action === 'try' || item.action === 'promote'), false);

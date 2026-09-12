@@ -54,6 +54,15 @@ test(promotion_requires_exact_consent,[setup(fixture(D,P)),cleanup(cleanup(D,P))
     http_post(URL,json(_{run:fake,revision:1,confirm:no}),_,
       [status_code(Code),json_object(dict),request_header('Origin'=Origin)]),
     assertion(Code=:=403).
+test(native_cleanup_permission_is_not_reported_as_an_origin_failure) :-
+    kb_checkpoint_http:error_description(
+      error(permission_error(delete,directory,owned_runtime),test),Status,Code,_),
+    assertion(Status=:=500),assertion(Code==checkpoint_failed).
+test(trial_mutation_permission_is_an_explicit_conflict) :-
+    kb_checkpoint_http:error_description(
+      error(permission_error(modify,checkpoint_trial,read_only_until_promoted),test),
+      Status,Code,_),
+    assertion(Status=:=409),assertion(Code==trial_read_only).
 test(explicit_sources_override_saved_mode) :-
     kb_checkpoint_host:startup_plan(['--saved-state=invalid','--kb-source=missing.krf'],
       cold(3050,['missing.krf'],[enabled(false),port(3051)])).
@@ -82,6 +91,15 @@ test(pending_save_prevents_retirement_without_cancellation,
        assertion(Error=error(checkpoint_busy(operation(pending)),_)),
        assertion(kb_checkpoint_http:operation(pending,Data,none))),
       erase(Ref)).
+test(only_empty_runtime_directory_cleanup_can_be_deferred,
+     [setup(fixture(D,P)),cleanup(cleanup(D,P))]) :-
+    directory_file_path(D,empty,Empty),make_directory(Empty),
+    Error=error(permission_error(delete,directory,Empty),test),
+    kb_checkpoint:empty_directory_cleanup(Error,Empty,deferred_empty_directory),
+    directory_file_path(Empty,payload,Payload),
+    setup_call_cleanup(open(Payload,write,S),write(S,retained),close(S)),
+    catch(kb_checkpoint:empty_directory_cleanup(Error,Empty,_),Failure,true),
+    assertion(Failure==Error),assertion(exists_file(Payload)).
 test(host_resource_start_is_single_owned_generation,
      [setup(fixture(D,P)),cleanup((kb_checkpoint_host:stop_host,cleanup(D,P)))]) :-
     kb_config:server_settings(Settings),

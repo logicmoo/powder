@@ -4,13 +4,15 @@
            saved_state_root/1, restore_saved_data/1, resume_entry/0,
            builder_main/0, resume_application/2, current_snapshot_identity/1,
            configuration_identity/1, checkpoint_stamp/1, runtime_probe/1,
-           saved_snapshot_digest/2]).
+           saved_snapshot_digest/2, effective_configuration/1,
+           restored_server_settings/1, restored_source_packs/1]).
 :- use_module(kb_paths).
 :- use_module(kb_config, [settings_file/1,server_settings/1]).
 :- use_module(kb_store, []).
 :- use_module(kb_runtime, []).
 :- use_module(kb_rule_utility, []).
 :- use_module(kb_native_annotations, []).
+:- use_module(kb_source_packs, []).
 :- use_module(kb_console_launch, []).
 :- use_module(kb_jobs, []).
 :- use_module(kb_activity, []).
@@ -252,14 +254,31 @@ verify_saved_native(Metadata,Summary) :-
     (json_value_equal(Metadata.configuration.nativeTVA,Summary)->true;
       throw(error(saved_state_native_annotations_mismatch,_))).
 configuration_with_native(Native,Identity) :-
-    server_settings(Settings),
+    effective_configuration(Effective),Settings=Effective.settings,
     Config=configuration{startupConfigured:Settings.startupConfigured,
       startupFiles:Settings.startupFiles,pools:Settings.pools},
     native_summary(Native,NativeSummary),
-    Material=configuration{settings:Config,nativeTVA:NativeSummary},
+    Material=configuration{settings:Config,nativeTVA:NativeSummary,
+      sourcePacks:Effective.sourcePacks.packs},
     atom_json_dict(JSON,Material,[as(atom),width(0)]),
     crypto_data_hash(JSON,Hash,[algorithm(sha256),encoding(utf8)]),
     Identity=Material.put(hash,Hash).
+effective_configuration(Configuration) :-
+    settings_file(SettingsFile),
+    (exists_file(SettingsFile)->server_settings(Settings)
+    ;restored_server_settings(Settings)->true;server_settings(Settings)),
+    kb_source_packs:packs_file(PacksFile),
+    (exists_file(PacksFile)->kb_source_packs:list_packs(Packs)
+    ;restored_source_packs(Packs)->true;kb_source_packs:list_packs(Packs)),
+    Configuration=configuration{settings:Settings,sourcePacks:Packs}.
+% Immutable image data is only a missing-sidecar fallback, never a second
+% mutable registry. Existing validated sidecars remain authoritative.
+restored_server_settings(Settings) :-
+    image_manifest(Metadata),
+    Settings=Metadata.configuration.settings.put(_{revision:none,issues:[]}).
+restored_source_packs(Packs) :-
+    image_manifest(Metadata),
+    Packs=packs{revision:none,packs:Metadata.configuration.sourcePacks}.
 current_snapshot_identity(Identity) :-
     with_snapshot_lock((kb_store:generation(G),snapshot(G,Sources,Status),
       configuration_identity(Configuration),capture_checkpoint_stamp(Stamp))),
@@ -571,12 +590,13 @@ verification_report(Metadata,Report) :-
     runtime_probe(Probe),
     verify_saved_utility(Metadata,Utility),
     verify_saved_native(Metadata,Native),
+    effective_configuration(Configuration),
     kb_store:assertions(Ordered),findall(Id,(member(Item,Ordered),Id=Item.id),Ids),
     write_json(Report,_{validated:true,generation:Metadata.generation,
       counts:Status.counts,files:Status.files,assertionIds:Ids,
       snapshotDigest:Metadata.snapshotDigest,retainedSnapshotDigest:Metadata.retainedSnapshotDigest,
       retentionPolicy:Metadata.retentionPolicy,ruleUtility:Utility,nativeTVA:Native,
-      runtimeProbe:Probe,resourcesStarted:false}).
+      runtimeProbe:Probe,configuration:Configuration,resourcesStarted:false}).
 runtime_probe(Probe) :-
     (once((kb_store:assertion(Id,Data),
            kb_runtime:module_assertion(Data.module,Id,Semantic,_),
@@ -612,7 +632,7 @@ compatibility(Compatibility) :-
     external_dependencies(App,Home,Dependencies),
     native_dependencies(Home,SWI,Arch,NativeLibraries),
     kb_metadata_policy:retention_policy(RetentionPolicy),
-    Compatibility=compatibility{format:Format,runtimeDataSchema:5,retentionPolicy:RetentionPolicy,
+    Compatibility=compatibility{format:Format,runtimeDataSchema:6,retentionPolicy:RetentionPolicy,
       cacheSchema:CacheSchema,codeHash:CodeHash,
       swi:VersionText,architecture:Arch,addressBits:Bits,swiHash:SWIHash,
       swiHome:Home,application:App,repository:Repo,externalDependencies:Dependencies,

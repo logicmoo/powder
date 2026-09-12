@@ -19,6 +19,7 @@
 :- volatile operation/3.
 
 :- http_handler(openworld_dr('api/checkpoint/catalog'),checkpoint_endpoint(catalog),[method(get)]).
+:- http_handler(openworld_dr('api/checkpoint/configuration'),checkpoint_endpoint(configuration),[method(get)]).
 :- http_handler(openworld_dr('api/checkpoint/inspect'),checkpoint_endpoint(inspect),[method(get)]).
 :- http_handler(openworld_dr('api/checkpoint/create'),checkpoint_endpoint(create),[method(post)]).
 :- http_handler(openworld_dr('api/checkpoint/select'),checkpoint_endpoint(select),[method(post)]).
@@ -64,6 +65,7 @@ text(Value) :- must_be(atom,Value),atom_length(Value,N),between(1,120,N).
 integer_field(Body,Key) :- get_dict(Key,Body,N),must_be(nonneg,N).
 
 action(catalog,_,Reply) :- checkpoint_catalog(Reply).
+action(configuration,_,Reply) :- kb_saved_state:effective_configuration(Reply).
 action(inspect,Request,Reply) :-
     http_parameters(Request,[id(Id,[atom])]),kb_saved_state:saved_state_metadata(Id,Reply).
 action(create,Request,Reply) :-
@@ -171,9 +173,16 @@ checkpoint_operations_quiescent :-
 respond(Status,Reply) :- format('Cache-Control: no-store~n'),reply_json_dict(Reply,[status(Status)]).
 endpoint_error(Error) :-
     error_description(Error,Status,Code,Message),
+    (Status>=500->print_message(error,Error);true),
     respond(Status,_{error:_{code:Code,message:Message}}).
-error_description(error(permission_error(_,_,_),_),403,forbidden,
+error_description(error(permission_error(access,checkpoint_api,origin),_),403,forbidden,
                   "An owned localhost origin and explicit consent are required.") :- !.
+error_description(error(permission_error(promote,checkpoint,explicit_consent_required),_),403,forbidden,
+                  "Explicit original-port takeover consent is required.") :- !.
+error_description(error(permission_error(modify,checkpoint_trial,_),_),409,trial_read_only,
+                  "Trials are read-only until promoted from the original instance.") :- !.
+error_description(error(permission_error(cancel,checkpoint_transition,_),_),409,transition_busy,
+                  "Cancellation is unavailable during takeover or recovery.") :- !.
 error_description(error(existence_error(_,Id),_),404,not_found,Message) :- !,
     format(string(Message),'Checkpoint or operation not found: ~w',[Id]).
 error_description(error(type_error(_,_),_),400,invalid_input,"Invalid checkpoint request.") :- !.

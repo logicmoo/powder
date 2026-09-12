@@ -92,6 +92,18 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
       for (const file of item.files) list.append(node('li', `${file.path} — ${number(file.count)} assertions`));
       detailsBody.append(node('p', `ID: ${item.id}`), node('p', `Created: ${new Date(item.createdAt * 1000).toLocaleString()}`),
         node('p', `SHA-256: ${item.stateHash}`), node('p', `Stored at: ${item.path}`), list);
+      if (item.configuration?.settings?.startupConfigured) {
+        const startup = node('ul');
+        for (const path of item.configuration.settings.startupFiles) startup.append(node('li', path));
+        detailsBody.append(node('h4', 'Captured startup selection'), startup);
+      }
+      if (item.configuration?.sourcePacks?.length) {
+        const packs = node('ul');
+        for (const pack of item.configuration.sourcePacks) {
+          packs.append(node('li', `${pack.name} — roots: ${pack.roots.join(', ')}`));
+        }
+        detailsBody.append(node('h4', 'Captured SourcePacks'), packs);
+      }
       details.append(detailsBody);
       row.append(details);
       const actions = node('div', undefined, { class: 'checkpoint-actions' });
@@ -129,6 +141,8 @@ export function renderCheckpointSettings({ api, signal, onChanged = () => {} }) 
     for (const item of runRows) {
       const row = node('article', undefined, { class: 'checkpoint-trial' });
       row.append(node('h3', `Trial: ${item.phase.replaceAll('_', ' ')}`), node('p', item.message));
+      if (item.cleanup === 'deferred_empty_directory') row.append(node('p',
+        'The candidate has stopped. Windows still holds its empty runtime directory; payload files have been removed.'));
       if (item.recovery) row.append(node('p', item.recovery, { role: 'alert' }));
       if (item.temporary && ['trial_ready', 'promoting', 'recovery_serving'].includes(item.phase)) row.append(openPort(item.temporary, `Open temporary port ${item.temporary}`));
       if (item.phase === 'promoted') row.append(openPort(item.primary, `Open replacement on port ${item.primary}`));

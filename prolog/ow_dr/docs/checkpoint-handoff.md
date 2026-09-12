@@ -13,6 +13,7 @@ Use JSON bodies, not filesystem paths or executable goals.
 | Method / route | Input | Result |
 |---|---|---|
 | GET `catalog` | none | Image catalog/revision, generation, redacted instance, operations and trials |
+| GET `configuration` | none | Effective settings/SourcePacks, including immutable image fallback for absent sidecars |
 | GET `inspect` | `?id=s-UUID` | Full image metadata, without control credentials |
 | POST `create` | `{name,generation,revision}` | Accepted operation; poll until completed/failed/cancelled |
 | POST `select` | `{id,revision}`; `id:"none"` clears selection | Updated next-start catalog; does not start or promote |
@@ -26,6 +27,12 @@ The async registry is volatile, bounded, and separate from ordinary file and
 inference jobs. A running save blocks retirement, and new operations/selection
 cannot bypass a drain lease. Failed/cancelled publication leaves existing data
 and selection intact; an image already fully published remains in the catalog.
+Cancellation allows up to 20 seconds for native console/debug cleanup before
+terminating its owned child. After confirmed process exit, Windows may still
+retain an empty console working directory. Only that empty directory is deferred,
+with `cleanup:deferred_empty_directory`; payload deletion errors remain failures.
+Settings displays the distinction. A secondary automatic-recovery failure becomes
+`recovery_required`, never an indefinitely misleading `promoting` state.
 
 ## Public application contract
 
@@ -258,6 +265,9 @@ SUMO/dialect exclusions, source-free origin classification, imported metadata
 helper exclusion, HTTP origin/consent checks and operation admission.
 The Chrome fixture exercises the standalone Settings helper on desktop/mobile,
 including escaped names and default-off promotion consent.
+The latest extended native run passed, including missing-sidecar repeat save and
+selected startup. Earlier intermittent missing-thread shutdown failures remain
+documented in saved-application-state.md rather than being declared fixed.
 
 The older `checkpoint_integration.py` is a diagnostic surrogate harness; its
 historical results are not evidence of native-console or current full-app wiring.

@@ -286,11 +286,34 @@ operation registry. It is not a file/inference job and never discards their work
 Pending saves prevent retirement; an admission lease rejects new operations.
 Creation success follows real child restoration, not HTTP acceptance.
 
-Saved settings and SourcePack fallback require their owning readers to support
-restored data when sidecars are absent. Until those hooks are integrated, keep
-the settings and SourcePack sidecars; the image host preserves its captured
-startup/pool configuration, but ordinary configuration/SourcePack readers still
-use their sidecars. This limitation is distinct from source-free KB/TVA restore.
+Images now retain validated SourcePack roots, choices, members and resolution
+data as well as startup/pool settings. Their semantic content participates in
+configuration identity. `effective_configuration/1` and GET
+`api/checkpoint/configuration` use existing validated sidecars when present and
+immutable image data when absent. Corrupt existing sidecars are errors, not a
+reason to silently fall back. Independent image verification removes settings,
+SourcePacks, native annotations, originals and caches before restoring.
+
+For the parent-owned ordinary Settings/SourcePack readers, the missing-file
+branches must call `kb_saved_state:restored_server_settings/1` and
+`kb_saved_state:restored_source_packs/1`, respectively. These are memory-only
+accessors and fail outside an image; they never create or overwrite a sidecar.
+Their revision is `none` because no current sidecar exists. Existing sidecars
+retain their own real optimistic revision. Do not replace the existing-file
+validation branches. SourcePack mutations must also join application admission
+before publication; that shared-module wiring remains outside this module.
+
+The latest extended actual-native Windows test passed in 319.270 seconds:
+trial, busy refusal, cancel, injected-bind-failure rollback, successful takeover,
+sidecar-free repeat save and selected startup with an explicit port override.
+The final frozen backend suite passed all 31 tests; both Chrome/UI tests passed.
+
+Earlier native runs exposed intermittent old-host
+`thread_join/2: thread ... does not exist` shutdown failures (exit 2).
+The latest run did not reproduce them; this is not proof that the underlying
+shutdown race is fixed. Cleanup stages now identify debug/HTTP/control/pools
+failures. Parent app/Settings wiring, ordinary missing-sidecar reader integration,
+SourcePack admission and the shutdown-race review remain release considerations.
 
 ## Focused verification
 

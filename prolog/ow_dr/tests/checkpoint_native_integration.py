@@ -53,6 +53,10 @@ class NativeCheckpointWorkflow(unittest.TestCase):
             "kb_checkpoint:runtime_hook(bind_ports,Profiles,done) :-",
             "kb_checkpoint:runtime_hook(bind_ports,Profiles,done) :-\n    checkpoint_native_fixture:allow_bind,",
             1), encoding="utf-8")
+        http_adapter = self.app / "kb_checkpoint_http.pl"
+        http_adapter.write_text(http_adapter.read_text(encoding="utf-8").replace(
+            "endpoint_error(Error) :-", "endpoint_error(Error) :-\n    checkpoint_native_fixture:record_error(Error),", 1),
+            encoding="utf-8")
         # Preserve the real private ACL/credential adapter, changing ONLY the
         # copied fixture's storage root so tests never write a user profile.
         credentials = self.app / "debug_private_credentials.ps1"
@@ -97,8 +101,19 @@ class NativeCheckpointWorkflow(unittest.TestCase):
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
             data=None if body is None else json.dumps(body).encode(), headers=headers)
-        with urllib.request.urlopen(request, timeout=40) as response:
-            return json.load(response)
+        try:
+            with urllib.request.urlopen(request, timeout=40) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            error.add_note(f"{path}: HTTP {error.code}: {body}")
+            if path != "/_checkpoint_fixture/info":
+                try:
+                    details = self.get(port, "/_checkpoint_fixture/info")
+                    error.add_note(f"Fixture errors: {details['errors']}; transitions: {details['transitions']}")
+                except Exception:
+                    pass
+            raise
 
     def get(self, port, path):
         return self.request(port, path)
@@ -115,7 +130,7 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         with urllib.request.urlopen(request, timeout=10) as response:
             result = json.load(response)
         credentials["token"] = result["token"]
-        return result
+        return {key: value for key, value in result.items() if key != "token"}
 
     def operation(self, accepted, timeout=300):
         deadline = time.monotonic() + timeout
@@ -167,6 +182,8 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         self.assertEqual(candidate["status"]["counts"], self.baseline["counts"])
         self.assertEqual(candidate["nativeTVA"], self.info["nativeTVA"])
         self.assertEqual(candidate["nativeRecords"], self.info["nativeRecords"])
+        self.assertEqual(candidate["configuration"]["sourcePacks"]["packs"],
+                         self.info["configuration"]["sourcePacks"]["packs"])
         self.assertTrue(candidate["debug"]["enabled"])
         self.assertNotEqual(candidate["debug"]["port"], self.info["debug"]["port"])
         self.assertEqual(candidate["debug"]["max_sessions"], 3)
@@ -225,6 +242,13 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         self.owner.wait(timeout=15)
         self.assertEqual(self.owner.returncode, 0)
         (self.case / "native-tva.pl").unlink()
+        (self.case / "settings.json").unlink()
+        (self.case / "source-packs.json").unlink()
+        restored_config = self.api("configuration")
+        self.assertEqual(restored_config["settings"]["startupFiles"],
+                         self.info["configuration"]["settings"]["startupFiles"])
+        self.assertEqual(restored_config["sourcePacks"]["packs"],
+                         self.info["configuration"]["sourcePacks"]["packs"])
         catalog = self.api("catalog")
         again = self.operation(self.api("create", {
             "name": "Saved again after native takeover", "generation": catalog["generation"],
@@ -232,6 +256,8 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         self.assertEqual(again["phase"], "completed", again)
         self.assertEqual(again["result"]["counts"], state["counts"])
         self.assertEqual(again["result"]["configuration"]["nativeTVA"], state["configuration"]["nativeTVA"])
+        self.assertEqual(again["result"]["configuration"]["sourcePacks"],
+                         state["configuration"]["sourcePacks"])
         catalog = self.api("catalog")
         self.api("select", {"id": again["result"]["id"], "revision": catalog["revision"]})
         self.request(self.primary, "/_checkpoint_fixture/stop", {})
@@ -262,6 +288,10 @@ class NativeCheckpointWorkflow(unittest.TestCase):
         self.assertTrue(resumed["tty"])
         self.assertEqual(resumed["status"]["counts"], state["counts"])
         self.assertEqual(resumed["nativeTVA"], self.info["nativeTVA"])
+        self.assertEqual(resumed["configuration"]["settings"]["startupFiles"],
+                         self.info["configuration"]["settings"]["startupFiles"])
+        self.assertEqual(resumed["configuration"]["sourcePacks"]["packs"],
+                         self.info["configuration"]["sourcePacks"]["packs"])
         self.assertFalse(resumed["debug"]["enabled"])
         self.assertIsNone(resumed["credentialHash"])
         self.assertEqual(self.get(self.extra, "/_checkpoint_fixture/info")["pid"], resumed["pid"])
@@ -302,7 +332,14 @@ class NativeCheckpointWorkflow(unittest.TestCase):
                 if "ERROR:" in text:
                     print(log.name, text[-8000:])
         if hasattr(self, "root") and self.root.exists():
-            shutil.rmtree(self.root)
+            for attempt in range(10):
+                try:
+                    shutil.rmtree(self.root)
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(.5)
 
 
 if __name__ == "__main__":

@@ -376,13 +376,20 @@ promote_checkpoint(Id0,ExpectedRevision,Reply) :-
           (memberchk(C,Capabilities)->true;throw(error(checkpoint_capability_required(C),_)))),
         update_run(Id,_{phase:promoting,previousPhase:Data.phase,released:false,
           message:"Draining before original-port takeover."},Reply),
-        thread_create((thread_get_message(go),promotion_worker(Id)),Thread,[detached(true)]),
+        thread_create((thread_get_message(go),promotion_worker(Id)),Thread,
+          [detached(true),inherit_from(main)]),
         assertz(transition_thread(Id,Thread)),thread_send_message(Thread,go)))).
 promotion_worker(Id) :-
     setup_call_cleanup(true,
       catch((perform_promotion(Id)->true;throw(error(checkpoint_promotion_failed,_))),
-        Error,recover_promotion(Id,Error)),
+        Error,recover_transition(Id,Error)),
       (release_old_lease(Id),retractall(transition_thread(Id,_)))).
+recover_transition(Id,Error) :-
+    catch(recover_promotion(Id,Error),RecoveryError,
+      (message_to_string(Error,Original),message_to_string(RecoveryError,Recovery),
+       format(string(Message),'~s; recovery also failed: ~s',[Original,Recovery]),
+       update_run(Id,_{phase:recovery_required,message:Message,
+         recovery:"Automatic recovery is incomplete. Verify the owned instance and listeners before further action."},_))).
 release_old_lease(Id) :-
     (retract(old_lease(Id,Lease))->host(resume_admissions,Lease,_);true).
 perform_promotion(Id) :-
@@ -476,15 +483,28 @@ cleanup_candidate(Id) :-
     (run(Id,_,Owned)->
       ignore(catch(peer_action(Id,stop,_{},_),_,true)),
       (integer(Owned.pid)->
-        owned_process(wait,Owned.pid,3,Exit),
+        owned_process(wait,Owned.pid,20,Exit),
         (Exit==timeout->owned_process(terminate,Owned.pid,none,_),
           owned_process(wait,Owned.pid,3,Final),
           (Final==timeout->throw(error(checkpoint_candidate_did_not_stop(Owned.pid),_));true);true)
       ;true),
       retractall(peer(Id,_)),
-      (exists_directory(Owned.directory)->delete_directory_and_contents(Owned.directory);true),
+      cleanup_run_directory(Owned.directory,Cleanup),
+      update_run(Id,_{cleanup:Cleanup},_),
       release_process_ownership(Id,true)
     ;true).
+cleanup_run_directory(Directory,Cleanup) :-
+    (exists_directory(Directory)->
+     catch((delete_directory_and_contents(Directory),Cleanup=complete),
+       Error,empty_directory_cleanup(Error,Directory,Cleanup))
+    ;Cleanup=complete).
+empty_directory_cleanup(error(permission_error(delete,directory,Directory),_),Directory,deferred_empty_directory) :-
+    % A Windows console host/observer may retain the exited process's working
+    % directory. Only an empty directory can be deferred; payload deletion must
+    % have succeeded, and process exit was already confirmed.
+    directory_files(Directory,Entries),
+    forall(member(Entry,Entries),memberchk(Entry,['.','..'])), !.
+empty_directory_cleanup(Error,_,_) :- throw(Error).
 release_process_ownership(Id,ClearPID) :-
     with_mutex(powder_checkpoint_data,
       sig_atomic(

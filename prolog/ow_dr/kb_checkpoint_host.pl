@@ -26,6 +26,7 @@
 :- use_module(library(lists)).
 :- dynamic host/1.
 :- volatile host/1.
+:- meta_predicate stop_stage(+,0).
 :- multifile kb_saved_state:resume_application/2,
              kb_checkpoint:runtime_hook/3, kb_checkpoint:launch_hook/4,
              kb_checkpoint:process_hook/4.
@@ -142,9 +143,12 @@ wait_host(Queue) :-
       prolog(kb_interactive_control:prolog_console),
       shell(kb_interactive_control:os_shell)]).
 stop_host :-
-    kb_debug_admin:stop_host_debug,
-    close_all_listeners,kb_checkpoint:stop_managed_instance,
-    kb_jobs:stop_pools,retractall(host(_)).
+    stop_stage(debug,kb_debug_admin:stop_host_debug),
+    stop_stage(http,close_all_listeners),
+    stop_stage(control,kb_checkpoint:stop_managed_instance),
+    stop_stage(pools,kb_jobs:stop_pools),retractall(host(_)).
+stop_stage(Stage,Goal) :-
+    catch(Goal,Error,throw(error(checkpoint_host_cleanup_failed(Stage,Error),_))).
 
 host_configuration(Config) :-
     host(H),

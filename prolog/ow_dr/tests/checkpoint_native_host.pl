@@ -1,4 +1,4 @@
-:- module(checkpoint_native_fixture,[fixture_main/0,allow_bind/0]).
+:- module(checkpoint_native_fixture,[fixture_main/0,allow_bind/0,record_error/1]).
 :- use_module('../kb_checkpoint_host',[]).
 :- use_module('../kb_checkpoint_http',[]).
 :- use_module('../kb_saved_state',[]).
@@ -13,6 +13,9 @@
 :- use_module(library(filesex)).
 :- use_module(library(readutil)).
 :- use_module(library(crypto),[crypto_data_hash/3]).
+:- dynamic fixture_error/1.
+:- volatile fixture_error/1.
+record_error(Error) :- message_to_string(Error,Text),assertz(fixture_error(Text)).
 
 % Loaded only by a copied, disposable fixture app. Never import from app.pl.
 :- http_handler('/_checkpoint_fixture/info',fixture_info,[]).
@@ -25,7 +28,7 @@ allow_bind :-
     (kb_checkpoint_host:host(H),H.mode==candidate,exists_file(Marker)->
       throw(error(fixture_rejected_candidate_bind,_));true).
 fixture_main :-
-    catch(fixture_run,Error,(print_message(error,Error),throw(Error))),halt.
+    catch_with_backtrace(fixture_run,Error,(print_message(error,Error),throw(Error))),halt.
 fixture_run :-
     case_dir(D),kb_paths:repo_root(Root),directory_file_path(Root,'KBs',KBs),
     make_directory_path(KBs),
@@ -40,6 +43,11 @@ fixture_run :-
     kb_native_annotations:native_status(Empty),
     kb_native_annotations:initialize_defaults(Empty.revision,Initialized),
     kb_native_annotations:upsert_native(cyc,x_OneMt,utility,0.75,Initialized.revision,_),
+    kb_source_packs:create_pack("Native saved composition",['KBs/native-one.krf'],none,CreatedPack),
+    Composition=CreatedPack.pack.put(_{
+      choices:[choice{symbol:x_parent,files:['KBs/native-two.krf'],origin:user}],
+      members:[member{path:'KBs/native-one.krf',role:root,why:[],identity:null}]}),
+    kb_source_packs:save_pack(Composition,CreatedPack.revision,_),
     kb_checkpoint_host:free_loopback_port(DebugPort),
     setup_call_cleanup(kb_checkpoint_host:start_host(Primary,Settings,
       [enabled(true),port(DebugPort),max_sessions(3),query_timeout(2)],main),
@@ -61,6 +69,11 @@ fixture_info(_) :-
     (stream_property(user_input,tty(true))->TTY=true;TTY=false),
     findall(T,kb_lifecycle:console_owner(T),Console),
     kb_checkpoint:checkpoint_instance(Instance),
+    kb_saved_state:effective_configuration(Configuration),
+    findall(Error,fixture_error(Error),Errors),
+    findall(_{run:Run,status:Text},
+      (kb_checkpoint:transition_thread(Run,Thread),thread_property(Thread,status(State)),
+       term_string(State,Text)),Transitions),
     kb_native_annotations:restored_native_snapshot(Native),kb_saved_state:native_summary(Native,NativeSummary),
     term_string(Native.records,NativeRecords),
     kb_debug_telnet:debug_resume_profile(Debug),
@@ -70,7 +83,8 @@ fixture_info(_) :-
     ;CredentialHash=null),
     reply_json_dict(_{fixture:D,pid:PID,status:Status,jobs:Jobs,tty:TTY,console:Console,
       instance:Instance,nativeTVA:NativeSummary,nativeRecords:NativeRecords,
-      debug:Debug,credentialHash:CredentialHash}).
+      debug:Debug,credentialHash:CredentialHash,configuration:Configuration,
+      errors:Errors,transitions:Transitions}).
 fixture_stop(_) :-
     kb_checkpoint_host:host(H),thread_send_message(H.stopQueue,stop),
     reply_json_dict(_{stopping:true}).
