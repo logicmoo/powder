@@ -48,3 +48,26 @@ Entries are grouped by canonical symbol, never split by observed arity. Unknown
 arity remains unknown; a predicate type name is not converted to an arity here.
 Existing semantic rule-head and explicit schema declaration helpers remain the
 authority for the base dependency summary.
+
+## Snapshot accessor
+
+`kb_catalog_query:source_pack_snapshot/1` returns `status`, `revision`, `taxonomy`,
+`verifiedAt`, `coverage`, and a `files` assoc. Each file retains its separate
+legacy compiler fingerprint and `rawSourceHash`, plus `dependencySummary` and
+`providerExtensions`.
+
+`status:available` means a validated projection with a stat-compatible current
+source set; it does not mean a new source-content hash scan.
+
+Capture this accessor once per resolution/index operation. It reads the
+validated query projection and checks the current eligible path set and file
+stats; it does not compile or parse normalized sources. Changed paths/stats mark
+the snapshot stale and prevent a complete-provider claim. Exact hashes must
+still be verified before loading. A projection predating the extension fields is
+explicitly unavailable until refreshed, not a successful empty provider index.
+
+Removed original files are excluded by the next full catalog revision. Their
+durable assertion-ID assignments and historical caches are not deleted.
+
+The [SourcePack consumer contract](source-pack-catalog-resolution.md) documents
+the lazy adapter, explicit fallback, missing choices, and load-time hash checks.
