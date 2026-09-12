@@ -4,6 +4,7 @@
 :- use_module(kb_activity,[]).
 :- use_module(kb_kee_auth,[]).
 :- use_module(kb_kee_todo_schema,[]).
+:- use_module(kb_kee_agent_schema,[]).
 :- use_module(kb_kee_schema,[reject/2,json_size/2]).
 :- use_module(library(assoc)).
 :- use_module(library(filesex)).
@@ -98,13 +99,16 @@ apply_entry(Sequence,Entry,Rows0,Rows) :-
     (string(Key),get_assoc(Key,Rows0,Current)->true;Current=null),
     (Current==Entry.before->true;reject(ledger_corrupt,json{reason:before_image})),
     After=Entry.after,exact_object(After,[id,kind,mt,revision,sequence,deleted,data]),
-    (After.id==Key,After.sequence==Sequence,After.kind==todo,
+    (After.id==Key,After.sequence==Sequence,memberchk(After.kind,[todo,agent_run]),
      memberchk(After.deleted,[true,false]),(After.mt==null;atom(After.mt))->true;
       reject(ledger_corrupt,json{reason:resource_fields})),
-    validate_todo(After),
+    validate_domain_record(After),
     resource_revision(After,Expected),
     (Expected==After.revision->true;reject(ledger_corrupt,json{reason:resource_digest})),
     put_assoc(Key,Rows0,After,Rows).
+validate_domain_record(R) :-
+    (R.kind==todo->validate_todo(R);
+      kb_kee_agent_schema:validate_record(R)).
 validate_actor(Actor) :-
     Spec=obj([req(actor,str(1,256)),req(kind,enum([user,llm,symbolic])),req(agent,str(1,256)),
       req(conversation,str(1,256)),req(model,nullable(str(1,256))),
@@ -187,7 +191,14 @@ authorize_entries(P,Mode,Entries) :-
     forall(member(Entry,Entries),
       (authorize_image(P,Mode,Entry.before),authorize_image(P,Mode,Entry.after))).
 authorize_image(_,_,null) :- !.
-authorize_image(P,Mode,Image) :- kb_kee_auth:authorize_mt(P,Mode,Image.mt).
+authorize_image(P,Mode,Image) :-
+    kb_kee_auth:authorize_mt(P,Mode,Image.mt),
+    (Image.kind==agent_run->
+      Owner=Image.data.owner,
+      (P.actor==Owner.actor,P.agent==Owner.agent->true
+      ;Mode==read,memberchk('agent.run.inspect_all',P.permissions)->true
+      ;reject(agent_owner_denied,json{}))
+    ;true).
 reply(Event,Current,Replayed,json{committed:true,replayed:Replayed,
     revision:Event.revision,currentRevision:Current,changeset:Event.id,sequence:Event.sequence,result:Event.result}).
 stage_commit(Token,P,Path,State) :-

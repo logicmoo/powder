@@ -1,6 +1,6 @@
 # Shared typed KEE backend
 
-## Implemented stages: reads, inference, and durable application TODOs
+## Implemented stages: reads, inference, TODOs and agent lifecycle data
 
 `kb_kee.pl` is a local application backend, not an LLM caller, HTTP route,
 coding-agent interface, or permission grant. The generated
@@ -20,6 +20,12 @@ The same registry now also exposes persistent application TODO CRUD, ledger
 status, authorized audit, conflict-safe undo and redo. Authorized changes are
 automatic, not pending an additional approval flag. See
 [the ledger contract](kee-ledger.md) for persistence and exact write semantics.
+
+The [agent-state domain](kee-agent-state.md) adds durable run cursors, inert
+dialogue/goal/plan/action/log events and verified mutation-receipt links in that
+same ledger. It does not start, stop, resume or execute an agent. The host's
+bounded interpreter owns execution and cancellation; recorded phase is not a
+claim that a runtime thread was started or stopped.
 
 Managed **KB assertion** editing, native annotation writes, provider dependency
 planning, model operations and symbolic execution are not advertised as callable

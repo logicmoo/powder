@@ -194,7 +194,9 @@ new authority rather than claim that an unrelated checkpoint captures it.
 
 ## Scope boundaries
 
-The initial ledger domain is application TODOs only. It does **not** assert,
+The ledger domains are application TODOs and host-owned
+[agent lifecycle data](kee-agent-state.md). Execution history is append-only,
+not undoable execution; TODO undo/redo remains supported. The ledger does **not** assert,
 update, retract, mask, or load KB assertions. Native TVA, source files, corpus
 repairs, source configuration and compiler caches are untouched. Knowledge
 assertion editing remains unavailable until a coordinated durable-ledger +

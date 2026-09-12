@@ -19,3 +19,8 @@ worker(commit,Job) :-
         error(kee(Code,_),_),Reply=json{committed:false,error:Code}),
       kb_kee_auth:close_context(T)),
     json_write_dict(current_output,Reply,[width(0)]),nl.
+worker(invoke,Job) :-
+    setup_call_cleanup(open(Job,read,S,[encoding(utf8)]),read_term(S,invoke(Host,Request),[]),close(S)),
+    setup_call_cleanup(kb_kee:open_context(Host,T),
+      kb_kee:invoke(T,Request,Reply),kb_kee:close_context(T)),
+    json_write_dict(current_output,Reply,[width(0)]),nl.

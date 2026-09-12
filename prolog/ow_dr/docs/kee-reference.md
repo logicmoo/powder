@@ -1,6 +1,6 @@
 # KEE callable reference
 
-Generated from `kb_kee_registry.pl`; revision `f9635277aed82902139b85dd9ab4f54047cd7f81f9642a7cd8dc67d3a871a524`.
+Generated from `kb_kee_registry.pl`; revision `4c3a61402dfa2dd800231454fdee930340ac094d9e3ca0c1cbe219ff1e720931`.
 
 | Tool | Schema | Permission | Scope | Effects |
 |---|---|---|---|---|
@@ -21,6 +21,11 @@ Generated from `kb_kee_registry.pl`; revision `f9635277aed82902139b85dd9ab4f5404
 | `kee_audit` | 1 | `[changeset.read]` | `read_mt` | `[application_read]` |
 | `kee_undo` | 1 | `[changeset.undo,todo.write]` | `resource_write` | `[application_write]` |
 | `kee_redo` | 1 | `[changeset.undo,todo.write]` | `resource_write` | `[application_write]` |
+| `kee_agent_run_create` | 1 | `[agent.run.write]` | `write_mt` | `[application_write,agent_state_control]` |
+| `kee_agent_run_get` | 1 | `[agent.run.read]` | `resource_read` | `[application_read]` |
+| `kee_agent_run_list` | 1 | `[agent.run.read]` | `read_mt` | `[application_read]` |
+| `kee_agent_run_event` | 1 | `[agent.run.write]` | `resource_write` | `[application_write,agent_state_control]` |
+| `kee_agent_run_events` | 1 | `[agent.run.read]` | `resource_read` | `[application_read]` |
 
 ## `kee_catalog_status`
 
@@ -447,6 +452,137 @@ Redo an undo changeset only when affected versions still match.
     "revision": {"maxLength":64,"minLength":64,"type":"string"}
   },
   "required": ["revision", "changeset" ],
+  "type":"object"
+}
+```
+
+## `kee_agent_run_create`
+
+Create durable agent lifecycle data without starting an agent.
+
+```json
+{
+  "additionalProperties":false,
+  "properties": {
+    "mt": {"maxLength":4096,"minLength":1,"type":"string"},
+    "revision": {"maxLength":64,"minLength":64,"type":"string"},
+    "sourceJson": {"maxLength":16384,"minLength":2,"type":"string"},
+    "stateJson": {"maxLength":65536,"minLength":2,"type":"string"}
+  },
+  "required": ["revision", "mt", "sourceJson", "stateJson" ],
+  "type":"object"
+}
+```
+
+## `kee_agent_run_get`
+
+Read owned durable agent state.
+
+```json
+{
+  "additionalProperties":false,
+  "properties": {"id": {"maxLength":128,"minLength":1,"type":"string"}},
+  "required": ["id" ],
+  "type":"object"
+}
+```
+
+## `kee_agent_run_list`
+
+List authorized agent state summaries in one MT.
+
+```json
+{
+  "additionalProperties":false,
+  "properties": {
+    "limit": {"maximum":100,"minimum":1,"type":"integer"},
+    "mt": {"maxLength":4096,"minLength":1,"type":"string"},
+    "offset": {"maximum":1000000,"minimum":0,"type":"integer"}
+  },
+  "required": ["mt" ],
+  "type":"object"
+}
+```
+
+## `kee_agent_run_event`
+
+Atomically CAS agent state and its inert event without executing an action.
+
+```json
+{
+  "additionalProperties":false,
+  "properties": {
+    "action": {
+      "anyOf": [
+	 {"type":"null"},
+	 {
+	  "additionalProperties":false,
+	  "properties": {
+	    "callId": {"maxLength":128,"minLength":1,"type":"string"},
+	    "commitRevision": {"anyOf": [ {"type":"null"},  {"maxLength":64,"minLength":64,"type":"string"} ]},
+	    "status": {
+	      "enum": ["planned", "dispatched", "committed", "unknown", "read_complete", "failed" ],
+	      "type":"string"
+	    },
+	    "tool": {"maxLength":64,"minLength":1,"type":"string"}
+	  },
+	  "required": ["tool", "callId", "status", "commitRevision" ],
+	  "type":"object"
+	}
+      ]
+    },
+    "eventJson": {"maxLength":16384,"minLength":2,"type":"string"},
+    "eventKind": {
+      "enum": [
+	"transition",
+	"dialogue",
+	"goal",
+	"plan",
+	"action_intent",
+	"action_outcome",
+	"log",
+	"stop",
+	"error"
+      ],
+      "type":"string"
+    },
+    "expectedEvent": {"maximum":10000000,"minimum":0,"type":"integer"},
+    "id": {"maxLength":128,"minLength":1,"type":"string"},
+    "resourceRevision": {"maxLength":64,"minLength":64,"type":"string"},
+    "revision": {"maxLength":64,"minLength":64,"type":"string"},
+    "stateJson": {"maxLength":65536,"minLength":2,"type":"string"},
+    "status": {"enum": ["created", "running", "paused", "stopped", "completed", "failed" ],"type":"string"},
+    "step": {"maximum":10000000,"minimum":0,"type":"integer"}
+  },
+  "required": [
+    "revision",
+    "id",
+    "resourceRevision",
+    "expectedEvent",
+    "status",
+    "step",
+    "stateJson",
+    "eventKind",
+    "eventJson",
+    "action"
+  ],
+  "type":"object"
+}
+```
+
+## `kee_agent_run_events`
+
+Read authorized ordered agent events and outcome links.
+
+```json
+{
+  "additionalProperties":false,
+  "properties": {
+    "id": {"maxLength":128,"minLength":1,"type":"string"},
+    "limit": {"maximum":100,"minimum":1,"type":"integer"},
+    "offset": {"maximum":1000000,"minimum":0,"type":"integer"}
+  },
+  "required": ["id" ],
   "type":"object"
 }
 ```

@@ -2,6 +2,7 @@
 :- use_module(kb_kee_schema).
 :- use_module(kb_cache,[]).
 :- use_module(kb_kee_todo_schema,[]).
+:- use_module(kb_kee_agent_schema,[]).
 :- use_module(library(lists)).
 :- use_module(library(http/json)).
 
@@ -22,8 +23,14 @@ tool(kee_todo_delete,todo_delete,'Tombstone an application TODO without deleting
 tool(kee_audit,ledger_audit,'Read MT-authorized managed application changesets',[application_read],read_mt).
 tool(kee_undo,ledger_undo,'Undo a TODO changeset only when affected versions still match',[application_write],resource_write).
 tool(kee_redo,ledger_redo,'Redo an undo changeset only when affected versions still match',[application_write],resource_write).
+tool(kee_agent_run_create,agent_run_create,'Create durable agent lifecycle data without starting an agent',[application_write,agent_state_control],write_mt).
+tool(kee_agent_run_get,agent_run_get,'Read owned durable agent state',[application_read],resource_read).
+tool(kee_agent_run_list,agent_run_list,'List authorized agent state summaries in one MT',[application_read],read_mt).
+tool(kee_agent_run_event,agent_run_event,'Atomically CAS agent state and its inert event without executing an action',[application_write,agent_state_control],resource_write).
+tool(kee_agent_run_events,agent_run_events,'Read authorized ordered agent events and outcome links',[application_read],resource_read).
 
 input(Operation,Spec) :- kb_kee_todo_schema:input_spec(Operation,Spec),!.
+input(Operation,Spec) :- kb_kee_agent_schema:input_spec(Operation,Spec),!.
 input(catalog_status,obj([])).
 input(catalog_search,obj([req(q,str(0,256)),opt(scope,enum([all,loaded,unloaded])),
     opt(group,enum([all,predicates,functions,collections,microtheories,external_symbols,
@@ -56,6 +63,10 @@ requirements(Operation,Permission,Extra,Mutation,application_todo) :-
     ;memberchk(Operation,[ledger_status,ledger_call_status,ledger_audit])->
       Permission='changeset.read',Extra=[],Mutation=false
     ;Permission='todo.read',Extra=[],Mutation=false).
+requirements(Operation,Permission,[],Mutation,agent_control) :-
+    kb_kee_agent_schema:input_spec(Operation,_),!,
+    (memberchk(Operation,[agent_run_create,agent_run_event])->
+      Permission='agent.run.write',Mutation=true;Permission='agent.run.read',Mutation=false).
 requirements(query,'knowledge.query',[],false,knowledge) :- !.
 requirements(_,'knowledge.read',[],false,knowledge).
 capabilities(Capabilities) :-

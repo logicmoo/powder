@@ -26,7 +26,7 @@ run(todo_get,_,P,_,Args,Reply) :- !,
     Reply=json{revision:State.revision,resource:Resource}.
 run(todo_list,_,P,_,Args,Reply) :- !,
     kb_kee_ledger:snapshot(State),mt_key(Args.mt,MT),kb_kee_auth:authorize_mt(P,read,MT),
-    findall(Key-R,(member(R,State.resources),R.deleted==false,R.mt==MT,
+    findall(Key-R,(member(R,State.resources),R.kind==todo,R.deleted==false,R.mt==MT,
       matches_status(Args,R),Priority is -R.data.priority,Key=Priority-R.id),Pairs),
     keysort(Pairs,Sorted),pairs_values(Sorted,Rows),page(Args,Rows,Page,Total),
     Reply=json{revision:State.revision,items:Page,total:Total}.
@@ -71,7 +71,9 @@ plan(ledger_redo,P,Args,State,Changes,json{action:redo,redoOf:Args.changeset}) :
     (Original.tool=="kee_undo"->true;reject(not_an_undo_changeset,json{})).
 undo_authority(P,State,Id) :-
     (kb_kee_ledger:event(Id,State,E)->true;reject(changeset_not_found,json{})),
-    kb_kee_ledger:authorize_entries(P,write,E.entries).
+    kb_kee_ledger:authorize_entries(P,write,E.entries),
+    (forall(member(Entry,E.entries),Entry.after.kind==todo)->true;
+      reject(non_undoable_resource_kind,json{})).
 todo_data(P,Input,Data) :-
     (Input.status==done->
       (P.kind==user,Input.acceptance\==[],Input.evidence\==[]->true;
@@ -81,10 +83,10 @@ todo_data(P,Input,Data) :-
     Data=Input.put(completion,Completion).
 validate_transition(P,_,Entries,State) :-
     forall(member(Entry,Entries),validate_changed(P,Entry.after,State)),
-    findall(Id-R,(member(R,State.resources),Id=R.id),Pairs),list_to_assoc(Pairs,Map),
-    forall((member(R,State.resources),R.deleted==false),validate_dependencies(Map,R)),
-    findall(Id,(member(R,State.resources),R.deleted==false,Id=R.id),Vertices),
-    findall(Id-Dep,(member(R,State.resources),R.deleted==false,Id=R.id,member(Dep,R.data.dependencies)),Edges),
+    findall(Id-R,(member(R,State.resources),R.kind==todo,Id=R.id),Pairs),list_to_assoc(Pairs,Map),
+    forall((member(R,State.resources),R.kind==todo,R.deleted==false),validate_dependencies(Map,R)),
+    findall(Id,(member(R,State.resources),R.kind==todo,R.deleted==false,Id=R.id),Vertices),
+    findall(Id-Dep,(member(R,State.resources),R.kind==todo,R.deleted==false,Id=R.id,member(Dep,R.data.dependencies)),Edges),
     vertices_edges_to_ugraph(Vertices,Edges,Graph),
     (top_sort(Graph,_)->true;reject(todo_dependency_cycle,json{})).
 validate_changed(P,R,State) :-

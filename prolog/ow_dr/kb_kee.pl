@@ -9,6 +9,7 @@
 :- use_module(kb_activity,[]).
 :- use_module(kb_cache,[]).
 :- use_module(kb_kee_todos,[]).
+:- use_module(kb_kee_agent_runs,[]).
 :- use_module(library(time)).
 
 registry(Token,Reply) :-
@@ -64,6 +65,9 @@ run_tool(C,Token,P,Input,Args,Result) :-
     (C.domain==application_todo->
       Request=json{tool:Input.tool,schemaVersion:Input.schemaVersion,callId:Input.callId,arguments:Args},
       kb_kee_todos:run(C.operation,Token,P,Request,Args,Result)
+    ;C.domain==agent_control->
+      Request=json{tool:Input.tool,schemaVersion:Input.schemaVersion,callId:Input.callId,arguments:Args},
+      kb_kee_agent_runs:run(C.operation,Token,P,Request,Args,Result)
     ;execute(C.operation,Args,Result)).
 
 option(Args,Key,Default,Value) :- (get_dict(Key,Args,Value)->true;Value=Default).
