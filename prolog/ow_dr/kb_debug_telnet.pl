@@ -15,6 +15,7 @@
 
 :- dynamic service/6, auth_digest/2, client/5, attempts/3.
 :- volatile service/6, auth_digest/2, client/5, attempts/3.
+:- thread_local telnet_channel/2.
 
 % No initialization: importing this module cannot start a listener.
 start_debug_telnet :- start_debug_telnet([]).
@@ -155,8 +156,10 @@ client_main(G,Id,Socket,C) :-
           (set_stream(In,encoding(octet)),set_stream(Out,encoding(utf8)),
            set_stream(Out,newline(posix)),set_stream(Out,buffer(false)),
            set_stream(Out,timeout(C.query_timeout)),
-           call_with_time_limit(C.session_timeout,
-             client_session(G,Id,In,Out,C),debug_session)),
+           setup_call_cleanup(asserta(telnet_channel(In,Out),Channel),
+             call_with_time_limit(C.session_timeout,
+               client_session(G,Id,In,Out,C),debug_session),
+             erase(Channel))),
           (close_stream(In),close_stream(Out)))),_,true),
       (close_socket(Socket),
        with_mutex(powder_debug_clients,retractall(client(G,Id,_,_,_))))).
@@ -182,18 +185,67 @@ xor_codes([],[],D,D).
 xor_codes([A|As],[B|Bs],D0,D) :-
     D1 is D0 \/ (A xor B),xor_codes(As,Bs,D1,D).
 
-% This bounded raw-line protocol deliberately rejects Telnet IAC negotiation.
-% The bundled client sends UTF-8 with LF/CRLF, never IAC or terminal controls.
 line(In,Limit,Codes) :- line_codes(In,Limit,[],Reverse),reverse(Reverse,Codes).
 line_codes(In,Left,Acc,Codes) :-
-    get_byte(In,B),
+    Wire is Left*4+256,
+    telnet_line_codes(In,Left,Acc,Codes,budget(Wire,32)).
+telnet_line_codes(In,Left,Acc,Codes,Budget) :-
+    telnet_byte(In,Budget,B),
     (B=:= -1 -> (Acc==[]->throw(debug_client_eof);throw(debug_incomplete_line));
      B=:=10 -> Codes=Acc;
-     B=:=13 -> get_byte(In,Next),
+     B=:=13 -> telnet_byte(In,Budget,Next),
        (memberchk(Next,[10,0])->Codes=Acc;throw(debug_invalid_newline));
-     (B<32;B=:=127;B=:=255) -> throw(debug_protocol_control);
-     Left>0 -> Rest is Left-1,line_codes(In,Rest,[B|Acc],Codes);
+     (B<32;B=:=127) -> throw(debug_protocol_control);
+     Left>0 -> Rest is Left-1,telnet_line_codes(In,Rest,[B|Acc],Codes,Budget);
      throw(debug_line_limit)).
+
+wire_byte(In,Budget,B) :-
+    arg(1,Budget,Left),
+    (Left>0->Next is Left-1,nb_setarg(1,Budget,Next),get_byte(In,B);
+     throw(debug_telnet_wire_limit)).
+telnet_byte(In,Budget,B) :-
+    wire_byte(In,Budget,Byte),
+    (Byte=:=255 ->
+       wire_byte(In,Budget,Command),
+       (Command=:=255->B=255;
+       negotiation_budget(Budget),
+       telnet_command(Command,In,Budget),
+       telnet_byte(In,Budget,B))
+    ;B=Byte).
+negotiation_budget(Budget) :-
+    arg(2,Budget,Left),
+    (Left>0->Next is Left-1,nb_setarg(2,Budget,Next);
+     throw(debug_telnet_negotiation_limit)).
+telnet_command(Command,In,Budget) :-
+    memberchk(Command,[251,252,253,254]),!,
+    wire_byte(In,Budget,Option),
+    (Option>=0->true;throw(debug_client_eof)),
+    (Command=:=251->telnet_reply(In,254,Option);
+     Command=:=253->telnet_reply(In,252,Option);true).
+telnet_command(250,In,Budget) :- !,telnet_subnegotiation(In,Budget,256).
+telnet_command(Command,_,_) :-
+    memberchk(Command,[241,242,243,244,245,246,247,248,249]),!.
+telnet_command(_,_,_) :- throw(debug_telnet_invalid_command).
+telnet_subnegotiation(In,Budget,Left) :-
+    (Left>0->true;throw(debug_telnet_subnegotiation_limit)),
+    wire_byte(In,Budget,B),Rest is Left-1,
+    (B=:= -1->throw(debug_client_eof);
+     B=:=255 ->
+       (Rest>0->true;throw(debug_telnet_subnegotiation_limit)),
+       wire_byte(In,Budget,Next),Remaining is Rest-1,
+       (Next=:=240->true;
+       Next=:=255->telnet_subnegotiation(In,Budget,Remaining);
+       throw(debug_telnet_invalid_subnegotiation))
+    ;telnet_subnegotiation(In,Budget,Rest)).
+telnet_reply(In,Command,Option) :-
+    (telnet_channel(In,Out)->true;
+     % Authenticated clients already alive during a code-only publication.
+     current_input(Current),Current==In,current_output(Out)->true;
+     throw(debug_telnet_reconnect_required)),
+    stream_property(Out,encoding(Encoding)),
+    setup_call_cleanup(set_stream(Out,encoding(octet)),
+      (put_byte(Out,255),put_byte(Out,Command),put_byte(Out,Option),flush_output(Out)),
+      set_stream(Out,encoding(Encoding))).
 
 repl(In,Out,C) :-
     format(Out,'?- ',[]),flush_output(Out),

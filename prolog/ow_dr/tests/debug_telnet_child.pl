@@ -35,6 +35,9 @@ command(R,Port,Result) :-
     ;R.action=="stop" -> stop_debug_telnet,Result=_{stopped:true}
     ;R.action=="status" -> debug_telnet_status(Result)
     ;R.action=="snapshot" -> debug_snapshot_safe,Result=_{safe:true}
+    ;R.action=="reload_transport" ->
+      source_file(kb_debug_telnet:debug_telnet_status(_),File),
+      load_files(File,[if(true),silent(true),imports([])]),Result=_{reloaded:true}
     ;R.action=="flags" ->
       current_prolog_flag(toplevel_goal,Goal),current_input(In),current_output(Out),
       (stream_property(In,alias(user_input))->MainIn=true;MainIn=false),

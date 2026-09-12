@@ -105,12 +105,31 @@ Never copy the token into a command line, chat, log, or debugger screenshot.
 
 ## Protocol and REPL behavior
 
-This is a **raw UTF-8 TCP line console, not standard Telnet**, HTTP/JSON, or a
-terminal emulator. **The bundled compatible client is required.** It sends UTF-8 and
-LF/CRLF (CR-NUL is also accepted). Telnet IAC negotiation and terminal-control
-bytes are rejected, not interpreted. Standard Windows Telnet clients that send
-negotiation are therefore not supported. There is no history, completion,
-terminal emulation, or remote Control-C promise.
+This is a **TCP line console with a bounded Telnet IAC transport adapter**, not
+HTTP/JSON or a terminal emulator. Standard Telnet clients may connect and
+authenticate; the bundled client remains recommended. Enter `AUTH ` followed
+by the secret obtained locally from the owner-private file. Do not paste the
+secret into chat/logs. All terminal options are refused: WILL receives DONT,
+DO receives WONT, and WONT/DONT are consumed without negotiation loops.
+Bounded SB…IAC SE subnegotiations are discarded; IAC IAC becomes one literal
+data byte. Other known single-byte IAC controls are consumed, never treated
+as Prolog source. There is no remote Control-C/history/completion promise.
+
+Negotiation may occur before authentication, between token/query characters,
+inside a UTF-8 byte sequence, or between CR and LF/NUL. Application data remains
+UTF-8 with LF, CRLF, or CR-NUL lines. An escaped literal 255 is correctly
+transport data, but is not valid UTF-8 and cannot bypass authentication or
+source decoding. Each line has at most 32 IAC commands, 256 bytes per
+subnegotiation, and `4*line_limit+256` total wire bytes, in addition to existing
+authentication/idle/session deadlines. Incomplete or excessive negotiation
+closes only that client.
+
+Code-only publication of `kb_debug_telnet.pl` does not restart the service or
+rotate credentials. Authenticated sessions reaching the new reader are
+supported even without the new thread-local channel record. A connection
+already blocked inside the old raw reader may need to reconnect (or finish its
+ordinary line first) before negotiating. Newly accepted clients have the
+adapter from the start. No app/scanner/listener restart is required.
 
 The server sends `POWDER DEBUG 1` and `AUTH required`. The client's first line
 must be `AUTH ` followed by the private token. Before authentication there is

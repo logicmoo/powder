@@ -116,6 +116,17 @@ def read_all(s):
         if len(data) > 100_000:
             raise AssertionError("Unexpected response size")
 
+def receive_until(s, marker):
+    data = bytearray()
+    while marker not in data:
+        block = s.recv(4096)
+        if not block:
+            raise AssertionError("Connection closed before expected protocol marker")
+        data.extend(block)
+        if len(data) > 100_000:
+            raise AssertionError("Unexpected response size")
+    return bytes(data)
+
 
 def wait_sessions(app, expected=0):
     deadline = time.monotonic() + 3
@@ -128,6 +139,73 @@ def wait_sessions(app, expected=0):
 
 @unittest.skipUnless(sys.platform == "win32", "Owner-private Windows credential ACL")
 class DebugTelnetIntegration(unittest.TestCase):
+    def test_telnet_negotiation_before_auth_and_inside_utf8_query(self):
+        with App() as app:
+            app.start()
+            token = app.credentials()["token"].encode("ascii")
+            with app.raw() as s:
+                receive_until(s, b"AUTH required\n")
+                negotiation = b"\xff\xfb\x01\xff\xfd\x03\xff\xfc\x1f\xff\xfe\x18"
+                sub = b"\xff\xfa\x18assertz(debug_fixture_marker(unauthenticated)).\xff\xff\xff\xf0"
+                auth = b"AUTH " + token[:10] + b"\xff\xfb\x18" + token[10:]
+                s.sendall(negotiation + sub + auth + b"\r\xff\xf1\n")
+                response = receive_until(s, b"?- ")
+                self.assertIn(b"\xff\xfe\x01", response)
+                self.assertIn(b"\xff\xfc\x03", response)
+                self.assertIn(b"\xff\xfe\x18", response)
+                self.assertIn(b"OK\n", response)
+                self.assertTrue(token not in response)
+                self.assertFalse(app.request("marker")["mutated"])
+                query = 'current_prolog_flag(pid, PID), X = "Ω".'.encode("utf-8")
+                index = query.index(b"\xce") + 1
+                s.sendall(query[:index] + b"\xff\xfd\x01" + query[index:] + b"\r\0")
+                answer = receive_until(s, b"?- ")
+                self.assertIn(b"\xff\xfc\x01", answer)
+                self.assertIn(str(app.pid).encode(), answer)
+                self.assertIn("Ω".encode(), answer)
+                s.sendall(b"end_of_file.\r\n")
+                read_all(s)
+            wait_sessions(app)
+            self.assertIsNone(app.process.poll())
+
+    def test_telnet_budgets_and_dangling_iac_are_bounded(self):
+        with App() as app:
+            app.start(auth_timeout=.3)
+            for wire in (b"\xff\xfa\x18" + b"x" * 300,
+                         b"\xff\xf1" * 33, b"\xff"):
+                with app.raw() as s:
+                    receive_until(s, b"AUTH required\n")
+                    s.sendall(wire)
+                    started = time.monotonic()
+                    response = read_all(s)
+                    self.assertLess(time.monotonic() - started, 1.5)
+                    self.assertNotIn(b"?- ", response)
+                wait_sessions(app)
+            self.assertFalse(app.request("marker")["mutated"])
+
+    def test_transport_reload_preserves_credentials_and_existing_session(self):
+        with App() as app:
+            app.start()
+            file = app.file
+            token = app.credentials()["token"]
+            c = app.connect()
+            try:
+                c.prompt()
+                self.assertEqual(app.request("reload_transport"), {"reloaded": True})
+                self.assertTrue(app.credentials()["token"] == token)
+                self.assertEqual(app.file, file)
+                # Simulate an authenticated client frame predating channel registration.
+                c.send("retractall(kb_debug_telnet:telnet_channel(_,_)).")
+                c.prompt()
+                c.socket.sendall(b"\xff\xfd\x03current_prolog_flag(pid, PID).\r\n")
+                reply = c.prompt()
+                self.assertIn(b"\xff\xfc\x03", reply)
+                self.assertIn(str(app.pid).encode(), reply)
+                c.send("end_of_file.")
+            finally:
+                c.close()
+            wait_sessions(app)
+
     def test_authentication_before_evaluation_and_main_io_preserved(self):
         with App() as app:
             self.assertFalse(app.request("status")["enabled"])
@@ -279,7 +357,7 @@ class DebugTelnetIntegration(unittest.TestCase):
                 second.close()
             wait_sessions(app)
 
-    def test_rate_and_session_limits_and_iac_rejection(self):
+    def test_rate_and_session_limits_with_negotiated_invalid_auth(self):
         with App() as app:
             app.start(max_sessions=1, attempt_limit=2, attempt_window=5)
             active = app.connect()
