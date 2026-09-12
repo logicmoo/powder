@@ -115,7 +115,7 @@ start_workers(Chunks,Implementation,Work,Workers) :-
 worker_spec(Work,Sources,worker(Sources,Input,Output,Progress,State)) :-
     uuid(Id),directory_file_path(Work,Id,Base),
     atom_concat(Base,'.input',Input),atom_concat(Base,'.result',Output),
-    atom_concat(Base,'.progress',Progress),State=process(pending).
+    atom_concat(Base,'.progress',Progress),State=process(pending,none,null).
 start_worker(Implementation,worker(Sources,Input,Output,Progress,State)) :-
     app_dir(AppDirectory),
     atomic_data(Input,catalog_work(Implementation,AppDirectory,Sources)),
@@ -124,7 +124,8 @@ start_worker(Implementation,worker(Sources,Input,Output,Progress,State)) :-
     current_prolog_flag(executable,Executable),current_prolog_flag(stack_limit,Limit),
     format(atom(Stack),'--stack-limit=~d',[Limit]),
     process_create(Executable,['-q',Stack,'-s',Script,'--','--worker',Input,Output,Progress],
-      [process(Pid),stdout(std),stderr(std)]),nb_setarg(1,State,running(Pid)).
+      [process(Pid),stdout(std),stderr(std)]),
+    nb_setarg(1,State,running(Pid)),nb_setarg(3,State,Pid).
 catalog_worker(Input,Output,Progress) :-
     read_data(Input,catalog_work(Implementation,AppDirectory,Sources)),
     retractall(kb_paths:app_directory(_)),assertz(kb_paths:app_directory(AppDirectory)),
@@ -144,11 +145,32 @@ monitor_workers(Workers,Progress,Start,Total) :-
     write_progress(Progress,json{phase:catalog,completed:Completed,total:Total,
       elapsed:Elapsed,workers:4,workerProgress:ProgressRows}),
     (memberchk(running,States)->sleep(0.5),monitor_workers(Workers,Progress,Start,Total);true).
-worker_progress(worker(_,_,_,Path,State),Data) :-
-    exists_file(Path),read_data(Path,catalog_progress(Raw)),arg(1,State,Status),
+worker_progress(worker(Sources,_,_,Path,State),Data) :-
+    arg(2,State,Previous),read_advisory_progress(Path,0,Read),
+    (Read=ok(Current)->
+       ((Previous==none;Current.completed>=Previous.completed)->
+         nb_setarg(2,State,Current),Raw=Current,Observation=fresh,Message=null
+       ;Raw=Previous,Observation=stale,Message="Ignoring an older progress counter.")
+    ;Read=error(Error),message_to_string(Error,Message),
+     (Previous==none->length(Sources,Total),Raw=json{completed:0,total:Total,path:null,heartbeat:null}
+     ;Raw=Previous),
+     Observation=stale),
+    arg(1,State,Status),
     (Status=running(_)->ProcessState=running;
      Status=finished(exit(0))->ProcessState=succeeded;ProcessState=failed),
-    Data=Raw.put(processState,ProcessState).
+    arg(3,State,Pid),
+    Data=Raw.put(json{ownerPid:Pid,processState:ProcessState,progressRead:Observation,progressReadError:Message}).
+read_advisory_progress(Path,Attempt,Result) :-
+    catch((read_data(Path,catalog_progress(Data)),Result=ok(Data)),
+      Error,
+      (transient_progress_read(Error,Path)->
+         (Attempt<3->sleep(0.02),Next is Attempt+1,read_advisory_progress(Path,Next,Result)
+         ;Result=error(Error))
+       ;throw(Error))).
+transient_progress_read(error(permission_error(open,source_sink,Blocked),_),Path) :-
+    current_prolog_flag(windows,true),kb_compile:same_absolute_path(Blocked,Path).
+transient_progress_read(error(existence_error(source_sink,Blocked),_),Path) :-
+    kb_compile:same_absolute_path(Blocked,Path).
 worker_poll(worker(_,_,_,_,State),Status) :-
     arg(1,State,Current),
     (Current=running(Pid)->
@@ -407,9 +429,16 @@ external_job_status(Target,Progress,Job) :-
     get_time(Now),
     (get_dict(heartbeat,Data,Heartbeat)->Age is max(0,Now-Heartbeat);Age=null),
     (State==running,get_dict(runId,Data,_)->Cancelable=true;Cancelable=false),
-    Job=Data.put(json{state:State,ownerLockHeld:Held,cancelable:Cancelable,
+    (get_dict(workerProgress,Data,Rows)->
+       maplist(worker_observation(Held),Rows,Observed),Base=Data.put(workerProgress,Observed)
+    ;Base=Data),
+    Job=Base.put(json{state:State,ownerLockHeld:Held,cancelable:Cancelable,
       heartbeatAge:Age,execution:external,
       scope:"External catalog indexer, separate from app Task Pools and its Prolog heap."}).
+worker_observation(true,Row,Row).
+worker_observation(false,Row,Observed) :-
+    (get_dict(processState,Row,State)->true;State=unknown),
+    Observed=Row.put(json{processState:unverified,lastReportedState:State}).
 request_catalog_cancel(Phase0,Run0,Reply) :-
     text_atom(Phase0,Phase),text_atom(Run0,Run),
     (Phase==catalog->catalog_paths(Target,Progress);

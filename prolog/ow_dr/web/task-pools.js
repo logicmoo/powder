@@ -81,7 +81,9 @@ export async function renderTaskPools(host, route, signal) {
           job.error && el('p', { className: 'statistics-error', role: 'alert' }, job.error.message),
           job.workerProgress?.length && el('ul', {}, job.workerProgress.map(worker => el('li', {},
             `PID ${worker.ownerPid ?? '?'} · ${worker.processState ?? 'unknown'} · ${worker.completed ?? 0}/${worker.total ?? '?'} · `,
-            worker.path ? sourceLink(worker.path, 1, worker.path) : 'starting'))));
+            worker.path ? sourceLink(worker.path, 1, worker.path) : 'starting',
+            worker.progressRead === 'stale' && el('span', { className: 'statistics-error' },
+              ` · Stale progress observation: ${worker.progressReadError ?? 'awaiting a readable heartbeat'}`)))));
         if (job.cancelable) external.append(button('Cancel external indexer', async () => {
           try {
             await api('catalog/cancel', {}, { method: 'POST', body: { phase, runId: job.runId }, signal });

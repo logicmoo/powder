@@ -169,6 +169,33 @@ test(cancellation_is_bound_to_live_owner_and_run,
        catch(kb_catalog_index:check_catalog_cancel(Progress),Cancelled,true),
        assertion(Cancelled=error(catalog_cancelled,_))),
       kb_cache:release_lock(Lock)).
+test(overlapping_progress_replacement_preserves_monotonic_observations,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    catalog_paths(_,Progress),current_prolog_flag(pid,Pid),
+    progress_record(Progress,0),
+    Worker=worker([fixture],none,none,Progress,process(running(Pid),none,Pid)),
+    thread_create(forall(between(1,100,N),progress_record(Progress,N)),Writer,[]),
+    setup_call_cleanup(true,read_progress_repeatedly(Worker,200,0),
+      thread_join(Writer,Exit)),
+    assertion(Exit==true),
+    kb_catalog_index:worker_progress(Worker,Final),assertion(Final.completed==100).
+test(transient_progress_read_retains_explicitly_stale_last_counter,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    catalog_paths(_,Progress),current_prolog_flag(pid,Pid),
+    progress_record(Progress,17),
+    State=process(running(Pid),none,Pid),Worker=worker([fixture],none,none,Progress,State),
+    kb_catalog_index:worker_progress(Worker,First),assertion(First.completed==17),
+    delete_file(Progress),kb_catalog_index:worker_progress(Worker,Last),
+    assertion(Last.completed==17),assertion(Last.progressRead==stale),
+    assertion(Last.progressReadError\==null).
+progress_record(Path,N) :-
+    get_time(Now),kb_catalog_index:atomic_data(Path,catalog_progress(
+      json{completed:N,total:100,heartbeat:Now,path:'KBs/fixture.krf'})).
+read_progress_repeatedly(_,0,_) :- !.
+read_progress_repeatedly(Worker,N,Before) :-
+    kb_catalog_index:worker_progress(Worker,Read),
+    assertion(Read.completed>=Before),Next is N-1,sleep(0.001),
+    read_progress_repeatedly(Worker,Next,Read.completed).
 test(corrupt_artifact_is_diagnosed_then_rebuilt,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('a.krf',"(p a)\n",Source),source_catalog(Source,Before),
