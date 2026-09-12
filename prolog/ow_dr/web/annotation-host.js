@@ -1,4 +1,4 @@
-import { createTVAClient, createTVAInspector, renderAssertionPrior } from './native-tva.js';
+import { createTVAClient, createTVAInspector, renderAssertionPrior, renderAssertionPriorInline } from './native-tva.js';
 import { colorAssertionBalls } from './assertion-markers.js';
 
 /** Shared, viewport-bounded host bridge; native records and source interpretation stay separate. */
@@ -43,10 +43,24 @@ export function createAnnotationHost({ api, presentation, reference, sourceLink,
       effectiveValue(data.mappedStrength, 'Mapped source strength (display only)'),
       effectiveValue(data.direction, 'Effective assertion direction'));
     record.prior.replaceChildren(renderAssertionPrior(data, { document: doc, reference, sourceLink }));
+    record.priorInline.replaceChildren(renderAssertionPriorInline(data, { document: doc }));
+    updatePriorVisibility(record);
     if (record.data) colorAssertionBalls(record.node, [{ ...record.data, strengthCategory: data.strengthCategory }]);
     record.revision = data.revision;
     record.generation = data.generation;
     record.readContext = data.context;
+  }
+  function updatePriorVisibility(record) {
+    if (!record.assertion) return;
+    const preferences = presentation.get();
+    record.priorInline.hidden = record.detail || preferences.fields?.assertionPrior === true
+      || !Object.values(preferences.tvaFamilies ?? {}).some(Boolean);
+  }
+  function pendingPrior(record) {
+    if (!record.assertion) return;
+    for (const field of [record.prior, record.priorInline]) {
+      field.replaceChildren(element('p', 'muted', 'Configured asserted-formula prior loading…'));
+    }
   }
   function schedule() {
     if (scheduled) return;
@@ -90,6 +104,7 @@ export function createAnnotationHost({ api, presentation, reference, sourceLink,
           for (const record of batch) {
             record.mapping.replaceChildren(element('p', 'statistics-error', error.message));
             record.prior.replaceChildren(element('p', 'statistics-error', error.message));
+            record.priorInline.replaceChildren(element('p', 'statistics-error', error.message));
           }
         }
       }
@@ -106,7 +121,10 @@ export function createAnnotationHost({ api, presentation, reference, sourceLink,
       record.mapping.dataset.field = 'strength';
       record.prior = element('div', 'assertion-field assertion-prior');
       record.prior.dataset.field = 'assertionPrior';
-      node.append(record.mapping, record.prior);
+      record.priorInline = element('div', 'assertion-prior-inline');
+      node.append(record.priorInline, record.mapping, record.prior);
+      pendingPrior(record);
+      updatePriorVisibility(record);
     }
     node.annotationRecord = record;
     records.add(record);
@@ -133,6 +151,7 @@ export function createAnnotationHost({ api, presentation, reference, sourceLink,
       record.visible = value; inspector.setVisible(value); toggleProperties(); schedule();
     }, setContext(context) {
       record.context = context; record.revision = undefined;
+      pendingPrior(record);
       inspector.setContext(context); nativeDetails?.setContext(context); schedule();
     } };
   }
@@ -141,10 +160,13 @@ export function createAnnotationHost({ api, presentation, reference, sourceLink,
     generation = Object.hasOwn(next, 'generation') ? next.generation : getGeneration();
     epoch++; controller?.abort();
     client.invalidate({ revision, generation });
-    for (const record of records) record.revision = undefined;
+    for (const record of records) { record.revision = undefined; pendingPrior(record); }
     schedule();
   }
-  const unsubscribe = presentation.subscribe(schedule, { immediate: false });
+  const unsubscribe = presentation.subscribe(() => {
+    for (const record of records) updatePriorVisibility(record);
+    schedule();
+  }, { immediate: false });
   doc.addEventListener('visibilitychange', schedule);
   return {
     attach, invalidate, client,
@@ -154,6 +176,7 @@ export function createAnnotationHost({ api, presentation, reference, sourceLink,
       epoch++; controller?.abort();
       for (const record of records) {
         record.context = context; record.revision = undefined;
+        pendingPrior(record);
         record.inspector.setContext(context);
         record.nativeDetails?.setContext(context);
       }

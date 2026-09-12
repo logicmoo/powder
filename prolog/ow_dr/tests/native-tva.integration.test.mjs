@@ -18,6 +18,7 @@ test('frontend consumes actual native backend DTOs from an isolated SWI process'
     kb_native_annotations:native_status(S0),get_dict(revision,S0,R0),
     kb_native_annotations:native_update([
       put(nars,default,null,nars_truth_value(0.5,0.0)),
+      put(opencog,default,null,stv(0.9,0.9)),
       put(nars,x_Target,null,[false]),
       put(opencog,x_MtFn(x_FullContext),null,stv(0.1,0.0)),
       put(cyc,default,utility,0.5),
@@ -44,12 +45,13 @@ test('frontend consumes actual native backend DTOs from an isolated SWI process'
     kb_native_annotations:save_native_settings(x_MtFn(x_FullContext),_{asserted_monotonic_confidence:0.34},PGR,PriorMt),
     kb_terms:term_ast(x_p(x_A),[],PositiveAST),kb_terms:term_ast(x_not(x_p(x_A)),[],NegativeAST),
     assertz(kb_store:assertion(a123,_{properties:[_{name:monotonicity,value:':MONOTONIC'}],expression:PositiveAST,source:'KBs/isolated.krf',line:4})),
-    assertz(kb_store:assertion(a124,_{properties:[_{name:monotonicity,value:':MONOTONIC'}],expression:NegativeAST,source:'KBs/isolated.krf',line:5})),
+    assertz(kb_store:assertion(a124,_{properties:[_{name:monotonicity,value:':MONOTONIC'},_{name:'cyc::original-tv',value:':FALSE-DEF'},_{name:truth,value:false}],expression:NegativeAST,source:'KBs/isolated.krf',line:5})),
     assertz(kb_store:assertion(a125,_{properties:[_{name:monotonicity,value:':DEFAULT'}],expression:PositiveAST,source:'KBs/isolated.krf',line:6})),
     kb_native_annotations:assertion_interpretation(a123,x_MtFn(x_FullContext),PositivePrior),
     kb_native_annotations:assertion_interpretation(a124,x_MtFn(x_FullContext),NegativePrior),
     kb_native_annotations:assertion_interpretation(a125,x_MtFn(x_FullContext),DefaultPrior),
     kb_native_annotations:native_summary(x_Target,x_MtFn(x_FullContext),NativeAfter),
+    kb_native_annotations:native_summary(a124,null,NegativeNative),
     kb_native_annotations:native_pair_settings(null,PairBefore),
     get_dict(revision,PairBefore,PairRevision),
     kb_native_annotations:save_native_pair(null,nars,_{frequency:0,confidence:0},PairRevision,false,PairAfter),
@@ -58,7 +60,7 @@ test('frontend consumes actual native backend DTOs from an isolated SWI process'
     kb_native_annotations:save_assertion_annotations(a123,x_MtFn(x_FullContext),_{monotonicity:":DEFAULT",direction:":FORWARD"},
       _{revision:ER,identity:EI,generation:EG},EditorAfter),
     json_write_dict(current_output,_{batch:Batch,nars:Nars,vendor:Vendor,before:Before,global:Global,mt:Mt,cleared:Cleared,
-      priorGlobal:PriorGlobal,priorMt:PriorMt,positive:PositivePrior,negative:NegativePrior,defaultPrior:DefaultPrior,nativeAfter:NativeAfter,
+      priorGlobal:PriorGlobal,priorMt:PriorMt,positive:PositivePrior,negative:NegativePrior,defaultPrior:DefaultPrior,nativeAfter:NativeAfter,negativeNative:NegativeNative,
       pairBefore:PairBefore,pairAfter:PairAfter,editorBefore:EditorBefore,editorAfter:EditorAfter})
   `;
   try {
@@ -126,10 +128,20 @@ test('frontend consumes actual native backend DTOs from an isolated SWI process'
     assert.equal(result.positive.assertionPrior.affectsNativeTVA, false);
     assert.equal(result.positive.assertionPrior.observed, false);
     assert.equal(result.defaultPrior.assertionPrior.confidence.summary.value, .66);
-    assert.equal(assertionPriorSummary(result.negative).status, 'unsupported');
+    assert.equal(assertionPriorSummary(result.negative).status, 'initialized');
     assert.equal(result.negative.assertionPrior.polarity, 'negative');
-    assert.equal(result.negative.assertionPrior.truth, null);
-    assert.equal(result.negative.assertionPrior.confidence, null);
+    assert.equal(result.negative.assertionPrior.scope, 'asserted_formula');
+    assert.equal(result.negative.assertionPrior.truth.summary.value, 1);
+    assert.equal(result.negative.assertionPrior.confidence.summary.value, .34);
+    assert.equal(result.negative.assertionPrior.families.nars.notation, '%1;0.34%');
+    assert.equal(result.negative.assertionPrior.families.opencog.notation, '(stv 1 0.34)');
+    assert.equal(result.negative.assertionPrior.families.nars.stored, false);
+    assert.equal(result.negative.assertionPrior.families.opencog.summary.strength, 1);
+    assert.equal(result.defaultPrior.assertionPrior.families.nars.summary.confidence, .66);
+    assert.equal(result.negativeNative.families.opencog.effective.summary.strength, .9);
+    assert.equal(result.negativeNative.families.opencog.effective.summary.confidence, .9);
+    assert.equal(result.negativeNative.families.opencog.effective.origin, 'default');
+    assert.equal(result.negativeNative.families.nars.effective.summary.confidence, 0);
     assert.deepEqual(result.negative.monotonicity, [':MONOTONIC']);
     assert.equal(annotationSummary('nars', result.nativeAfter.families.nars.effective).text, 'List · 1 items');
     assert.equal(result.nativeAfter.families.opencog.effective.summary.confidence, 0);
@@ -164,7 +176,9 @@ test('frontend consumes actual native backend DTOs from an isolated SWI process'
     await pairEditor.load(); pairEditor.edit('frequency', '0'); pairEditor.edit('confidence', '0');
     assert.equal(await pairEditor.save(), true); assert.deepEqual(pairCalls[0].pair, { frequency: 0, confidence: 0 });
     assert.equal(pairEditor.get().snapshot.families.nars.effective.origin, 'default');
-    assert.equal(pairEditor.get().snapshot.families.opencog.exact.status, 'uninitialized');
+    assert.equal(pairEditor.get().snapshot.families.opencog.exact.status, 'initialized');
+    assert.equal(pairEditor.get().snapshot.families.opencog.exact.summary.strength, .9);
+    assert.equal(pairEditor.get().snapshot.families.opencog.exact.summary.confidence, .9);
     pairEditor.dispose();
   } finally {
     for (const name of await readdir(here)) if (name.startsWith(prefix)) await rm(join(here, name), { force: true });

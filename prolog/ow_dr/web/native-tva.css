@@ -34,6 +34,8 @@
 .native-tva-prior > p { margin-block: .35rem; }
 .native-tva-prior-values { margin-block: .5rem; }
 .native-tva-prior-values dd { overflow-wrap: anywhere; }
+.native-tva-prior-inline { overflow-wrap: anywhere; color: var(--muted); }
+.native-tva-prior-inline code { white-space: pre-wrap; color: var(--ink); }
 .native-tva-assertion-editor { margin-block: 1.5rem; padding-block: 1rem; border-block: 1px solid var(--line); min-width: 0; }
 .native-tva-assertion-editor > p, .native-tva-pair-settings > p { max-width: 75ch; }
 .native-tva-assertion-editor .native-tva-setting { margin-block: 1rem; }

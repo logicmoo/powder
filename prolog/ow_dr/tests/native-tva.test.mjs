@@ -374,16 +374,18 @@ test('configured assertion prior stays separate, source labels untouched, negati
   const nativeTVA = row('a60a2418202240');
   const before = structuredClone(nativeTVA);
   const assertionPrior = {
-    kind: 'configured_assertion_prior', status: 'initialized', polarity: 'positive',
+    kind: 'configured_assertion_prior', status: 'initialized', polarity: 'positive', scope: 'asserted_formula', materialized: false,
     observed: false, affectsNativeTVA: false, sourceMonotonicity: [':MONOTONIC'],
     truth: effective(native(1), { property: 'asserted_positive_truth', origin: 'default', supplier: 'default' }),
     confidence: effective(native(.97), { property: 'asserted_monotonic_confidence', origin: 'mt', supplier: 'nat:x_ContextFn(x_A)' }),
   };
   assert.equal(assertionPriorSummary({ assertionPrior }).status, 'initialized');
-  assert.equal(assertionPriorSummary({ assertionPrior: { ...assertionPrior, polarity: 'negative' } }).status, 'unsupported');
-  assert.match(assertionPriorSummary({ ...assertionPrior, polarity: 'negative' }).text, /No prior is inferred for its positive counterpart/);
+  assert.equal(assertionPriorSummary({ assertionPrior: { ...assertionPrior, polarity: 'negative' } }).status, 'initialized');
   assert.equal(assertionPriorSummary({ ...assertionPrior, polarity: 'unknown' }).status, 'unsupported');
   assert.equal(assertionPriorSummary({ ...assertionPrior, observed: true }).status, 'unknown');
+  assert.equal(assertionPriorSummary({ ...assertionPrior, materialized: true }).status, 'unknown');
+  assert.equal(assertionPriorSummary({ ...assertionPrior, scope: 'positive_counterpart' }).status, 'unknown');
+  assert.match(assertionPriorSummary({ ...assertionPrior, polarity: 'source_false', reason: 'source_false_without_canonical_negation' }).text, /No positive-formula prior/);
   assert.equal(assertionPriorSummary({ ...assertionPrior, status: 'conflict' }).status, 'conflict');
   assert.equal(assertionPriorSummary({}).status, 'unknown');
   assert.deepEqual(nativeTVA, before);

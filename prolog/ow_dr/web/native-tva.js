@@ -16,7 +16,7 @@ export const TVA_FAMILIES = Object.freeze([
 ]);
 export const DEFAULT_TVA_FAMILIES = Object.freeze({ nars: false, opencog: false, cyc: false });
 export const ASSERTION_PRIOR_FIELDS = Object.freeze({
-  asserted_positive_truth: 'Asserted-positive prior truth',
+  asserted_positive_truth: 'Asserted-formula prior truth',
   asserted_monotonic_confidence: 'MONOTONIC prior confidence',
   asserted_default_confidence: 'DEFAULT prior confidence',
 });
@@ -487,26 +487,50 @@ function errorPanel(doc, error, retry) {
 export function assertionPriorSummary(interpretation) {
   const prior = interpretation?.assertionPrior ?? interpretation;
   if (prior?.kind !== 'configured_assertion_prior') return { status: 'unknown', text: 'Configured assertion prior unavailable', prior: null };
-  if (prior.polarity === 'negative') return {
-    status: 'unsupported',
-    text: 'Negative assertion — no prior truth or confidence is specified. No prior is inferred for its positive counterpart.',
-    prior,
+  if (prior.reason === 'not_loaded_assertion') return { status: 'unsupported', text: 'Not a loaded assertion; no asserted-formula prior is assigned.', prior };
+  if (prior.reason === 'source_false_without_canonical_negation') return {
+    status: 'unsupported', text: 'Source marks this assertion false, but no canonical negated formula is available. No positive-formula prior is inferred.', prior,
   };
-  if (prior.polarity !== 'positive') return { status: 'unsupported', text: 'Assertion polarity is unknown; no prior is inferred.', prior };
-  if (prior.observed !== false || prior.affectsNativeTVA !== false) return {
+  if (!['positive', 'negative'].includes(prior.polarity)) return { status: 'unsupported', text: 'Assertion polarity is unknown; no prior is inferred.', prior };
+  if (prior.observed !== false || prior.affectsNativeTVA !== false || prior.materialized !== false || prior.scope !== 'asserted_formula') return {
     status: 'unknown', text: 'Prior contract unavailable; native annotations remain separate.', prior,
   };
   return { status: statusLabels[prior.status] ? prior.status : 'unknown',
     text: statusLabels[prior.status] ?? 'Unknown prior status', prior };
 }
 
+/** Compact counterpart of the full prior inspector; notation is supplied by the backend. */
+export function renderAssertionPriorInline(interpretation, { document: doc = globalThis.document } = {}) {
+  const model = assertionPriorSummary(interpretation), prior = model.prior;
+  const root = element(doc, 'p', 'native-tva native-tva-prior-inline');
+  root.dataset.priorStatus = model.status;
+  const scope = prior?.polarity === 'negative'
+    ? 'whole asserted negated formula (not its positive counterpart)' : 'whole asserted formula';
+  root.append(doc.createTextNode(`Configured prior · ${scope}: `));
+  let count = 0;
+  if (model.status === 'initialized') {
+    for (const [family, label] of [['nars', 'NARS'], ['opencog', 'OpenCog']]) {
+      const value = prior.families?.[family];
+      if (value?.kind !== 'configured_assertion_prior' || value.scope !== 'asserted_formula'
+        || value.derived !== true || value.stored !== false || value.status !== 'initialized'
+        || typeof value.notation !== 'string') continue;
+      if (count++) root.append(doc.createTextNode(' · '));
+      root.append(doc.createTextNode(`${label} `), element(doc, 'code', null, value.notation));
+    }
+  }
+  if (!count) root.append(doc.createTextNode(model.status === 'initialized' ? 'Derived family summaries unavailable' : model.text));
+  root.append(doc.createTextNode(' · configuration, not observed evidence or a stored native record.'));
+  return root;
+}
+
 export function renderAssertionPrior(interpretation, { document: doc = globalThis.document, ...host } = {}) {
   const model = assertionPriorSummary(interpretation), prior = model.prior;
   const root = element(doc, 'section', 'native-tva native-tva-prior');
-  root.setAttribute('aria-label', 'Configured assertion prior');
+  root.setAttribute('aria-label', 'Configured asserted-formula prior');
   root.dataset.priorStatus = model.status;
-  root.append(element(doc, 'h3', null, 'Configured assertion prior'),
-    element(doc, 'p', 'muted', 'Configuration, not observed evidence. Separate from native truth-value annotations, mapped strength, and rule utility.'));
+  root.append(element(doc, 'h3', null, 'Configured asserted-formula prior'),
+    renderAssertionPriorInline(interpretation, { document: doc }),
+    element(doc, 'p', 'muted', 'Applies to the entire assertion linked below, including its negation. Separate from genuine native records, mapped strength, utility, and observation counts.'));
   const scope = element(doc, 'div', 'native-tva-scope');
   scope.append(element(doc, 'span', null, 'Current MT: '));
   if (own(interpretation, 'context') && (interpretation.context === null || typeof interpretation.context === 'string')) {
@@ -520,12 +544,12 @@ export function renderAssertionPrior(interpretation, { document: doc = globalThi
         ? prior.sourceMonotonicity.join(', ') : 'Unspecified'));
     root.append(source);
   }
-  if (!prior || prior.polarity !== 'positive' || model.status === 'unsupported' || model.status === 'unknown') {
+  if (!prior || !['positive', 'negative'].includes(prior.polarity) || model.status === 'unsupported' || model.status === 'unknown') {
     root.append(element(doc, 'p', 'native-tva-prior-status', model.text));
   } else {
     root.append(element(doc, 'p', 'native-tva-prior-status', model.text));
     const values = element(doc, 'dl', 'properties native-tva-prior-values');
-    for (const [key, label] of [['truth', 'Configured prior truth'], ['confidence', 'Configured prior confidence']]) {
+    for (const [key, label] of [['truth', 'Formula truth configuration'], ['confidence', 'Formula confidence configuration']]) {
       const effective = prior[key], value = annotationSummary('cyc', effective);
       const dd = element(doc, 'dd');
       dd.append(element(doc, 'span', null, value.text), doc.createTextNode(' · '));
@@ -1157,7 +1181,7 @@ export function renderTVASettings({
   const fields = element(doc, 'div', 'native-tva-settings-fields');
   const priorGroup = element(doc, 'fieldset', 'presentation-fieldset native-tva-prior-settings');
   priorGroup.append(element(doc, 'legend', null, 'Configured assertion priors — separate from native TVA'),
-    element(doc, 'p', 'muted', 'Positive-assertion priors use source category without changing it. These values are not another native fallback or observation counts. Negative-assertion priors are unspecified; no inverse is assumed.'));
+    element(doc, 'p', 'muted', 'Priors apply to the whole asserted formula, including (not …), never to its positive counterpart. The effective strength category selects confidence; these settings are not observed evidence, observation counts, or another native fallback. The truth setting retains its existing storage key asserted_positive_truth.'));
   const priorFields = element(doc, 'div', 'native-tva-settings-fields');
   priorGroup.append(priorFields);
   const controls = new Map();

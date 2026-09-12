@@ -708,9 +708,11 @@ interpretation(State,Context,ContextKey,Generation,
     mapped_strength(State.records,Context,EffectiveLabels,Strength0),
     (Category.status==initialized->Strength=Strength0;Strength=Category.put(interpretation,display_only)),
     assertion_prior(State.records,Context,Source,Polarity,EffectiveLabels,Prior0),
-    (Category.status\==initialized,Polarity==positive,Source\==null->
+    (Category.status\==initialized,memberchk(Polarity,[positive,negative]),Source\==null->
       Prior1=Prior0.put(_{status:Category.status,reason:Category.reason});Prior1=Prior0),
-    Prior=Prior1.put(_{sourceMonotonicity:Labels,effectiveMonotonicity:EffectiveLabels,strengthCategory:Category}),
+    prior_families(State.records,Context,Prior1,Families),
+    Prior=Prior1.put(_{sourceMonotonicity:Labels,effectiveMonotonicity:EffectiveLabels,
+                     strengthCategory:Category,families:Families}),
     term_ast(Entity,[],EntityExpression),context_expression(Context,ContextExpression),
     Reply=_{revision:State.revision,generation:Generation,entity:Key,context:ContextKey,
       entityExpression:EntityExpression,contextExpression:ContextExpression,
@@ -750,9 +752,24 @@ source_polarity(Row,Polarity) :-
      get_dict(type,Head,symbol),get_dict(value,Head,Raw),
      text_atom(Raw,Name),atom_concat(x_,_,Name),
      get_dict(args,Expression,Args),is_list(Args)->
-      (Name==x_not->(Args=[_]->Polarity=negative;Polarity=unknown)
+      (Name==x_not->(Args=[_],\+metta_source(Row)->Polarity=negative;Polarity=unknown)
+      ;source_false_marker(Row.properties)->Polarity=source_false
       ;Polarity=positive)
     ;Polarity=unknown).
+metta_source(Row) :-
+    (get_dict(dialect,Row,Dialect),memberchk(Dialect,[metta,"metta"])
+    ;get_dict(source,Row,Source),text_atom(Source,Path),
+     file_name_extension(_,Extension,Path),downcase_atom(Extension,metta)).
+source_false_marker(Properties) :-
+    source_truth_labels(Properties,['cyc::original-tv','original-tv',original_tv],Original),
+    source_truth_labels(Properties,[truth,truth_value,truthValue],Truth),
+    ((memberchk('FALSE-DEF',Original),\+memberchk('TRUE-DEF',Original))
+    ;(memberchk('FALSE',Truth),\+memberchk('TRUE',Truth))).
+source_truth_labels(Properties,Names,Labels) :-
+    findall(Label,
+      (member(P,Properties),memberchk(P.name,Names),
+      (atom(P.value);string(P.value)),text_atom(P.value,Text),
+      (atom_concat(':',Bare,Text)->true;Bare=Text),upcase_atom(Bare,Label)),Labels).
 source_values(Properties,Name,Values) :-
     must_be(list,Properties),
     findall(Value,(member(Item,Properties),must_be(dict,Item),
@@ -806,21 +823,21 @@ label_property(':MONOTONIC',monotonic_strength).
 label_property(':DEFAULT',default_strength).
 
 assertion_prior(Facts,Context,Source,Polarity,Labels,Prior) :-
-    Base=_{kind:configured_assertion_prior,polarity:Polarity,source:Source,
-      sourceMonotonicity:Labels,observed:false,affectsNativeTVA:false},
+    Base=_{kind:configured_assertion_prior,scope:asserted_formula,polarity:Polarity,source:Source,
+      sourceMonotonicity:Labels,observed:false,affectsNativeTVA:false,materialized:false},
     (Source==null->
       Prior=Base.put(_{status:unsupported,reason:not_loaded_assertion,truth:null,confidence:null})
-    ;Polarity==negative->
-      Prior=Base.put(_{status:unsupported,reason:negative_assertion_prior_unspecified,
+    ;Polarity==source_false->
+      Prior=Base.put(_{status:unsupported,reason:source_false_without_canonical_negation,
         truth:null,confidence:null})
-    ;Polarity\==positive->
+    ;\+memberchk(Polarity,[positive,negative])->
       Prior=Base.put(_{status:unsupported,reason:unknown_assertion_polarity,truth:null,confidence:null})
     ;Labels=[Label],prior_confidence_property(Label,Property)->
       (Context==null->SettingsKey=default;SettingsKey=Context),
       setting_pair(Facts,SettingsKey,asserted_positive_truth,asserted_positive_truth-Truth),
       setting_pair(Facts,SettingsKey,Property,Property-Confidence),
       prior_status(Truth,Confidence,Status),
-      Prior=Base.put(_{status:Status,reason:configured_asserted_positive,
+      Prior=Base.put(_{status:Status,reason:configured_asserted_formula,
         truth:Truth.put(property,asserted_positive_truth),
         confidence:Confidence.put(property,Property)})
     ;Labels=[_,_|_]->
@@ -832,6 +849,29 @@ prior_status(Truth,Confidence,Status) :-
     (member(Status,[conflict,invalid,uninitialized]),
       (Truth.status==Status;Confidence.status==Status)->true
     ;Status=initialized).
+
+prior_families(Facts,Context,Prior,_{nars:Nars,opencog:OC}) :-
+    (Prior.status==initialized->
+       (Context==null->Key=default;Key=Context),
+       effective(Facts,Key,null,cyc,asserted_positive_truth,_,[Truth]),
+       effective(Facts,Key,null,cyc,Prior.confidence.property,_,[Confidence]),
+       prior_family(nars,nars_truth_value(Truth,Confidence),Truth,Confidence,Nars),
+       prior_family(opencog,stv(Truth,Confidence),Truth,Confidence,OC)
+    ;unavailable_prior_family(nars,Prior.status,Nars),
+     unavailable_prior_family(opencog,Prior.status,OC)).
+prior_family(Family,Record,Truth,Confidence,Result) :-
+    record_summary(Family,Record,Summary),native_record_dto(Record,Data),
+    (json_number(Truth),json_number(Confidence)->
+       (Family==nars->Format=nars,format(string(Notation),'%~w;~w%',[Truth,Confidence])
+       ;Format=opencog_stv,format(string(Notation),'(stv ~w ~w)',[Truth,Confidence]))
+    ;Format=prolog_data,term_string(Record,Notation,[quoted(true),ignore_ops(true),numbervars(false)])),
+    Result=_{family:Family,kind:configured_assertion_prior,scope:asserted_formula,
+      derived:true,stored:false,status:initialized,summary:Summary,data:Data,
+      notation:Notation,notationFormat:Format}.
+unavailable_prior_family(Family,Status,
+    _{family:Family,kind:configured_assertion_prior,scope:asserted_formula,
+      derived:true,stored:false,status:Status,summary:null,data:null,
+      notation:null,notationFormat:null}).
 
 export_native_state(State) :-
     with_mutex(powder_native_annotations,synchronize(State)),validate_state(State).

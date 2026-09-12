@@ -375,29 +375,56 @@ Explicit native per-entity TVAs retain their own independent precedence.
 ```json
 {
   "kind": "configured_assertion_prior",
+  "scope": "asserted_formula",
   "status": "initialized",
   "polarity": "positive",
   "source": {"assertionId": "a123", "file": "KBs/example.krf", "line": 9},
   "sourceMonotonicity": [":MONOTONIC"],
   "observed": false,
   "affectsNativeTVA": false,
-  "reason": "configured_asserted_positive",
+  "materialized": false,
+  "reason": "configured_asserted_formula",
   "truth": {"property": "asserted_positive_truth", "...": "normal effective fields"},
-  "confidence": {"property": "asserted_monotonic_confidence", "...": "normal effective fields"}
+  "confidence": {"property": "asserted_monotonic_confidence", "...": "normal effective fields"},
+  "families": {
+    "nars": {
+      "family": "nars", "kind": "configured_assertion_prior", "scope": "asserted_formula",
+      "derived": true, "stored": false, "status": "initialized",
+      "summary": {"renderer": "nars_truth_value", "frequency": 1.0, "confidence": 0.97},
+      "data": {"type": "compound", "functor": "nars_truth_value", "args": [
+        {"type": "number", "value": 1.0}, {"type": "number", "value": 0.97}
+      ]},
+      "notation": "%1.0;0.97%", "notationFormat": "nars"
+    },
+    "opencog": {
+      "family": "opencog", "kind": "configured_assertion_prior", "scope": "asserted_formula",
+      "derived": true, "stored": false, "status": "initialized",
+      "summary": {"renderer": "opencog_stv", "strength": 1.0, "confidence": 0.97},
+      "data": {"type": "compound", "functor": "stv", "args": [
+        {"type": "number", "value": 1.0}, {"type": "number", "value": 0.97}
+      ]},
+      "notation": "(stv 1.0 0.97)", "notationFormat": "opencog_stv"
+    }
+  }
 }
 ```
 
 This is **not a fourth fallback**, a native truth-value conversion, or an
-asserted record. Render it separately and clearly as **Configured assertion
+asserted record. Render it separately and clearly as **Configured asserted-formula
 prior**, never in place of NARS/OpenCog/Cyc results. There are no observation
 counts, evidence samples, engine weights, inferred inverse values or per-atom
 materializations. Native Atom → supplied MT → literal default resolution stays
-unchanged, including explicit native overrides and generic default `.5/0`.
+unchanged, including explicit native overrides and the user's current global
+records (which need not equal the initial `.5/0`). Reads never initialize, reset
+or rewrite those records. The two views are displayed together, not selected
+against one another.
 
-For a loaded, syntactically positive source assertion with one supported
-original monotonicity label:
+For a loaded source assertion with supported whole-formula polarity and an
+initialized effective strength category:
 
-* Truth uses `asserted_positive_truth` (initial global 1).
+* Whole-formula truth uses **the unchanged key** `asserted_positive_truth`
+  (initial global 1). “Asserted-formula prior truth” is a compatibility label,
+  not a renamed key, alias, migration, reset, or loss of existing overrides.
 * `:MONOTONIC` confidence uses `asserted_monotonic_confidence` (initial 0.97).
 * `:DEFAULT` confidence uses `asserted_default_confidence` (initial 0.66).
 
@@ -413,23 +440,68 @@ Polarity inspection is a conservative, read-only use of the already-rendered
 source AST: an application with a named normalized `x_*` head is syntactically
 positive except canonical unary `x_not`, which is **negative**. There is no
 logical simplification or polarity inference through arbitrary predicates.
-Malformed canonical negation, variable/compound predicate heads, non-application
+MeTTa `not` data is not treated as logical negation. Malformed canonical negation,
+variable/compound predicate heads, non-application
 data forms, and unavailable source ASTs have unknown polarity.
 
-Negative assertions return `status:"unsupported"`, `polarity:"negative"`,
-`reason:"negative_assertion_prior_unspecified"`, `truth:null`, `confidence:null`.
-Neither the truth of the negative assertion nor its positive counterpart is
-invented or inverted. Native explicit annotations on that assertion still work.
-Unknown source/polarity/category returns an explicit unsupported reason; duplicate
-source monotonicity is conflict. For a supported positive source, missing
+Canonical `(not P)` receives the configured prior **for that whole negated
+formula**, identified by `source.assertionId`: `polarity:"negative"`,
+`scope:"asserted_formula"`, with the same configured truth and selected confidence.
+This never asserts `P` true, complements/inverts a value, simplifies a formula,
+or changes a negative/red assertion marker. Canonical FALSE-DEF and stored-false
+negative assertions work identically. A false source marker without a canonical
+negated AST is conservatively `polarity:"source_false"`, `status:"unsupported"`,
+`reason:"source_false_without_canonical_negation"` with null values: the browser
+must not affirm its positive formula or fabricate a missing negation. Its source
+false/red marker remains unchanged.
+
+Unknown source/polarity returns an explicit unsupported reason; nonasserted terms
+receive no prior truth value. Invalid, conflicting and uninitialized category
+states propagate for **both** positive and negative assertions. Missing
 settings are uninitialized, invalid values are invalid, and duplicate exact
 setting records are conflict. Overall status prioritizes conflict, then invalid,
 then uninitialized; truth and confidence retain independent supplier/provenance.
+
+`assertionPrior.families` contains only **read-derived configuration shapes**:
+NARS `nars_truth_value(Truth,Confidence)` and OpenCog `stv(Truth,Confidence)`.
+Each shape has no supplying native entity or native record revision; provenance
+is the enclosing prior's source plus independent `truth`/`confidence` effective
+settings. For noninitialized priors, each family has the same status and null
+`summary`, `data`, `notation`, and `notationFormat`. Exact non-JSON numeric
+components remain typed data, with `notationFormat:"prolog_data"` instead of
+rounded NARS/OpenCog notation. Values and notation are computed by the backend
+from one snapshot, never hardcoded in JavaScript or saved as per-assertion facts.
+The bounded `assertion_interpretations/3` batch includes this same DTO without
+additional disk reads or source-file scans.
+
+`renderAssertionPriorInline(interpretation,{document})` is a pure, text-safe
+compact renderer. The annotation host shows this separate line beside inline
+native records whenever any native family is visible and the full prior field
+is hidden. Enabling the full prior field replaces the compact line; assertion
+detail always uses the full inspector. Family visibility defaults and browser
+preferences are unchanged. Revision/context changes clear stale prior text while
+the coherent batch refreshes; original formulas and negative markers are retained.
 
 The existing pure `kb_rule_utility:opencog_utility/3` adapter is a **separate
 derived rule-usefulness metric**. Its observed application counts and DTO must
 not be stored in `oc_tva/2`, overwritten with defaults, or confused with
 propositional truth. This module neither calls nor changes that telemetry store.
+
+Whole-formula refinement verification: **84 PL-Unit and 35 Node tests passed**,
+including isolated actual-SWI DTO integration, restart/qsave/lock fixtures,
+negative FALSE-DEF/stored-false scope, zero/clear inheritance, `.9/.9` native
+global preservation, no per-assertion materialization, and desktop/mobile browser
+checks of both displays, red markers, and revision refresh. Scoped UI detection
+and `git diff --check` also passed. Commands from `prolog\ow_dr`:
+
+```powershell
+swipl -q -s tests\test_native_annotations.pl -g run_tests -t halt
+node --test tests\native-tva.test.mjs tests\native-tva.integration.test.mjs tests\native-tva.browser.test.mjs tests\native-tva-editors.browser.test.mjs tests\presentation.test.mjs
+```
+
+All writes in these tests use isolated fixtures. No live state initialization,
+reset, reseed, save, reload, restart, publication, source edit, or cache rebuild
+is part of this refinement.
 
 ## Typed persistent editors
 

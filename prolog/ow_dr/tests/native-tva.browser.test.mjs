@@ -17,6 +17,9 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 <script type="module">
 import {createTVAClient,createTVAInspector,createTVAVisibilityControls,renderTVASettings,renderAssertionPrior,normalizeTVAFamilies,DEFAULT_TVA_FAMILIES} from '/native-tva.js';
 import {renderExpression} from '/render.js';
+import {createAnnotationHost} from '/annotation-host.js';
+import {applyPresentation} from '/presentation.js';
+window.applyPresentation=applyPresentation;
 const symbol=value=>({type:'symbol',value});
 const compound={type:'application',head:symbol('x_MtFn'),args:[symbol('x_FullArgument'),{type:'string',value:'complete context'}]};
 window.contextKey='mt:x_MtFn(x_FullArgument,"complete context")';
@@ -72,13 +75,48 @@ document.querySelector('#inspectors').append(first,second);
 window.originalEditor=document.querySelector('#editor');window.originalMain=document.querySelector('main');
 window.settingRevision='s1';window.conflict=true;window.saved=new Map();
 const keys=['monotonic_strength','default_strength','direction','utility','missing_assertion_strength','asserted_positive_truth','asserted_monotonic_confidence','asserted_default_confidence'];
-window.showPrior=polarity=>{
- const prior={kind:'configured_assertion_prior',status:polarity==='negative'?'unsupported':'initialized',reason:polarity==='negative'?'negative_assertion_prior_unspecified':'configured_asserted_positive',
+window.makePrior=(polarity,confidence=.97)=>({
+ kind:'configured_assertion_prior',scope:'asserted_formula',materialized:false,status:'initialized',reason:'configured_asserted_formula',
  polarity,source:{assertionId:'a60a2418202240',file:'KBs/isolated.krf',line:21},sourceMonotonicity:[':MONOTONIC'],observed:false,affectsNativeTVA:false,
- truth:polarity==='negative'?null:effective(native(1),{property:'asserted_positive_truth',origin:'default',supplier:'default'}),
- confidence:polarity==='negative'?null:effective(native(.97),{property:'asserted_monotonic_confidence',origin:'mt',supplier:contextKey,supplierExpression:compound})};
+ truth:effective(native(1),{property:'asserted_positive_truth',origin:'default',supplier:'default'}),
+ confidence:effective(native(confidence),{property:'asserted_monotonic_confidence',origin:'mt',supplier:contextKey,supplierExpression:compound}),
+ families:{
+ nars:{kind:'configured_assertion_prior',scope:'asserted_formula',derived:true,stored:false,status:'initialized',notation:'%1;'+confidence+'%'},
+ opencog:{kind:'configured_assertion_prior',scope:'asserted_formula',derived:true,stored:false,status:'initialized',notation:'(stv 1 '+confidence+')'}
+ }});
+window.showPrior=polarity=>{
+ const prior=makePrior(polarity);
  document.querySelector('.native-tva-prior')?.remove();
  const view=renderAssertionPrior({assertionPrior:prior,context:contextKey,contextExpression:compound},{sourceLink});document.querySelector('main').append(view);return view;
+};
+window.attachPriorHostFixture=()=>{
+ window.hostConfidence=.34;window.hostRevision='host1';
+ const node=document.createElement('article');node.className='assertion-view';node.dataset.assertionId='a123';
+ node.id='prior-host-fixture';
+ const expression={type:'application',head:symbol('x_not'),args:[{type:'application',head:symbol('x_claim'),args:[symbol('x_A')]}]};
+ const ball=document.createElement('button');ball.className='assertion-ball';
+ const mark=document.createElement('span');mark.className='assertion-ball-mark';ball.append(mark);node.append(ball,renderExpression(expression));
+ document.querySelector('main').append(node);
+ window.priorHost=createAnnotationHost({presentation,sourceLink,getGeneration:()=>7,
+  reference:({key})=>document.createTextNode(key??'No current MT'),
+  api:async(route,params,{body})=>{
+   if(route==='tva/interpretations')return {revision:hostRevision,generation:7,context:body.context,items:body.entities.map(entity=>({
+    entity,context:body.context,contextExpression:null,revision:hostRevision,generation:7,
+    strengthCategory:effective(native(':MONOTONIC'),{origin:'source',supplier:entity}),mappedStrength:effective(native(1)),
+    direction:effective(native(':BACKWARD')),assertionPrior:makePrior('negative',hostConfidence)
+   }))};
+   if(route==='tva/summary')return {revision:hostRevision,generation:7,context:body.context,total:body.entities.length,items:body.entities.map(entity=>{
+    const row=makeRow(entity,body.context);row.revision=hostRevision;
+    row.families.nars.effective=effective({renderer:'nars_truth_value',frequency:.5,confidence:0},{origin:'default',supplier:'default'});
+    row.families.opencog.effective=effective({renderer:'opencog_stv',strength:.9,confidence:.9},{origin:'default',supplier:'default'});
+    return row})};
+   throw new Error('Unexpected isolated route '+route);
+  }});
+ presentation.set({fields:{assertionPrior:false},tvaFamilies:{nars:true,opencog:true}});
+ applyPresentation(document.documentElement,presentation.get());
+ priorHost.attach(node,'a123',{context:null,assertion:true,visible:true,data:{id:'a123',expression,
+  properties:[{name:'cyc::original-tv',value:':FALSE-DEF'},{name:'truth',value:false}]}});
+ return node;
 };
 const settingsReply=context=>{
  const values=saved.get(context)??{}, globals=saved.get(null)??{};
@@ -253,15 +291,30 @@ test('native annotation fixtures: independent toggles, lazy native details, life
     assert.equal(await browser.evaluate('settings.controller.get().snapshot.effective.default_strength.summary.value'), .9);
     await browser.evaluate("settings.controller.clear('asserted_monotonic_confidence');settings.controller.save();showPrior('positive')");
     assert.deepEqual(await browser.evaluate('calls.writes.at(-1).patch'), { asserted_monotonic_confidence: null });
-    assert.match(await browser.evaluate('document.querySelector(".native-tva-prior").textContent'), /Configured assertion prior.*not observed evidence/su);
+    assert.match(await browser.evaluate('document.querySelector(".native-tva-prior").textContent'), /Configured asserted-formula prior.*not observed evidence/su);
     assert.match(await browser.evaluate('document.querySelector(".native-tva-prior").textContent'), /:MONOTONIC/u);
     assert.match(await browser.evaluate('document.querySelector(".native-tva-prior").textContent'), /0.97/u);
     assert.match(await browser.evaluate('document.querySelector(".native-tva-prior").textContent'), /complete context/u);
     await browser.evaluate("showPrior('negative')");
-    assert.match(await browser.evaluate('document.querySelector(".native-tva-prior").textContent'), /Negative assertion.*positive counterpart/u);
-    assert.equal(await browser.evaluate('document.querySelector(".native-tva-prior .native-tva-prior-values")'), null);
+    assert.match(await browser.evaluate('document.querySelector(".native-tva-prior").textContent'), /whole asserted negated formula \(not its positive counterpart\)/u);
+    assert.match(await browser.evaluate('document.querySelector(".native-tva-prior").textContent'), /NARS %1;0.97%.*OpenCog \(stv 1 0.97\)/u);
+    assert.equal(await browser.evaluate('document.querySelector(".native-tva-prior .native-tva-prior-values")!==null'), true);
     assert.match(await browser.evaluate('document.querySelector(".native-tva-prior").textContent'), /:MONOTONIC/u);
     assert.equal(await browser.evaluate('first.querySelector("[data-family=opencog]").textContent.includes("[]")'), true);
+    await browser.evaluate('attachPriorHostFixture().scrollIntoView();true');
+    await browser.wait('document.querySelector("#prior-host-fixture .assertion-prior-inline").textContent.includes("%1;0.34%")');
+    assert.equal(await browser.evaluate('document.querySelector("#prior-host-fixture .assertion-prior-inline").hidden'), false);
+    assert.equal(await browser.evaluate('getComputedStyle(document.querySelector("#prior-host-fixture [data-field=assertionPrior]")).display'), 'none');
+    assert.equal(await browser.evaluate('document.querySelector("#prior-host-fixture .assertion-ball").dataset.marker'), 'false');
+    await browser.wait('document.querySelector("#prior-host-fixture [data-family=nars]")?.textContent.includes("Frequency 0.5")');
+    assert.match(await browser.evaluate('document.querySelector("#prior-host-fixture [data-family=opencog]").textContent'), /Strength 0.9.*confidence 0.9/u);
+    await browser.evaluate('hostConfidence=0;hostRevision="host2";priorHost.invalidate({revision:hostRevision,generation:7})');
+    await browser.wait('document.querySelector("#prior-host-fixture .assertion-prior-inline").textContent.includes("%1;0%")');
+    assert.equal(await browser.evaluate('document.querySelector("#prior-host-fixture .assertion-ball").dataset.marker'), 'false');
+    assert.match(await browser.evaluate('document.querySelector("#prior-host-fixture .assertion-prior-inline").textContent'), /configuration, not observed evidence or a stored native record/u);
+    await browser.evaluate('presentation.set({fields:{assertionPrior:true}});applyPresentation(document.documentElement,presentation.get())');
+    assert.equal(await browser.evaluate('document.querySelector("#prior-host-fixture .assertion-prior-inline").hidden'), true);
+    assert.notEqual(await browser.evaluate('getComputedStyle(document.querySelector("#prior-host-fixture [data-field=assertionPrior]")).display'), 'none');
 
     for (const width of [1180, 390]) {
       await browser.send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 600 });
@@ -270,6 +323,7 @@ test('native annotation fixtures: independent toggles, lazy native details, life
       const screenshot = await browser.send('Page.captureScreenshot', { format: 'png' });
       assert(screenshot.data.length > 1000);
     }
+    await browser.evaluate('priorHost.dispose();document.querySelector("#prior-host-fixture").remove()');
     await browser.evaluate('window.delaySummary=true;first.setContext("x_AbortRouteMt")');
     await browser.wait('gates.length===1');
     await browser.evaluate('routeController.abort();gates.splice(0).forEach(resolve=>resolve());window.beforeAbort=calls.summary.length;presentation.set({tvaFamilies:{nars:true}})');

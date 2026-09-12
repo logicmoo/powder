@@ -11,7 +11,7 @@ export const ASSERTION_FIELDS = Object.freeze({
   properties: 'Properties and provenance',
   proof: 'Proof information',
   ruleUtility: 'Observed rule utility',
-  assertionPrior: 'Configured assertion prior (not native TVA)',
+  assertionPrior: 'Configured asserted-formula prior (not native TVA)',
 });
 export const DEFAULT_PRESENTATION = Object.freeze({
   version: PRESENTATION_VERSION,
