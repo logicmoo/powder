@@ -71,10 +71,12 @@ export async function renderTaskPools(host, route, signal) {
       external.replaceChildren(el('h2', {}, 'External catalog indexer'),
         el('p', { className: 'muted' }, 'Separate SWI processes, not queued file-pool jobs. Live ownership is checked with a native process lock.'));
       if (catalog.unavailable) external.append(el('p', { className: 'statistics-error' }, `Status unavailable: ${catalog.unavailable}`));
-      else for (const [phase, job] of [['catalog', catalog.progress], ['query', catalog.projectionProgress]]) {
+      else for (const [phase, job] of [['catalog', catalog.progress], ['query', catalog.projectionProgress],
+        ['directory', catalog.lookupDirectory?.job]]) {
         if (!job || job.state === 'not_started') continue;
         const age = Number.isFinite(job.heartbeatAge) ? `${Math.round(job.heartbeatAge)} seconds ago` : 'unknown';
-        external.append(el('h3', {}, phase === 'catalog' ? 'Source occurrences' : 'Definition/query projection'),
+        external.append(el('h3', {}, phase === 'catalog' ? 'Source occurrences'
+          : phase === 'directory' ? 'Bounded exact-term directory' : 'Definition/query projection'),
           el('p', {}, `${job.state}; ${job.completed ?? 0}/${job.total ?? '?'} files; phase ${job.phase ?? 'unknown'}. ` +
             `${job.ownerLockHeld ? 'Owner lock held' : 'No live owner lock'}; PID ${job.ownerPid ?? 'unknown'}; last activity ${age}.`),
           job.path && el('p', {}, 'Last reported file: ', sourceLink(job.path, 1, job.path)),

@@ -4,6 +4,7 @@
 :- use_module(kb_catalog_index,[]).
 :- use_module(kb_catalog_schema).
 :- use_module(kb_catalog_providers,[source_provider_extensions/4]).
+:- use_module(kb_catalog_directory,[]).
 :- use_module(kb_catalog,[authorize_sources/2,directory_manifest/3]).
 :- use_module(kb_cache,[]).
 :- use_module(kb_paths).
@@ -75,6 +76,7 @@ build_query_locked(File,Providers,Report) :-
       taxonomy:SchemaHash,coverage:Catalog.coverage,verifiedAt:Catalog.verifiedAt,
       expected:Catalog.expected,terms:ByTerm,postings:Terms,ranked:Order,files:ByFile},
     kb_catalog_index:atomic_data(File,catalog_query(Projection)),
+    kb_catalog_directory:build_from_model(File,Projection,_),
     statistics(walltime,[End,_]),Seconds is (End-Start)/1000,
     length(Entries,N),Report=json{terms:N,coverage:Catalog.coverage,revision:Revision,
       providerCoverage:ProviderCoverage,seconds:Seconds}.
@@ -220,8 +222,16 @@ catalog_query_status(Reply) :-
        Projection=json{available:true,sizeBytes:Size,publishedAt:Time};
        Projection=json{available:false}),
     query_progress(Progress),kb_catalog_index:external_job_status(File,Progress,Job),
-    Reply=Status.put(json{projection:Projection,projectionProgress:Job}).
+    kb_catalog_directory:directory_status(Directory),
+    Reply=Status.put(json{projection:Projection,projectionProgress:Job,lookupDirectory:Directory}).
 source_pack_snapshot(Snapshot) :-
+    kb_catalog_directory:directory_status(Directory),
+    (Directory.available==true->source_pack_directory_snapshot(Directory,Snapshot);
+      empty_source_pack_snapshot(query_directory_pending,Snapshot)).
+source_pack_directory_snapshot(Directory,Snapshot) :-
+    Directory.providerCoverage==pending,!,
+    empty_source_pack_snapshot(provider_enrichment_pending,Snapshot).
+source_pack_directory_snapshot(_,Snapshot) :-
     query_file(File),
     (exists_file(File)->
        model(Model),
@@ -337,10 +347,12 @@ key_expression(Key,Expression) :-
     ;Expression=json{type:symbol,value:Key}).
 
 catalog_query_term(Input,Reply) :-
-    options(Input,Options),canonical_key(Options.term,Key),model(Model),active(Generation,Active),
+    options(Input,Options),canonical_key(Options.term,Key),
+    kb_catalog_directory:lookup_term(Key,Model,_),active(Generation,Active),
     provider_coverage(Model,ProviderCoverage),
     (get_assoc(Key,Model.postings,Posts)->true;Posts=[]),
-    findall(Source-Rows,(member(p(Source,Offset,_,_,_,_),Posts),
+    findall(Source-Rows,(member(Post,Posts),Post=p(Source,Offset,_,_,_,_),
+      relevant_posting(Options.facet,Post),
       source_filter(Options,Source,Active),
       file_for(Model,Source,File),read_posting(File,Offset,Key,All),
       include(row_matches(Options),All,Rows),Rows\=[]),UnsortedSourceRows),
@@ -366,7 +378,12 @@ canonical_key(Input,Key) :-
 source_filter(Options,Source,Active) :-
     scope_file(Options.scope,Source,Active),
     (Options.source=='';path_key(Options.source,K),path_key(Source,K)).
-file_for(Model,Source,File) :- path_key(Source,Key),get_assoc(Key,Model.files,File).
+relevant_posting(semantic,p(_,_,Count,_,_,_)) :- Count>0.
+relevant_posting(definition,p(_,_,_,_,Count,_)) :- Count>0.
+relevant_posting(context,p(_,_,_,_,_,Count)) :- Count>0.
+file_for(Model,Source,File) :-
+    (get_dict(directory,Model,_)->kb_catalog_directory:lookup_source(Model,Source,File);
+      path_key(Source,Key),get_assoc(Key,Model.files,File)).
 row_matches(Options,r(_,_,_,Mt,_,_,Hits,Defs)) :-
     (Options.mt=='';Options.mt==Mt),
     selected_positions(Options.facet,Hits,Defs,Positions),Positions\=[].
@@ -404,7 +421,7 @@ read_assertion_metadata(S,Id,Metadata) :-
        Metadata=[Term|Rest],read_assertion_metadata(S,Id,Rest)
     ;Metadata=[]).
 catalog_query_assertion(Input,Source,Id,Reply) :-
-    canonical_key(Input,Key),model(Model),active(Generation,Active),
+    canonical_key(Input,Key),kb_catalog_directory:lookup_term(Key,Model,_),active(Generation,Active),
     get_assoc(Key,Model.postings,Posts),member(p(Source,Offset,_,_,_,_),Posts),
     file_for(Model,Source,File),read_posting(File,Offset,Key,Rows),
     member(Row,Rows),Row=r(_,Id,_,_,_,_,_,_),!,

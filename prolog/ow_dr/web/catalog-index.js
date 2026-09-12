@@ -56,9 +56,19 @@ function coveragePanel(host, data) {
     coverage.issues?.length > 0 && el('details', {}, el('summary', {}, `Files needing attention (${coverage.issues.length})`),
       el('ul', {}, coverage.issues.map(issue => el('li', {}, file(issue.path), ` · ${issue.status}: ${issue.message}`)))));
 }
-async function available(host, signal, page) {
+async function available(host, signal, page, requireDirectory = false) {
   const status = await host.api('catalog/status', {}, { signal });
-  if (status.projection?.available) return true;
+  if (status.projection?.available && (!requireDirectory || status.lookupDirectory?.available)) return true;
+  if (requireDirectory && status.projection?.available) {
+    const lookup = status.lookupDirectory;
+    page.append(coveragePanel(host, status),
+      host.element('p', { className: 'empty-state', role: 'status' },
+        `Bounded exact-term directory: ${lookup?.state ?? 'pending'}. No whole-catalog read is started by this view.`),
+      lookup?.job && host.element('p', { className: 'muted' },
+        `${lookup.job.state}; ${lookup.job.phase ?? 'waiting'}; ${lookup.job.completed ?? 0}/${lookup.job.total ?? '?'} terms.`),
+      host.link('Indexer progress', 'tasks', {}, 'button secondary'));
+    return false;
+  }
   page.append(coveragePanel(host, status),
     host.element('p', { className: 'empty-state', role: 'status' },
       'The query catalog has not been published yet. Indexing does not load files into the active KB.'),
@@ -129,7 +139,7 @@ export async function catalogTermPage(host, route, signal) {
   const params = catalogParameters(route, true);
   const page = el('div', { className: 'catalog-index' },
     heading('Definitional Info', 'Recorded type and schema assertions about the selected term, across indexed original files. No KB load is performed.'));
-  if (!await available(host, signal, page)) return page;
+  if (!await available(host, signal, page, true)) return page;
   const data = await api('catalog/term', params, { signal });
   page.catalogContext = {
     title: expressionText(data.expression, { pretty: false }),

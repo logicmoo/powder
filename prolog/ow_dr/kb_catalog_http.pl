@@ -17,11 +17,19 @@ catalog_endpoint(Name,Request) :-
 catalog_error(error(catalog_stale(Reason),_)) :- !,
     term_string(Reason,Text),
     reply_json_dict(json{error:json{code:catalog_stale,message:Text}},[status(409)]).
+catalog_error(error(catalog_directory_pending,_)) :- !,
+    reply_json_dict(json{error:json{code:catalog_directory_pending,
+      message:"The bounded term directory has not been published yet."}},[status(503)]).
+catalog_error(error(catalog_directory_stale,_)) :- !,
+    reply_json_dict(json{error:json{code:catalog_directory_stale,
+      message:"The term directory needs refreshing for the current query revision."}},[status(409)]).
 catalog_error(Error) :- kb_server:api_error(Error).
 catalog_action(status,_,Reply) :- catalog_query_status(Reply).
 catalog_action(cancel,Request,Reply) :-
     kb_server:native_body(Request,[phase,runId],Body),
-    kb_catalog_index:request_catalog_cancel(Body.phase,Body.runId,Reply).
+    (memberchk(Body.phase,[directory,"directory"])->
+       kb_catalog_directory:request_cancel(Body.runId,Reply);
+       kb_catalog_index:request_catalog_cancel(Body.phase,Body.runId,Reply)).
 catalog_action(search,Request,Reply) :-
     http_parameters(Request,[q(Query,[atom,default('')]),scope(Scope,[atom,default(all)]),
       group(Group,[atom,default(all)]),offset(Offset,[integer,default(0)]),
