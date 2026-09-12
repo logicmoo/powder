@@ -80,6 +80,18 @@ test(search_cache_keeps_filters_and_pages_distinct,
     First.items=[A],Second.items=[B],assertion(A.term\==B.term),
     catalog_query_search(json{q:x_,scope:loaded},Loaded),assertion(Loaded.total==0),
     catalog_query_search(json{q:x_p},Only),Only.items=[P],assertion(P.term==x_p).
+test(repeated_projection_reuses_validated_postings_and_taxonomy,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(p a a)\n(arity p 2)\n",_),build,
+    catalog_query_term(json{term:x_a,facet:semantic},Before),
+    kb_catalog_query:model(Model),assoc_to_values(Model.files,[File]),
+    time_file(File.postings,Stamp),
+    build_query_catalog(_),time_file(File.postings,AfterStamp),
+    assertion(Stamp=:=AfterStamp),
+    nb_delete(powder_catalog_query),
+    catalog_query_term(json{term:x_a,facet:semantic},After),
+    assertion(After.total==Before.total),assertion(After.occurrences==Before.occurrences),
+    assertion(After.items=@=Before.items).
 test(readers_do_not_leave_native_file_handles,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('a.krf',"(arity p 1)\n",_),build,

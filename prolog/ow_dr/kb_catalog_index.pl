@@ -469,6 +469,9 @@ valid_payload(catalog_cancellation(Run)) :- atom(Run).
 valid_payload(catalog_work(Implementation,App,Sources)) :-
     atom(Implementation),atom(App),is_absolute_file_name(App),is_list(Sources),maplist(atom,Sources).
 valid_payload(catalog_work_result(Results)) :- is_list(Results).
+valid_payload(catalog_taxonomy(Revision,Schema)) :-
+    atom(Revision),is_dict(Schema,taxonomy),
+    is_assoc(Schema.types),is_assoc(Schema.categories),is_assoc(Schema.targetSlots).
 valid_payload(catalog_summary(Data)) :-
     is_dict(Data,catalog_summary),atom(Data.catalog),Data.stamp=stamp(Size,Time),
     integer(Size),Size>=0,number(Time),is_dict(Data.coverage),

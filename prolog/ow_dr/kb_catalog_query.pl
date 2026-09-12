@@ -52,9 +52,7 @@ build_query_locked(File,Report) :-
     verify_catalog_manifest(Catalog.expected),
     include(fresh,Catalog.files,Files),
     length(Files,Total),nb_setval(powder_projection_total,Total),flag(powder_projection_completed,_,0),
-    maplist(file_evidence(Total),Files,Chunks),append(Chunks,Evidence),
-    projection_progress(taxonomy,'',Total,Total),
-    build_catalog_schema(Evidence,Schema),
+    projection_schema(CatalogFile,Revision,Files,Total,Schema),
     kb_cache:terms_digest([catalog_query_v1,Schema],SchemaHash),
     file_directory_name(File,Dir),atomic_list_concat([Revision,'-',SchemaHash],Version),
     directory_file_path(Dir,Version,VersionDir),make_directory_path(VersionDir),
@@ -82,6 +80,18 @@ verify_catalog_manifest(Expected) :-
     maplist(path_key,Expected,ExpectedKeys0),sort(ExpectedKeys0,ExpectedKeys),
     (CurrentKeys==ExpectedKeys->true;throw(error(catalog_stale(source_manifest),_))).
 fresh(File) :- File.status==fresh.
+projection_schema(CatalogFile,Revision,Files,Total,Schema) :-
+    file_directory_name(CatalogFile,Directory),atom_concat(Revision,'.taxonomy',Name),
+    directory_file_path(Directory,Name,Path),
+    (exists_file(Path)->
+       kb_catalog_index:read_data(Path,catalog_taxonomy(Revision,Schema)),
+       forall(nth0(N,Files,File),
+         (projection_progress(taxonomy_validation,File.path,N,Total),
+          kb_catalog_index:current_source(File)))
+    ;maplist(file_evidence(Total),Files,Chunks),append(Chunks,Evidence),
+     projection_progress(taxonomy,'',Total,Total),
+     build_catalog_schema(Evidence,Schema),
+     kb_catalog_index:atomic_data(Path,catalog_taxonomy(Revision,Schema))).
 file_evidence(Total,File,Evidence) :-
     flag(powder_projection_completed,N,N),projection_progress(taxonomy_inputs,File.path,N,Total),
     kb_catalog_index:current_source(File),read_source(File,Data),
@@ -98,9 +108,18 @@ read_source(File,Data) :-
 
 project_source(Schema,Directory,File,projected(Before,Files),projected(After,[Key-Info|Files])) :-
     flag(powder_projection_completed,N,N),projection_progress(postings,File.path,N,null),
-    read_source(File,Data),source_views(Data,Sentences,Applications),
+    read_source(File,Data),
     crypto_data_hash(File.path,Name,[algorithm(sha256),encoding(utf8)]),
     atom_concat(Name,'.postings',Base),directory_file_path(Directory,Base,Path),
+    (reusable_postings(Path,File,Posts,Digest)->
+       foldl(add_projection_post,Posts,Before,After)
+    ;source_views(Data,Sentences,Applications),
+     write_source_postings(Path,File,Data,Sentences,Applications,Schema,Before,After,Digest)),
+    source_provider_extensions(File.path,Data,Schema,Extensions),
+    path_key(File.path,Key),Info=File.put(json{postings:Path,postingsDigest:Digest,
+      termSchema:Data.termSchema,dependencySummary:Data.dependencies,providerExtensions:Extensions}),
+    flag(powder_projection_completed,_,N+1).
+write_source_postings(Path,File,Data,Sentences,Applications,Schema,Before,After,Digest) :-
     kb_cache:stage_path(Path,Stage),
     setup_call_cleanup(true,
       (setup_call_cleanup(open(Stage,write,Stream,[encoding(utf8),newline(posix)]),
@@ -112,11 +131,33 @@ project_source(Schema,Directory,File,projected(Before,Files),projected(After,[Ke
          close(Stream)),
        validate_postings(Stage,File.identity,Digest),
        kb_catalog_index:install_catalog_stage(Stage,Path,0)),
-      kb_cache:remove_if_exists(Stage)),
-    source_provider_extensions(File.path,Data,Schema,Extensions),
-    path_key(File.path,Key),Info=File.put(json{postings:Path,postingsDigest:Digest,
-      termSchema:Data.termSchema,dependencySummary:Data.dependencies,providerExtensions:Extensions}),
-    flag(powder_projection_completed,_,N+1).
+      kb_cache:remove_if_exists(Stage)).
+reusable_postings(Path,File,Posts,Digest) :-
+    exists_file(Path),
+    catch(setup_call_cleanup(open(Path,read,S,[encoding(utf8),newline(posix)]),
+      (kb_catalog_index:safe_term(S,postings_header(1,File.identity)),
+      read_projection_posts(S,File.path,[],Posts,[],Digests,Digest),
+      kb_cache:terms_digest(Digests,Digest)),close(S)),
+      Error,(message_to_string(Error,Message),
+       format(user_error,'CATALOG rebuilding invalid posting ~w: ~w~n',[File.path,Message]),
+       flush_output(user_error),fail)).
+read_projection_posts(S,Source,Before,Posts,D0,Digests,Footer) :-
+    stream_property(S,position(Position)),stream_position_data(byte_count,Position,Offset),
+    kb_catalog_index:safe_term(S,Term),
+    (Term=postings_footer(Footer)->read_term(S,end_of_file,[]),Posts=Before,Digests=D0
+    ;Term=posting(Key,Rows,Digest),atom(Key),is_list(Rows),
+     kb_cache:terms_digest([posting(Key,Rows)],Digest),
+     findall(N,(member(r(_,_,_,_,_,_,Hits,_),Rows),
+      selected_positions(semantic,Hits,[],Paths),length(Paths,N),N>0),Counts),
+     length(Counts,Semantic),sum_list(Counts,Occurrences),
+     include(has_definition,Rows,Defined),length(Defined,Definitions),
+     findall(1,(member(r(_,_,_,_,_,_,Hits,_),Rows),memberchk(h(_,_,context),Hits)),Contexts0),
+     length(Contexts0,Contexts),
+     Post=Key-p(Source,Offset,Semantic,Occurrences,Definitions,Contexts),
+     read_projection_posts(S,Source,[Post|Before],Posts,[Digest|D0],Digests,Footer)).
+add_projection_post(Key-Post,Before,After) :-
+    (get_assoc(Key,Before,Old)->Next=[Post|Old];Next=[Post]),
+    put_assoc(Key,Before,Next,After).
 source_views(Data,Sentences,Applications) :-
     maplist(sentence_pair,Data.sentences,SentencePairs),list_to_assoc(SentencePairs,Sentences),
     findall((N-Path)-Head,member(a(N,Head,_,Path),Data.applications),AppPairs),

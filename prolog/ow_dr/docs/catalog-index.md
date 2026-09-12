@@ -106,6 +106,13 @@ This builds `tmp\catalog\query.data` and versioned, immutable per-source posting
 files. Each term posting has its own validated digest and exact source/MT/ID/
 position locators. Requests seek the selected term rather than parsing entire
 per-source occurrence indexes. Old projections remain usable during publication.
+Query retries validate and reuse already-complete postings in the same
+catalog/taxonomy revision directory. Their compact counts and byte locators are
+recovered from the validated postings, without copying formulas or rewriting
+those files. Taxonomy is persisted separately by catalog revision before the
+postings phase; subsequent retries recheck source hashes but do not rebuild it
+from every source artifact. A run predating this taxonomy checkpoint requires
+one read of the validated derived source catalogs, not recompilation of originals.
 Publication verifies that the current eligible source manifest still matches
 the catalog; removed directories cannot be reintroduced as global providers
 from retained artifacts. The CLI reports measured projection time, and progress
