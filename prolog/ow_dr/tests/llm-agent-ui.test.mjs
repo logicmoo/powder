@@ -27,7 +27,7 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
       res.setHeader('Content-Type', 'text/html');
       res.end(`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>LLM fixture</title>
         <link rel="stylesheet" href="/style.css"><main></main><script type="module">
-        import {renderLLMKnowledgeAgent} from '/llm-knowledge-agent.js';
+        import {createLLMKnowledgeAgent} from '/llm-knowledge-agent.js';
         function element(tag, props={}, ...children) {const n=document.createElement(tag);
           for(const [k,v] of Object.entries(props)) {if(k.startsWith('on'))n.addEventListener(k.slice(2),v);
             else if(k in n)n[k]=v;else n.setAttribute(k,v)}
@@ -37,10 +37,13 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
           const r=await fetch(u,{...options,headers:{'Content-Type':'application/json'},body:options.body?JSON.stringify(options.body):undefined});
           const b=await r.json();if(!r.ok)throw Error(b.error.message);return b;};
         window.controller=new AbortController();
-        document.querySelector('main').append(await renderLLMKnowledgeAgent({api,element,
+        const host={api,element,
           button:(text,click,className='button')=>element('button',{type:'button',className,onclick:click},text),
-          heading:(title,body)=>element('header',{className:'page-heading'},element('div',{},element('h1',{},title),element('p',{},body)))},
-          {params:new URLSearchParams()},controller.signal));
+          heading:(title,body)=>element('header',{className:'page-heading'},element('div',{},element('h1',{},title),element('p',{},body)))};
+        window.teacher=await createLLMKnowledgeAgent(host,{signal:controller.signal,
+          onConversationChange:value=>{window.lastConversation=value}});
+        window.createTeacher=options=>createLLMKnowledgeAgent(host,options);
+        document.querySelector('main').append(teacher.element);
         </script></html>`);
       return;
     }
@@ -86,18 +89,47 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     await browser.wait(`document.body.textContent.includes('Agent settings saved')`);
     assert.equal(settings.model, 'fixture-other');
     assert.equal(requests.some(r => r.action === 'chat'), false);
+    await browser.evaluate(`history.replaceState(null,'','/#/agent-chips?active=teacher')`);
     await click('Start new conversation');
     await browser.wait(`document.body.textContent.includes('prompt p1')`);
+    assert.equal(await browser.evaluate('location.hash'), '#/agent-chips?active=teacher');
+    assert.equal(await browser.evaluate('lastConversation.agent'), 'llm-knowledge');
     await browser.evaluate(`const t=document.querySelector('[name="llm-message"]');t.value='Synthetic fixture';t.dispatchEvent(new Event('input'))`);
     assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Chat').disabled`), true);
     await browser.evaluate(`const c=document.querySelector('[name="llm-export-consent"]');c.checked=true;c.dispatchEvent(new Event('change'))`);
     await click('Chat');
     await browser.wait(`document.body.textContent.includes('<img src=x onerror=alert(1)> fixture')`);
     assert.equal(await browser.evaluate(`document.querySelectorAll('.llm-message img').length`), 0);
+    await click('Events');
+    await browser.evaluate(`document.querySelector('[name="llm-message"]').value='Unsent teacher draft';
+      document.querySelector('[name="llm-prompt"]').value='Uncommitted prompt draft';
+      document.querySelector('[name="llm-term-keys"]').value='x_UnsentScope';
+      document.querySelector('[name="llm-rounds"]').value='6';
+      teacher.deactivate()`);
+    const pausedRequests = requests.length;
+    await browser.evaluate('new Promise(resolve=>setTimeout(resolve,1800))');
+    assert.equal(requests.length, pausedRequests, 'inactive chip must not keep polling');
+    assert.equal(await browser.evaluate('teacher.element.hidden'), true);
+    assert.equal(await browser.evaluate('teacher.getState().disposed'), false);
+    assert.equal(requests.some(r => ['stop', 'interrupt'].includes(r.action)), false);
+    await browser.evaluate('teacher.activate()');
+    assert.equal(await browser.evaluate(`document.querySelector('[name="llm-message"]').value`), 'Unsent teacher draft');
+    assert.equal(await browser.evaluate(`document.querySelector('[name="llm-prompt"]').value`), 'Uncommitted prompt draft');
+    assert.equal(await browser.evaluate(`document.querySelector('[name="llm-rounds"]').value`), '6');
+    assert.equal(await browser.evaluate(`document.querySelector('[name="llm-term-keys"]').value`), 'x_UnsentScope');
+    assert.equal(await browser.evaluate(`[...teacher.element.querySelectorAll('[role="tab"]')].find(b=>b.textContent==='Events').getAttribute('aria-selected')`), 'true');
+    await browser.evaluate(`(async()=>{window.otherTeacher=await createTeacher({active:false});
+      document.querySelector('main').append(otherTeacher.element)})()`);
+    assert.equal(await browser.evaluate(`otherTeacher.getState().conversationId`), null);
+    assert.equal(await browser.evaluate(`teacher.getState().conversationId`), 'c-fixture');
+    assert.equal(await browser.evaluate(`const ids=[...document.querySelectorAll('[id]')].map(e=>e.id);new Set(ids).size===ids.length`), true);
+    await browser.evaluate('otherTeacher.destroy()');
+    assert.equal(await browser.evaluate('teacher.getState().disposed'), false);
+    assert.equal(requests.filter(r => r.action === 'chat').length, 1);
     await click('Interrupt turn');
     await browser.wait(`document.body.textContent.includes('interrupted')`);
     await click('Raw JSON');
-    assert.equal(await browser.evaluate(`document.querySelector('#llm-raw-json').hidden`), false);
+    assert.equal(await browser.evaluate(`document.querySelector('[id$="-raw-json"]').hidden`), false);
     for (const width of [1280, 390]) {
       await browser.send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
       assert.equal(await browser.evaluate(`document.documentElement.scrollWidth<=innerWidth`), true);

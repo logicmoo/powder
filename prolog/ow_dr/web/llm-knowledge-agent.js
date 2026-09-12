@@ -1,5 +1,37 @@
 // Extend powder's operating workspace: text conversation left, inspectable controls right.
 // Keep the established palette and typography; explicit export consent precedes every Chat.
+let nextViewId = 0;
+
+/**
+ * Keep this controller mounted for the Teacher chip's lifetime. Deactivation
+ * pauses view polling only; it never aborts a turn or changes another agent.
+ */
+export async function createLLMKnowledgeAgent(host, {
+  route = { params: new URLSearchParams() }, signal, active = true, onConversationChange,
+} = {}) {
+  const lifecycle = new AbortController();
+  const abort = () => lifecycle.abort();
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
+  let controls;
+  const element = await renderLLMKnowledgeAgent({
+    ...host,
+    llmContainer: { active, updateLocation: false, onConversationChange,
+      register: value => { controls = value; } },
+  }, route, lifecycle.signal);
+  return {
+    agent: 'llm-knowledge', identity: 'llm', label: 'Teacher / LLM', element,
+    activate: () => controls?.setActive(true),
+    deactivate: () => controls?.setActive(false),
+    getState: () => controls?.getState(),
+    destroy: () => {
+      signal?.removeEventListener('abort', abort);
+      lifecycle.abort();
+      element.remove();
+    },
+  };
+}
+
 export function modelOptions(items, selected) {
   return [...new Set([selected, ...items])].map(id => ({
     id, label: items.includes(id) ? id : `${id} — availability not confirmed`,
@@ -15,11 +47,14 @@ export function canChat({ conversation, text, approved, pending }) {
 
 export async function renderLLMKnowledgeAgent(host, route, signal) {
   const { api, element: el, button, heading } = host;
+  const container = host.llmContainer;
+  const viewId = `llm-view-${++nextViewId}`;
+  let active = container?.active !== false;
   if (!document.querySelector('link[data-llm-agent-style]')) {
     document.head.append(el('link', { rel: 'stylesheet', 'data-llm-agent-style': '',
       href: new URL('./llm-knowledge-agent.css', import.meta.url).href }));
   }
-  const panel = el('div', { className: 'llm-agent' },
+  const panel = el('div', { className: 'llm-agent', hidden: !active, 'data-agent': 'llm-knowledge' },
     heading('LLM knowledge agent', 'Teach, explore, and develop symbolic capabilities through a separate text conversation.'));
   const notice = el('p', { className: 'llm-provider-notice' },
     'emullm logs requests and replies, reuses worker contexts, and may forward externally. Not private-local-only. Never send secrets, application code, raw private KB, or bulk files.');
@@ -46,10 +81,10 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   const pages = new Map(), tabButtons = new Map();
   for (const name of ['Settings', 'Events', 'Raw JSON', 'Audit', 'Todos']) {
     const key = name.toLowerCase().replace(' ', '-');
-    const page = el('section', { role: 'tabpanel', id: `llm-${key}`, hidden: name !== 'Settings',
-      'aria-labelledby': `llm-tab-${key}`, className: 'llm-inspector-page' });
+    const page = el('section', { role: 'tabpanel', id: `${viewId}-${key}`, hidden: name !== 'Settings',
+      'aria-labelledby': `${viewId}-tab-${key}`, className: 'llm-inspector-page' });
     const tab = button(name, () => selectTab(name), 'text-button');
-    tab.id = `llm-tab-${key}`; tab.setAttribute('role', 'tab');
+    tab.id = `${viewId}-tab-${key}`; tab.setAttribute('role', 'tab');
     tab.setAttribute('aria-controls', page.id); tab.setAttribute('aria-selected', String(name === 'Settings'));
     tab.tabIndex = name === 'Settings' ? 0 : -1;
     tab.addEventListener('keydown', event => {
@@ -96,6 +131,21 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     el('label', { className: 'field' }, 'Approved read MTs', readMts), start, promptEditor);
   let settings, promptRevision, conversation = null, pending = false, timer, polling = false, disposed = false;
   signal.addEventListener('abort', () => { disposed = true; clearTimeout(timer); }, { once: true });
+  if (signal.aborted) disposed = true;
+  container?.register({
+    setActive(value) {
+      if (disposed) return;
+      active = !!value; panel.hidden = !active;
+      clearTimeout(timer); timer = null;
+      if (active && conversation?.status === 'running' && !polling) timer = setTimeout(poll, 0);
+    },
+    getState: () => ({
+      agent: 'llm-knowledge', identity: 'llm', active, disposed,
+      conversationId: conversation?.id ?? null, status: conversation?.status ?? 'not_started',
+      model: conversation?.model ?? settings?.model ?? null,
+      pending,
+    }),
+  });
   function selectTab(name) {
     for (const [key, page] of pages) {
       const selected = key === name; page.hidden = !selected;
@@ -132,7 +182,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       el('p', {}, data.todos.reason || 'No managed todos returned.'));
     if (data.error) feedback.textContent = `${data.error.code}: ${data.error.message}`;
     updateControls();
-    if (data.status === 'running' && !timer) timer = setTimeout(poll, 1500);
+    if (active && data.status === 'running' && !timer) timer = setTimeout(poll, 1500);
   }
   function json(value) { return el('pre', { className: 'llm-json' }, JSON.stringify(value, null, 2)); }
   async function request(path, body) {
@@ -151,8 +201,11 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       const data = await request('start', { scope: { terms: selectedKeys(termKeys.value),
         readMts: selectedKeys(readMts.value), writeMts: [] } });
       drawConversation(data);
-      const params = new URLSearchParams(route.params); params.set('conversation', data.id);
-      history.replaceState(null, '', `#/llm-knowledge?${params}`);
+      if (container?.updateLocation !== false) {
+        const params = new URLSearchParams(route.params); params.set('conversation', data.id);
+        history.replaceState(null, '', `#/llm-knowledge?${params}`);
+      }
+      container?.onConversationChange?.({ agent: 'llm-knowledge', identity: 'llm', id: data.id });
       feedback.textContent = 'Conversation started. Chat is the only action that sends your message to the model.';
     });
   }
@@ -174,14 +227,14 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   }
   async function poll() {
     timer = null;
-    if (disposed || conversation?.status !== 'running') return;
+    if (disposed || !active || conversation?.status !== 'running') return;
     if (document.hidden || polling) { timer = setTimeout(poll, 2000); return; }
     polling = true;
     try { drawConversation(await api('llm/conversation', { id: conversation.id }, { signal })); }
     catch (error) { if (!disposed) feedback.textContent = `Status unavailable: ${error.message}`; }
     finally {
       polling = false;
-      if (!disposed && conversation?.status === 'running' && !timer) timer = setTimeout(poll, 2000);
+      if (!disposed && active && conversation?.status === 'running' && !timer) timer = setTimeout(poll, 2000);
     }
   }
   async function refreshModels() {
@@ -210,6 +263,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     });
   }
   updateControls();
+  if (disposed) return panel;
   try {
     const [saved, document] = await Promise.all([api('llm/settings', {}, { signal }), api('llm/prompt', {}, { signal })]);
     if (disposed) return panel;

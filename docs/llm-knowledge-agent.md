@@ -62,6 +62,37 @@ listener inventory. The UI router imports `renderLLMKnowledgeAgent` from
 returned element on `#/llm-knowledge`. The module loads its own CSS.
 No changes to `app.js` or `kb_server.pl` are included in this ownership stage.
 
+For the three-chip host, use the persistent controller instead:
+
+```javascript
+const teacher = await createLLMKnowledgeAgent(host, {
+  signal: chipHostLifetime.signal,
+  onConversationChange: ({ id }) => rememberTeacherConversation(id),
+});
+chipBody.append(teacher.element);
+teacher.deactivate(); // switch away: hide and pause view polling only
+teacher.activate();   // switch back: same draft, conversation and inspector DOM
+// teacher.destroy() only when disposing this chip host, not on chip selection
+```
+
+`createLLMKnowledgeAgent` is exported by the same module and returns
+`{agent,identity,label,element,activate,deactivate,getState,destroy}`.
+It never changes the shared location/hash, aborts a model turn on chip switching,
+or shares conversation/cancellation state with another instance. Draft message,
+unsaved settings/prompt fields, selected inspector tab, events/audit/todos and
+conversation remain in that controller's own view. Use a chip-host lifetime
+signal, **not** a signal aborted whenever the selected chip changes.
+`getState()` returns identity/model/conversation/status metadata, not draft text.
+Destroy aborts that view's network/polling only; stopping a running conversation
+remains the explicit Stop action.
+
+Teacher/LLM (`llm-knowledge` settings and selected application model),
+Symbolic/Cyc-only (no model), and Operator/Copilot require separate controllers,
+settings and transports. This module does not mount, import, invoke or fall back
+to either other agent. Operator is not a Teacher KEE tool; Symbolic must never
+call this module's completion transport. Changing Teacher's application model
+does not change the Copilot coding model.
+
 | Route suffix | Method | Contract |
 |---|---|---|
 | `llm/settings` | GET | Registered settings and revision |
