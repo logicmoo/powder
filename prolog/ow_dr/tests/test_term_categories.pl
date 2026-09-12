@@ -1,4 +1,5 @@
 :- ensure_loaded(test_term_resolver).
+:- ensure_loaded(test_do_invocations).
 :- begin_tests(term_categories).
 :- use_module('../kb_term_categories').
 :- use_module('../kb_term_roles').
@@ -8,6 +9,8 @@
 :- use_module('../kb_runtime',[]).
 :- use_module('../kb_cache',[file_digest/2]).
 :- use_module(library(http/json)).
+:- use_module(library(assoc)).
+:- use_module(library(prolog_wrap)).
 
 index(Terms,Index) :- plunit_term_roles:index(Terms,Index).
 catalog(Terms,C) :- index(Terms,I),C=I.categoryCatalog,assertion(ground(C)).
@@ -118,17 +121,57 @@ test(lexical_word_bucket_is_explicitly_heuristic_atomic_and_case_insensitive) :-
 test(format_descriptor_words_are_not_promoted_from_literal_reader_data) :-
     catalog([x_doAnnounce("~a",['x_Only-TheWord'])],C),
     category_page(C,_{group:the_word},0,100,R),assertion(R.total==0).
-test(do_invocations_require_real_applications_and_known_vocabulary_or_documented_pattern) :-
+test(do_invocations_require_named_predicate_evidence_not_formatting_shapes) :-
     catalog([x_doAnnounce(Text,Args),x_doFormat("~a",[1]),
              x_p(x_doSomething),x_doNothing(x_a),
              x_doWrong("text",x_not_a_list),
              x_quote(x_doQuoted("~a",[1]))],C),
     assertion(var(Text)),assertion(var(Args)),
-    forall(member(K,[x_doAnnounce,x_doFormat]),
+    forall(member(K,[x_doAnnounce,x_doFormat,x_doNothing,x_doWrong]),
       (item(C,K,I),member_group(I,do_invocations),member_evidence(I,do_invocations,E),
-       assertion(E.details.execution==unknown),assertion(E.details.analysisExecuted==false))),
-    forall(member(K,[x_doSomething,x_doNothing,x_doWrong,x_doQuoted]),
+      member_group(I,predicates),
+      assertion(E.details.execution==unknown),assertion(E.details.analysisExecuted==false))),
+    forall(member(K,[x_doSomething,x_doQuoted]),
       (item(C,K,I),not_group(I,do_invocations))).
+test(do_names_are_case_sensitive_even_with_indexed_predicate_or_formatting_evidence) :-
+    catalog([x_doAttack(x_a),x_doMove(x_a,x_b),x_doInvoke,
+            x_domain("~a",[1]),x_double(x_a),x_dog(x_a),x_do(x_a),
+            x_doattack(x_a),'x_DoAttack'(x_a),'x_doÄttack'(x_a)],C),
+    forall(member(K,[x_doAttack,x_doMove,x_doInvoke]),
+      (item(C,K,I),member_group(I,do_invocations),member_group(I,predicates))),
+    forall(member(K,[x_domain,x_double,x_dog,x_do,x_doattack,'x_DoAttack','x_doÄttack']),
+      (item(C,K,I),member_group(I,predicates),not_group(I,do_invocations))).
+test(predicate_relation_type_and_schema_references_do_not_need_definitions) :-
+    catalog([x_isa(x_doTyped,x_Predicate),x_isa(x_doRelation,x_Relation),
+            x_arity(x_doArity,2),x_arg2Isa(x_doSchema,x_Collection),
+            x_genlPreds(x_doGeneral,x_doSpecific),
+            x_and(x_arity(x_doNested,1),x_p(x_A)),
+            x_implies(x_doReferenced(x_A),x_p(x_A)),
+            x_isa(x_doCollection,x_Collection),x_uses(x_doSomething),
+            x_arg2Isa(x_Ordinary,x_doRangeClass),x_isa(x_Instance,x_doTypeSlot),
+            x_genls(x_doSubclass,x_Superclass),
+            x_comment(x_doMention,"reference alone"),x_arity(x_doMalformed,x_not_a_number),
+            x_quote(x_arity(x_doQuotedSchema,2))],C),
+    forall(member(K,[x_doTyped,x_doRelation,x_doArity,x_doSchema,x_doGeneral,
+                    x_doSpecific,x_doNested,x_doReferenced]),
+      (item(C,K,I),member_group(I,do_invocations))),
+    item(C,x_doTyped,Typed),member_group(Typed,predicates),
+    item(C,x_doRelation,Relation),assertion(memberchk(x_Relation,Relation.typeKeys)),
+    forall(member(K,[x_doCollection,x_doSomething,x_doMention,x_doMalformed,x_doQuotedSchema,
+                     x_doRangeClass,x_doTypeSlot,x_doSubclass]),
+      (item(C,K,I),not_group(I,do_invocations))),
+    item(C,x_doCollection,Collection),member_group(Collection,collections).
+test(do_predicate_keeps_other_independent_categories) :-
+    catalog([x_doAttack(x_A),x_isa(x_doAttack,x_Collection),
+            x_afterAdding(x_p,x_SubLQuoteFn(x_doAttack))],C),
+    item(C,x_doAttack,I),
+    assertion(I.groups==[predicates,collections,external_symbols,do_invocations]),
+    assertion(C.coverage.term_categories.createsProviders==false),
+    assertion(C.projectionVersion==2).
+test(reader_formatting_policy_is_not_changed_by_the_category_rule) :-
+    assertion(kb_symbols:list_data_slot(x_domain,["~a",[]],2)),
+    kb_reader:normalize_query("(domain \"~a\" (1 2))",x_domain("~a",[1,2]),[]),
+    catalog([x_domain("~a",[1,2])],C),item(C,x_domain,I),not_group(I,do_invocations).
 test(invocation_classification_never_runs_rules_or_inert_forms) :-
     catalog([(x_rule(x_a):-and(throw(must_never_execute),x_doAnnounce("x",[]))),
              metta_exec(x_doHidden("x",[]))],C),
@@ -222,6 +265,72 @@ test(missing_native_semantics_retains_partial_coverage_not_success_shaped_empty)
     build_term_index(8,[R],Index),
     category_page(Index.categoryCatalog,_{},0,100,Reply),
     assertion(Reply.coverage.status==partial),json_ready(Reply).
+
+legacy_entry(Index,Old,Entry) :-
+    exclude(kb_term_categories:do_membership,Old.memberships,Kept),
+    (Kept=[]->
+       get_assoc(Old.identity,Index.terms,D),
+       kb_term_categories:remainder_evidence(D,Old.originalTypeEvidence,Es),
+       kb_term_categories:memberships(Es,Base)
+    ;Base=Kept),
+    (Old.identity==x_domain->
+      Base=[M|_],M.evidence=[P|_],
+      Legacy=P.put(_{group:do_invocations,basis:documented_invocation_shape,
+        details:details{pattern:reader_format_descriptor_pattern}}),
+      kb_term_categories:memberships([Legacy],Extra),append(Base,Extra,Memberships)
+    ;Memberships=Base),
+    findall(G,(member(Member,Memberships),G=Member.group),Groups),
+    Entry=Old.put(_{groups:Groups,memberships:Memberships}).
+legacy_index(Index,Legacy) :-
+    C=Index.categoryCatalog,del_dict(projectionVersion,C,_,Base),
+    maplist(legacy_entry(Index),C.entries,Entries),
+    findall(Key-E,(member(E,Entries),Key=E.identity),Pairs),
+    keysort(Pairs,Sorted),list_to_assoc(Sorted,Map),
+    kb_term_categories:group_counts(Entries,Counts),
+    Coverage=Base.coverage.term_categories.put(doCoverage,documented_vocabulary_and_pattern_only),
+    Catalog=Base.put(_{entries:Entries,byIdentity:Map,groupCounts:Counts,
+                       coverage:Base.coverage.put(term_categories,Coverage)}),
+    Legacy=Index.put(categoryCatalog,Catalog).
+test(old_do_format_evidence_is_replaced_from_cached_category_roles_and_types) :-
+    index([x_domain("~a",[1]),x_doAttack(x_A),x_isa(x_doType,x_Relation),
+           x_arity(x_doReference,1),x_isa(x_doCollection,x_Collection),
+           x_p(x_doSomething)],Fresh),
+    legacy_index(Fresh,Legacy),item(Legacy.categoryCatalog,x_domain,Old),
+    member_group(Old,do_invocations),
+    refresh_category_catalog(Legacy,Legacy.categoryCatalog,Updated),
+    assertion(Updated==Fresh.categoryCatalog),assertion(current_category_catalog(Updated)),
+    item(Updated,x_domain,Domain),not_group(Domain,do_invocations),
+    refresh_category_catalog(Fresh,Updated,Again),assertion(Again==Updated).
+count_category_refresh :-
+    nb_getval(category_refresh_count,N),Next is N+1,nb_setval(category_refresh_count,Next).
+test(loaded_cache_upgrades_category_once_without_rebuilding_occurrences_or_nats) :-
+    kb_store:generation(G),
+    plunit_term_roles:rows([x_domain("~a",[]),x_doAttack(x_A),x_arity(x_doReference,2),
+                           x_p(x_Fn(x_B))],Rows),
+    build_term_index(G,Rows,Fresh),legacy_index(Fresh,Legacy),
+    findall(CG-CI,kb_term_roles:cached_index(CG,CI),Previous),
+    setup_call_cleanup(
+      (retractall(kb_term_roles:cached_index(_,_)),assertz(kb_term_roles:cached_index(G,Legacy)),
+       nb_setval(category_refresh_count,0),
+       wrap_predicate(kb_term_roles:build_term_index(_,_,_),category_no_rebuild,_,
+         throw(unexpected_full_role_rebuild)),
+       wrap_predicate(kb_term_roles:snapshot_row(_,_,_),category_no_source_read,_,
+         throw(unexpected_source_snapshot)),
+       wrap_predicate(kb_term_categories:refresh_category_catalog(_,_,_),category_refresh_probe,Wrapped,
+         (plunit_term_categories:count_category_refresh,call(Wrapped)))),
+      (loaded_term_index(Updated),assertion(Updated==Fresh),
+       loaded_term_index(Again),assertion(Again==Updated),
+       del_dict(categoryCatalog,Legacy,_,OldBase),del_dict(categoryCatalog,Updated,_,NewBase),
+       assertion(OldBase==NewBase),
+       nb_getval(category_refresh_count,Refreshes),assertion(Refreshes==1),
+       findall(CG,kb_term_roles:cached_index(CG,_),[G]),
+       kb_store:generation(G)),
+      (unwrap_predicate(kb_term_roles:build_term_index(_,_,_),category_no_rebuild),
+       unwrap_predicate(kb_term_roles:snapshot_row(_,_,_),category_no_source_read),
+       unwrap_predicate(kb_term_categories:refresh_category_catalog(_,_,_),category_refresh_probe),
+       nb_delete(category_refresh_count),
+       retractall(kb_term_roles:cached_index(_,_)),
+       forall(member(CG-CI,Previous),assertz(kb_term_roles:cached_index(CG,CI))))).
 
 test(native_generations_facade_catalog_and_ordinary_scope_preserve_the_loaded_kg,
      [setup(plunit_term_roles:fixture(S)),cleanup(plunit_term_roles:cleanup(S))]) :-

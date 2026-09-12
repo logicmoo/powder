@@ -20,7 +20,9 @@ markers retain their source property ordinals and conflicting kinds. The derived
 cache is volatile (excluded from qsave images) and can also be explicitly cleared
 with clear_term_role_cache/0 after metadata cleanup. Cache reuse validates the
 role schema and shared retention-policy tag; publication rechecks policy and
-generation before replacing the cache.
+generation before replacing the cache. A stale category projection alone is
+upgraded once from the cached entries, roles, types and assertion AST locators;
+the occurrence/NAT index and native semantics are not reread or rebuilt.
 
 query_terms(Text,Match,Section,Offset,Limit,Reply): Match exact|substring;
 Section all|ordinary|external|non_atomic. Roles are computed and sections
@@ -164,6 +166,8 @@ without being added to ordinary semantic search rankings.
 
 role_cache_version(6).
 current_cached_index(Index) :-
+    reusable_role_index(Index),get_dict(categoryCatalog,Index,Catalog),current_category_catalog(Catalog).
+reusable_role_index(Index) :-
     is_dict(Index),get_dict(cacheVersion,Index,Version),role_cache_version(Version),
     retention_policy(Policy),get_dict(metadataPolicy,Index,Policy).
 clear_term_role_cache :- with_mutex(openworld_store,retractall(cached_index(_,_))).
@@ -171,18 +175,26 @@ loaded_term_index(Index) :- current_index(3,Index).
 current_index(Attempts,Index) :-
     with_mutex(openworld_store,snapshot_or_cached(State)),
     (State=ready(Index)->true
-    ;State=snapshot(Generation,Policy,Rows),build_term_index(Generation,Rows,Built),
+    ;build_index_snapshot(State,Generation,Policy,Built),
      with_mutex(openworld_store,
        (kb_store:generation(Current),retention_policy(CurrentPolicy),
-        (Current=:=Generation,CurrentPolicy==Policy,Built.metadataPolicy==Policy->
+        (Current=:=Generation,CurrentPolicy==Policy,Built.metadataPolicy==Policy,current_cached_index(Built)->
           (cached_index(Current,Existing),current_cached_index(Existing)->Result=ready(Existing);
            retractall(cached_index(_,_)),assertz(cached_index(Current,Built)),Result=ready(Built))
         ;Result=changed))),
      (Result=ready(Index)->true;
       Attempts>1->Next is Attempts-1,current_index(Next,Index);
       throw(error(term_role_generation_changed,_)))).
+build_index_snapshot(snapshot(Generation,Policy,Rows),Generation,Policy,Built) :-
+    build_term_index(Generation,Rows,Built).
+build_index_snapshot(categories(Generation,Policy,Existing),Generation,Policy,Built) :-
+    refresh_category_catalog(Existing,Existing.categoryCatalog,Category),
+    Built=Existing.put(categoryCatalog,Category).
 snapshot_or_cached(ready(Index)) :-
     kb_store:generation(G),cached_index(G,Index),current_cached_index(Index),!.
+snapshot_or_cached(categories(G,Policy,Index)) :-
+    kb_store:generation(G),cached_index(G,Index),reusable_role_index(Index),
+    get_dict(categoryCatalog,Index,_),!,Policy=Index.metadataPolicy.
 snapshot_or_cached(snapshot(Generation,Policy,Rows)) :-
     kb_store:generation(Generation),retention_policy(Policy),
     findall(Row,(kb_store:assertion(Id,Data),snapshot_row(Id,Data,Row)),Rows).

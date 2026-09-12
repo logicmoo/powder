@@ -1,6 +1,7 @@
 :- module(kb_term_categories,
           [build_category_catalog/4,category_page/5,category_section_pages/4,
-           category_facet_page/6,category_item/3]).
+           category_facet_page/6,category_item/3,
+           current_category_catalog/1,refresh_category_catalog/3]).
 
 /** <module> Multi-membership term categories from the active semantic snapshot
 
@@ -38,10 +39,10 @@ External Symbols meaning; externalMethod is the narrower callback-slot flag.
 
 The *-TheWord bucket is an explicitly marked, case-insensitive lexical suffix
 heuristic on atomic symbol identities, never an isa claim. doInvocations needs
-an actual unquoted application of the reader-tested doAnnounce vocabulary
-(arity >= 2), or the existing reader's do-format/list-descriptor pattern
-(string argument 1, list/NIL argument 2). A do prefix, standalone symbol,
-comment, or quoted form alone supplies no membership or execution confidence.
+the case-sensitive visible spelling ^do[A-Z] AND indexed predicate/relation
+evidence. A standalone unrelated constant, comment or quoted form alone supplies
+no membership. References do not require a loaded executable definition.
+This category policy does not change the reader's separate formatting-list policy.
 No general ontology inheritance or MT inheritance is invented.
 
 Reply items are unique identities BEFORE paging; groups contain all memberships
@@ -70,7 +71,8 @@ not on its own upgrade the separate inferredIsa judgement.
 :- use_module(kb_nat_browser,[nat_item/3]).
 :- use_module(kb_inventory,[declaration_target/4]).
 :- use_module(kb_inventory_rules,[logical_operator/1]).
-:- use_module(kb_symbols,[encoded_symbol/1,list_data_slot/3]).
+:- use_module(kb_symbols,[encoded_symbol/1]).
+:- use_module(kb_do_invocations,[do_invocation_symbol/1]).
 :- use_module(kb_terms,[context_key/2,term_ast/3]).
 :- use_module(library(apply)).
 :- use_module(library(assoc)).
@@ -88,6 +90,11 @@ group(do_invocations,"doInvocations").
 group(individuals,"Individuals").
 group(unclassified,"Unclassified").
 
+category_projection_version(2).
+current_category_catalog(Catalog) :-
+    is_dict(Catalog),get_dict(projectionVersion,Catalog,Version),
+    category_projection_version(Version).
+
 build_category_catalog(Roles,Rows,Schema,Catalog) :-
     findall(Key-Evidence,
       (member(Row,Rows),position_evidence(Row,Schema,Key,Evidence),
@@ -102,10 +109,11 @@ build_category_catalog(Roles,Rows,Schema,Catalog) :-
     Coverage=Roles.natCatalog.coverage.put(term_categories,category_coverage{
       policy:every_matching_group,createsAssertions:false,createsProviders:false,
       executesInvocations:false,inheritsTypes:false,
-      lexicalWordBucket:explicit_heuristic,doCoverage:documented_vocabulary_and_pattern_only,
+      lexicalWordBucket:explicit_heuristic,doCoverage:ascii_do_capital_and_indexed_relation,
       relationDeclarations:"Generic arity/argument declarations do not choose predicate versus function.",
       remainder:"Typed/untyped browsing remainder, not exclusive Individual isa assertions."}),
-    Catalog=category_catalog{schema:'powder.term-categories.v1',generation:Roles.generation,
+    category_projection_version(Version),
+    Catalog=category_catalog{schema:'powder.term-categories.v1',projectionVersion:Version,generation:Roles.generation,
       entries:Entries,byIdentity:ByIdentity,total:Total,groupOrder:Order,groupCounts:Counts,
       coverage:Coverage}.
 rank_entry(E,Rank-E) :- Negative is -E.semanticAssertionCount,Rank=Negative-E.identity.
@@ -139,10 +147,6 @@ position_group(Term,Pos,_,Key,functions,function_schema_reference,details{predic
     Pos.kind==formula,function_schema(Term,Target,Name),entity_key(Target,Key).
 position_group(Term,_,_,Key,external_symbols,external_reference,details{referenceKind:Kind}) :-
     function_reference(Term,Symbol,Kind),entity_key(Symbol,Key).
-position_group(Term,Pos,_,Key,do_invocations,documented_invocation_shape,
-               details{predicate:Name,arity:Arity,pattern:Pattern,execution:unknown,analysisExecuted:false}) :-
-    Pos.kind==formula,compound(Term),Term=..[Name|Args],
-    do_invocation(Name,Args,Pattern),length(Args,Arity),entity_key(Name,Key).
 application_head(Term,Head,Args) :-
     nonvar(Term),
     (atom(Term)->Head=Term,Args=[]
@@ -177,11 +181,6 @@ function_schema(Term,Target,Name) :-
     compound(Term),Term=..[Name,Target,Type],
     declaration_shape(Name,[Target,Type],Declaration),
     memberchk(Declaration,[resultIsa,resultGenl,range,rangeSubclass]).
-do_invocation(x_doAnnounce,[_,_|_],reader_documented_doAnnounce).
-do_invocation(Name,[Text,Values|Rest],reader_format_descriptor_pattern) :-
-    Name\==x_doAnnounce,atom(Name),atom_concat(x_do,_,Name),string(Text),
-    (is_list(Values);Values=='NIL';Values==nil),
-    list_data_slot(Name,[Text,Values|Rest],2).
 source_evidence(Id,Context,E,Pos,Group,Basis,Heuristic,Details,Proof) :-
     context_key(Context,Mt),
     Proof=category_evidence{group:Group,basis:Basis,heuristic:Heuristic,
@@ -208,7 +207,7 @@ categorized_entry(Roles,Positions,D,Entry) :-
     type_keys(Types,TypeKeys),
     mt_descriptor(D,Groups,Evidence,ContextCount,Mt,MtAST,MtKinds),
     (ContextCount=:=0->ZeroContent=true;ZeroContent=false),
-    Entry=category_entry{identity:D.identity,term:D.identity,kind:D.kind,atomicity:Atomicity,
+    Base=category_entry{identity:D.identity,term:D.identity,kind:D.kind,atomicity:Atomicity,
       symbol:D.symbol,label:D.label,searchKey:D.searchKey,expression:D.expression,
       roles:D.roles,groups:Groups,memberships:Memberships,
       external:External,externalSymbol:External,externalMethod:Method,
@@ -216,7 +215,71 @@ categorized_entry(Roles,Positions,D,Entry) :-
       occurrenceAssertionCount:D.count,contextAssertionCount:ContextCount,
       zeroContextContent:ZeroContent,mt:Mt,mtExpression:MtAST,mtEvidenceKinds:MtKinds,
       representation:Representation,constructor:Constructor,typeKeys:TypeKeys,
-      originalTypeEvidence:Types}.
+      originalTypeEvidence:Types},
+    refresh_do_entry(Roles,Base,Entry).
+
+refresh_category_catalog(Roles,Old,Catalog) :-
+    (current_category_catalog(Old)->Catalog=Old
+    ;refresh_category_entries(Old.entries,Roles,Old.byIdentity,Map,Entries),
+     group_counts(Entries,Counts),category_projection_version(Version),
+     CategoryCoverage=Old.coverage.term_categories.put(doCoverage,ascii_do_capital_and_indexed_relation),
+     Coverage=Old.coverage.put(term_categories,CategoryCoverage),
+     Catalog=Old.put(_{projectionVersion:Version,entries:Entries,byIdentity:Map,
+                      groupCounts:Counts,coverage:Coverage})).
+refresh_category_entries([],_,Map,Map,[]).
+refresh_category_entries([Old|Rest],Roles,Map0,Map,[Entry|Entries]) :-
+    refresh_do_entry(Roles,Old,Entry),
+    (Entry==Old->Map1=Map0;put_assoc(Entry.identity,Map0,Entry,Map1)),
+    refresh_category_entries(Rest,Roles,Map1,Map,Entries).
+refresh_do_entry(_,Entry,Entry) :-
+    \+do_invocation_symbol(Entry.symbol),
+    \+memberchk(do_invocations,Entry.groups),!.
+refresh_do_entry(Roles,Old,Entry) :-
+    exclude(do_membership,Old.memberships,Existing),
+    findall(Proof,
+      (Old.kind==symbol,do_invocation_symbol(Old.symbol),
+      invocation_reference(Roles,Old,Source,Basis),
+      Proof=Source.put(category_evidence{group:do_invocations,basis:named_relation_reference,
+        heuristic:false,details:details{pattern:"^do[A-Z]",caseSensitive:true,
+          referenceBasis:Basis,execution:unknown,analysisExecuted:false}})),Proofs0),
+    sort(Proofs0,Proofs),memberships(Proofs,Invocation),
+    append(Existing,Invocation,Combined),exclude(remainder_membership,Combined,Known),
+    (Known\==[]->Selected=Known
+    ;Existing\==[]->Selected=Existing
+    ;get_assoc(Old.identity,Roles.terms,D),
+     remainder_evidence(D,Old.originalTypeEvidence,Es),memberships(Es,Selected)),
+    findall(M,(group(Key,_),member(M,Selected),M.group==Key),Memberships),
+    findall(Key,(member(M,Memberships),Key=M.group),Groups),
+    Entry=Old.put(_{groups:Groups,memberships:Memberships}).
+do_membership(M) :- M.group==do_invocations.
+remainder_membership(M) :- memberchk(M.group,[individuals,unclassified]).
+invocation_reference(_,Entry,Proof,Basis) :-
+    member(M,Entry.memberships),M.group==predicates,
+    member(Proof,M.evidence),Basis=Proof.basis.
+invocation_reference(_,Entry,Proof,explicit_relation_type) :-
+    member(Proof,Entry.originalTypeEvidence),
+    memberchk(Proof.predicate,[x_isa,x_resultIsa]),Proof.type==x_Relation.
+invocation_reference(Roles,Entry,Proof,relation_schema_reference) :-
+    get_assoc(Entry.identity,Roles.terms,D),member(Proof,D.evidence),
+    Proof.role==term_reference,Proof.positionRole\==microtheory_context,
+    append(Parent,[args,N],Proof.path),
+    get_assoc(Proof.assertionId,Roles.assertions,Assertion),
+    category_ast_at(Assertion.expression,Parent,AST),
+    relation_schema_reference(AST,Entry.identity,N).
+category_ast_at(AST,[],AST) :- is_dict(AST).
+category_ast_at(AST,[args,N|Rest],Value) :-
+    is_dict(AST),get_dict(args,AST,Args),nth0(N,Args,Child),
+    category_ast_at(Child,Rest,Value).
+relation_schema_reference(AST,Target,N) :-
+    AST.type==application,AST.head.type==symbol,Name=AST.head.value,
+    nth0(N,AST.args,Argument),Argument.type==symbol,Argument.value==Target,
+    (memberchk(Name,[x_genlPreds,x_subrelation]),length(AST.args,2),memberchk(N,[0,1])
+    ;N=:=0,maplist(schema_argument,AST.args,Args),Term=..[Name|Args],
+     declaration_target(Term,Target,_,_)).
+schema_argument(AST,Value) :-
+    (AST.type==symbol->Value=AST.value
+    ;AST.type==number->Value=AST.value
+    ;Value=category_non_numeric_argument).
 term_types(Roles,D,Types,Representation,Constructor) :-
     (get_assoc(D.identity,Roles.natCatalog.byIdentity,Nat)->
        Types=Nat.typeEvidence,Representation=Nat.representation,Constructor=Nat.constructor
