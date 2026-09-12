@@ -11,6 +11,7 @@
 :- use_module(kb_term_navigation).
 :- use_module(kb_term_browser,[]).
 :- use_module(kb_assertion_view,[]).
+:- use_module(kb_rule_utility_http,[]).
 :- use_module(kb_native_annotations,[]).
 :- use_module(kb_pool_settings,[]).
 :- use_module(kb_jobs,[]).
