@@ -68,7 +68,7 @@ cleanup_native(fixture(Directory,Source,Native,_,Ids)) :-
 
 snapshot_context(Token) :-
     principal("symbolic",P0),
-    P=P0.put(_{agent:"x_SymbolicTestAgent",readMts:"all"}),
+    P=P0.put(_{agent:"symbolic-audit-fixture",readMts:"all"}),
     kb_kee:open_context(P,Token).
 full_fixture(Fixture) :-
     fixture_records(Records),native_fixture_records(Records,Fixture).
@@ -161,6 +161,7 @@ test(real_pinned_knowledge_snapshot_preserves_grammar_sharing,
      [setup((full_fixture(F),snapshot_context(Token))),
       cleanup((kb_kee:close_context(Token),cleanup_native(F)))]) :-
     kb_kee_auth:principal(Token,P),kb_store:generation(G),
+    assertion(P.agent\=="x_SymbolicTestAgent"),
     kb_symbolic_agent_knowledge:snapshot(P,
       json{agent:"x_SymbolicTestAgent",mt:"x_SymbolicTestAgentMt",generation:G},Snapshot),
     assertion(Snapshot.complete==true),

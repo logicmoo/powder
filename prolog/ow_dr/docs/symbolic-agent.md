@@ -225,8 +225,12 @@ in-flight operation cannot commit. No automatic retry loop is implemented here.
 
 `kb_symbolic_agent_knowledge:snapshot(Principal,Args,Reply)` is a **compiled KEE
 adapter contract**, not a public endpoint accepting a client-supplied Principal.
-It requires the authenticated symbolic principal's agent to equal `Args.agent`.
-Arguments are canonical `agent`, definition `mt`, expected `generation` and an
+It requires an authenticated symbolic principal with null model/prompt metadata.
+Its immutable audit-agent identifier is distinct from the executable knowledge
+root: `Args.agent` identifies the latter, not the principal. The trusted execution
+host must bind that knowledge root/version immutably for a run rather than accept
+source-switching instructions from KB text.
+Arguments are canonical knowledge `agent`, definition `mt`, expected `generation` and an
 optional `maxRecords` (default 4,096, maximum 8,192). Every linked agent MT is
 separately authorized before returning its records.
 Independent ceilings bound the collected semantic terms to 65,536 heap cells

@@ -12,8 +12,9 @@
 % A compiled KEE adapter calls this with its authenticated Principal. The
 % browser/agent must never supply that Principal as a tool argument.
 snapshot(Principal,Args,Reply) :-
-    (Principal.kind==symbolic,Principal.agent==Args.agent->true;
-      throw(error(symbolic_agent_identity_mismatch,_))),
+    (Principal.kind==symbolic,Principal.model==null,
+     Principal.promptVersion==null,Principal.promptHash==null->true;
+      throw(error(symbolic_context_required,_))),
     kb_terms:context_input(Args.agent,Agent),
     kb_terms:context_input(Args.mt,DefinitionMt),
     kb_kee_auth:authorize_mt(Principal,read,Args.mt),
