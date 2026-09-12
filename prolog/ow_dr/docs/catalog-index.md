@@ -187,6 +187,22 @@ posting identities, holds the existing directory lock, and switches the small
 manifest only after the new support directory is complete. Missing support is
 explicitly pending; it does not disable basic exact-term browsing.
 
+The actual directory-only upgrade completed in **97.340 seconds**, retaining
+**744,932 declarations for 209,260 subjects** in **154,171,083 bytes**. A standalone
+`x_diplomaticState` lookup took **3,019 ms cold / 56 ms warm**, returning its one
+type declaration and one hierarchy step. Its source is `combat.krf`; the hierarchy
+step retains its own source and MT instead of attributing it to that file.
+
+The opt-in real browser suite passed **9/9** against an isolated listener serving
+the actual 978-file index: broad search, unloaded assertions/positions/MT pages,
+the opened type-support disclosure and links, pagination, desktop/mobile overflow,
+and unchanged native generation/files/counts. The listener loaded **zero** native
+sources and was stopped afterward. Measured browser startup was **12,126 ms**;
+HTTP type-support cold read was **5,778.7 ms**. HTTP workers can incur independent
+cold reads, so successive HTTP samples are not presented as same-worker warm
+timings. This validates the current code/artifacts, not an unrequested reload of
+the user's primary application.
+
 Known schema target slots reuse `declaration_target/4`. Explicit positive `isa`
 assertions define the selected **subject's type**, including whole NAT subjects.
 Nested implication antecedents/consequents, negative assertions and ordinary

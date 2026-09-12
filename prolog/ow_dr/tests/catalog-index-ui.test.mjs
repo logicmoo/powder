@@ -114,6 +114,12 @@ test('published all-file catalog serves real unloaded evidence without changing 
   assert.equal(detail.loaded, false);
   const mt = await read(`catalog/term?${new URLSearchParams({ term: item.mt, facet: 'context', scope: 'unloaded', limit: '2' })}`, 'unloadedMTMs');
   assert.ok(mt.items.length && mt.items.every(entry => entry.mt === item.mt && !entry.loaded));
+  if (process.env.OPENWORLD_CATALOG_TYPE_SUPPORT === '1') {
+    const types = await read(`catalog/types?${new URLSearchParams({ term, limit: '25' })}`, 'typeSupportColdMs');
+    assert.ok(types.items.length && types.items.every(entry => entry.declaration.source && entry.declaration.id && entry.declaration.microtheoryExpression));
+    assert.equal(types.scope, 'catalog_taxonomy_not_mt_entailment');
+    assert.equal(types.proofAlternativesExhaustive, false);
+  }
   if (process.env.LOGOS_CHROME) {
     const browser = await launchChromium(process.env.LOGOS_CHROME);
     const waitForPage = async title => {
@@ -142,6 +148,21 @@ test('published all-file catalog serves real unloaded evidence without changing 
       assert.ok(await browser.evaluate('document.querySelector(".catalog-positions summary")?.textContent.includes("Matching structural positions")'));
       assert.ok(await browser.evaluate('document.querySelector(".assertion-group-heading").textContent.includes("All indexed MT assertions")'));
       assert.match(await browser.evaluate('document.querySelector(".assertion-ball").getAttribute("href")'), /^#\/catalog-assertion/u);
+      if (process.env.OPENWORLD_CATALOG_TYPE_SUPPORT === '1') {
+        await browser.evaluate(`document.querySelector(".catalog-index details:has(> summary)") &&
+          [...document.querySelectorAll(".catalog-index details")].find(node => node.querySelector(":scope > summary")?.textContent === "Recorded type support").setAttribute("open", "")`);
+        const deadline = performance.now() + 20000;
+        while (performance.now() < deadline) {
+          if (await browser.evaluate('document.querySelector(".catalog-index").textContent.includes("positive type declarations.")')) break;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        assert.ok(await browser.evaluate('document.querySelector(".catalog-index").textContent.includes("positive type declarations.")'));
+        assert.ok(await browser.evaluate('document.querySelector(".catalog-index details[open] a[href*=catalog-assertion]") !== null'));
+        for (const [width, height, mobile] of [[1360, 950, false], [390, 844, true]]) {
+          await browser.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile });
+          assert.equal(await browser.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'), true);
+        }
+      }
       await browser.evaluate(`location.hash = ${JSON.stringify(catalogAssertionHref(item, term))}`);
       await waitForPage('Catalog assertion');
       assert.ok(await browser.evaluate('document.querySelector(".assertion-view .expression a") !== null'));
