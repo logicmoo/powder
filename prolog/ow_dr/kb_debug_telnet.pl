@@ -1,5 +1,8 @@
 :- module(kb_debug_telnet,
           [start_debug_telnet/0, start_debug_telnet/1, stop_debug_telnet/0,
+           start_fresh_debug_telnet/1, debug_resume_profile/1, debug_profile_options/2,
+           debug_admission_status/1, debug_require_admission_quiescence/0,
+           debug_client_thread/0, in_debug_command/0,
            debug_telnet_status/1, debug_credentials_file/1, debug_snapshot_safe/0]).
 
 :- use_module(library(socket)).
@@ -12,21 +15,58 @@
 :- use_module(library(time)).
 :- use_module(library(utf8)).
 :- use_module(library(aggregate)).
+:- use_module(library(pairs),[pairs_keys/2]).
+:- use_module(kb_activity,[]).
+:- meta_predicate with_debug_command(0), admitted_call(0).
 
-:- dynamic service/6, auth_digest/2, client/5, attempts/3.
-:- volatile service/6, auth_digest/2, client/5, attempts/3.
+:- dynamic service/6, auth_digest/2, client/5, attempts/3, stopped_profile/1.
+:- volatile service/6, auth_digest/2, client/5, attempts/3, stopped_profile/1.
 :- thread_local telnet_channel/2.
+:- thread_local admitted_debug_command/0.
 
 % No initialization: importing this module cannot start a listener.
 start_debug_telnet :- start_debug_telnet([]).
 start_debug_telnet(Options) :-
     configuration(Options,Config),
-    (Config.enabled==false -> stop_debug_telnet;
+    (Config.enabled==false ->
+       require_host_thread,
+       with_mutex(powder_debug_lifecycle,(stop_service,remember_stopped(Config)));
      with_mutex(powder_debug_lifecycle,
        (service(_,running,_,_,Existing,_) ->
           (Existing==Config -> true;permission_error(reconfigure,running_debug_service,stop_first))
        ;service(_,_,_,_,_,_) -> permission_error(start,debug_service,stopping)
-       ;start_service(Config)))).
+       ;start_service(Config),retractall(stopped_profile(_))))).
+
+start_fresh_debug_telnet(Options) :-
+    require_host_thread,configuration(Options,Config),
+    with_mutex(powder_debug_lifecycle,
+      ((service(_,_,_,_,_,_);client(_,_,_,_,_);auth_digest(_,_))->
+         permission_error(start,fresh_debug_service,not_stopped);
+       Config.enabled==false->remember_stopped(Config);
+       start_service(Config),retractall(stopped_profile(_)))).
+require_host_thread :-
+    ((debug_client_thread;in_debug_command)->
+       permission_error(administer,debug_service,client_thread);true).
+debug_client_thread :- thread_self(Self),client(_,_,Self,_,_).
+in_debug_command :- admitted_debug_command.
+remember_stopped(Config) :-
+    retractall(stopped_profile(_)),assertz(stopped_profile(Config)).
+
+profile_keys([enabled,port,max_sessions,attempt_limit,max_line,auth_timeout,
+              idle_timeout,session_timeout,query_timeout,attempt_window]).
+debug_resume_profile(Profile) :-
+    with_mutex(powder_debug_lifecycle,
+      ((service(_,_,_,_,Config,_)->true;stopped_profile(Config)->true;
+        configuration([enabled(false)],Config)),
+       profile_keys(Keys),
+       findall(Key-Value,(member(Key,Keys),get_dict(Key,Config,Value)),Pairs),
+       dict_create(Profile,debug_profile,Pairs))).
+debug_profile_options(Profile,Options) :-
+    must_be(dict,Profile),dict_pairs(Profile,_,Pairs),pairs_keys(Pairs,Keys),
+    profile_keys(Expected0),sort(Expected0,Expected),
+    (Keys==Expected->true;domain_error(debug_profile_fields,Keys)),
+    findall(Option,(member(Key-Value,Pairs),Option=..[Key,Value]),Options),
+    configuration(Options,_).
 
 configuration(Options,C) :-
     must_be(list,Options),maplist(known_option,Options),
@@ -98,7 +138,8 @@ stop_service :-
        maplist(signal_stop,Clients),
        wait_threads([Manager|Clients],3),
        remove_credentials(File),
-       retractall(service(G,_,_,_,_,_)),retractall(attempts(G,_,_))
+       retractall(service(G,_,_,_,_,_)),retractall(attempts(G,_,_)),
+       remember_stopped(Config.put(enabled,false))
     ;true).
 signal_stop(Thread) :- catch(thread_signal(Thread,throw(debug_stop)),_,true).
 wait_threads(Threads,Seconds) :-
@@ -256,20 +297,46 @@ telnet_reply(In,Command,Option) :-
       set_stream(Out,encoding(Encoding))).
 
 repl(In,Out,C) :-
+    set_client_phase(authenticated_gated,_),
     format(Out,'?- ',[]),flush_output(Out),
     call_with_time_limit(C.idle_timeout,line(In,C.max_line,Bytes)),
+    (disconnect_line(Bytes)->true;
+     catch(call_with_time_limit(C.query_timeout,
+             with_debug_command(accepted_command(Bytes,In,Out,C,Action))),
+           Error,(query_exception(Error,Out),Action=continue)),
+     (Action==close->true;repl(In,Out,C))).
+
+disconnect_line(Bytes) :-
+    string_codes(Text,Bytes),normalize_space(string(Value),Text),
+    memberchk(Value,["end_of_file.","end_of_file"]).
+accepted_command(Bytes,In,Out,C,Action) :-
     phrase(utf8_codes(Codes),Bytes),string_codes(Text,Codes),
-    (normalize_space(string(Trimmed),Text),Trimmed=="" -> repl(In,Out,C);
-     catch((term_string(Goal,Text,[module(user),variable_names(Names),syntax_errors(error)]),
-            Parsed=true),
-           Error,(query_error(Out,Error),Parsed=false)),
-     (Parsed==false -> repl(In,Out,C);
-      Goal==end_of_file -> true;
-      catch(call_with_time_limit(C.query_timeout,answers(Goal,Names,In,Out,C)),
-            Error,query_exception(Error,Out)),
-      repl(In,Out,C))).
+    (normalize_space(string(Trimmed),Text),Trimmed=="" -> Action=continue;
+     term_string(Goal,Text,[module(user),variable_names(Names),syntax_errors(error)]),
+     (Goal==end_of_file->Action=close;
+      answers(Goal,Names,In,Out,C),Action=continue)).
+
+with_debug_command(Goal) :-
+    kb_activity:with_application(kb_debug_telnet:admitted_call(Goal)).
+admitted_call(Goal) :-
+    setup_call_cleanup(
+        (asserta(admitted_debug_command,Ref),set_client_phase(command,Previous)),
+        catch(Goal,error(application_reload_busy,_),
+              throw(error(debug_nested_exclusive_refused,_))),
+        (set_client_phase(Previous,_),erase(Ref))).
+set_client_phase(Phase,Previous) :-
+    thread_self(Self),
+    with_mutex(powder_debug_clients,
+      sig_atomic(
+        (retract(client(G,Id,Self,Socket,Previous))->
+           assertz(client(G,Id,Self,Socket,Phase))
+        ;Previous=none))).
 
 answers(Goal,Names,In,Out,C) :-
+    (in_debug_command->answer_body(Goal,Names,In,Out,C);
+     % Older live repl frames still call this arity after code publication.
+     with_debug_command(answer_body(Goal,Names,In,Out,C))).
+answer_body(Goal,Names,In,Out,C) :-
     (call_cleanup(user:Goal,Det=true),
      print_bindings(Out,Names),
      (Det==true -> !;
@@ -302,6 +369,12 @@ query_exception(debug_stop,_) :- !,throw(debug_stop).
 query_exception(debug_client_eof,_) :- !,throw(debug_client_eof).
 query_exception(time_limit_exceeded(debug_session),_) :- !,
     throw(time_limit_exceeded(debug_session)).
+query_exception(error(application_reload_busy,_),Out) :- !,
+    format(Out,'BUSY: application admissions are paused; command not executed.~n',[]),
+    flush_output(Out).
+query_exception(error(debug_nested_exclusive_refused,_),Out) :- !,
+    format(Out,'BUSY: an exclusive operation cannot run inside this admitted command.~n',[]),
+    flush_output(Out).
 query_exception(Error,Out) :- query_error(Out,Error).
 query_error(Out,Error) :-
     message_to_string(Error,Message),format(Out,'ERROR: ~s~n',[Message]),flush_output(Out).
@@ -315,8 +388,22 @@ debug_telnet_status(Status) :-
                  maxSessions:C.max_sessions}
       ;Status=_{enabled:false,state:stopped,sessions:0})).
 debug_credentials_file(File) :- service(_,running,_,_,_,File).
+debug_admission_status(Status) :-
+    with_mutex(powder_debug_clients,
+      (aggregate_all(count,client(_,_,_,_,_),Sessions),
+       aggregate_all(count,client(_,_,_,_,command),Commands),
+       aggregate_all(count,client(_,_,_,_,authenticated),Legacy),
+       Status=_{sessions:Sessions,activeCommands:Commands,legacySessions:Legacy})).
+debug_require_admission_quiescence :-
+    kb_activity:activity_status(Activity),
+    (Activity.exclusive==true,kb_activity:owns_admission_lease->true;
+     permission_error(check,debug_quiescence,exclusive_admission_required)),
+    debug_admission_status(Status),
+    (Activity.active=:=0,Status.activeCommands=:=0,Status.legacySessions=:=0->true;
+     throw(error(debug_admission_busy(Status),_))).
 debug_snapshot_safe :-
-    ((service(_,_,_,_,_,_);client(_,_,_,_,_);auth_digest(_,_);attempts(_,_,_)) ->
+    ((service(_,_,_,_,_,_);client(_,_,_,_,_);auth_digest(_,_);attempts(_,_,_);
+      admitted_debug_command) ->
        permission_error(save,debug_service,active);true).
 
 create_credentials(Port,File,Hash) :-

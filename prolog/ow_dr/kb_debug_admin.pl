@@ -1,6 +1,6 @@
 :- module(kb_debug_admin,
           [debug_cli_options/3, with_debug_service/2, stop_host_debug/0,
-           debug_admin_status/1]).
+           start_host_debug/1, stop_debug_for_transfer/0, debug_admin_status/1]).
 :- use_module(kb_debug_telnet).
 :- use_module(kb_urls,[]).
 :- use_module(library(http/http_dispatch)).
@@ -24,13 +24,25 @@ register_halt_cleanup :-
        at_halt(kb_debug_admin:stop_host_debug),assertz(halt_cleanup_registered))).
 
 with_debug_service(Options,Goal) :-
+    require_host_caller,
     setup_call_cleanup(
       with_mutex(powder_debug_admin,
         (retractall(host_shutdown),start_debug_telnet(Options))),
       Goal,stop_host_debug).
 stop_host_debug :-
+    require_host_caller,
     with_mutex(powder_debug_admin,
       ((host_shutdown->true;assertz(host_shutdown)),stop_debug_telnet)).
+start_host_debug(Profile) :-
+    require_host_caller,debug_profile_options(Profile,Options),
+    with_mutex(powder_debug_admin,
+      (start_fresh_debug_telnet(Options),retractall(host_shutdown))).
+stop_debug_for_transfer :-
+    require_host_caller,
+    with_mutex(powder_debug_admin,stop_debug_telnet).
+require_host_caller :-
+    ((debug_client_thread;in_debug_command)->
+       permission_error(administer,debug_host,client_thread);true).
 
 debug_cli_options(Args,Remaining,Options) :-
     must_be(list,Args),

@@ -139,6 +139,134 @@ def wait_sessions(app, expected=0):
 
 @unittest.skipUnless(sys.platform == "win32", "Owner-private Windows credential ACL")
 class DebugTelnetIntegration(unittest.TestCase):
+    def test_full_resume_profile_and_fresh_host_start_rollback(self):
+        with App() as app:
+            app.start(auth_timeout=2.7, idle_timeout=3.3, session_timeout=12,
+                      query_timeout=4, max_line=512, attempt_limit=8, attempt_window=4)
+            profile = app.request("profile")
+            self.assertEqual(set(profile), {"enabled", "port", "max_sessions", "attempt_limit",
+                "max_line", "auth_timeout", "idle_timeout", "session_timeout", "query_timeout",
+                "attempt_window"})
+            self.assertEqual(profile["auth_timeout"], 2.7)
+            old_token = app.credentials()["token"]
+            old_file = app.file
+            self.assertEqual(app.request("retire_debug"), {"stopped": True})
+            self.assertTrue(app.request("shutdown_flag")["shutdown"])
+            with socket.socket() as occupied:
+                occupied.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                occupied.bind(("127.0.0.1", 0))
+                occupied.listen()
+                bad = dict(profile, port=occupied.getsockname()[1])
+                self.assertIn("error", app.request("start_profile", profile=bad))
+                self.assertTrue(app.request("shutdown_flag")["shutdown"])
+            restored = app.request("start_profile", profile=profile)
+            self.assertTrue(restored["status"]["enabled"])
+            app.file = Path(restored["credentialFile"])
+            self.assertFalse(app.request("shutdown_flag")["shutdown"])
+            self.assertFalse(old_file.exists())
+            self.assertTrue(app.credentials()["token"] != old_token)
+            self.assertEqual(app.request("profile"), profile)
+            self.assertIn("error", app.request("start_profile", profile=profile))
+            self.assertEqual(app.request("transfer_stop"), {"stopped": True})
+            disabled = app.request("profile")
+            self.assertFalse(disabled["enabled"])
+            self.assertEqual({k: v for k, v in disabled.items() if k != "enabled"},
+                             {k: v for k, v in profile.items() if k != "enabled"})
+            restored = app.request("start_profile", profile=profile)
+            app.file = Path(restored["credentialFile"])
+            self.assertFalse(app.request("shutdown_flag")["shutdown"])
+            c = app.connect()
+            try:
+                c.prompt()
+                c.send("current_prolog_flag(pid, PID).")
+                self.assertIn(str(app.pid).encode(), c.prompt())
+                c.send("end_of_file.")
+            finally:
+                c.close()
+            wait_sessions(app)
+            app.request("retire_debug")
+            disabled = dict(profile, enabled=False)
+            stopped = app.request("start_profile", profile=disabled)
+            self.assertFalse(stopped["status"]["enabled"])
+            self.assertIsNone(stopped["credentialFile"])
+            self.assertFalse(app.request("shutdown_flag")["shutdown"])
+            self.assertEqual(app.request("profile"), disabled)
+
+    def test_admission_refuses_before_parse_and_preserves_connection(self):
+        with App() as app:
+            app.start()
+            c = app.connect()
+            try:
+                c.prompt()
+                self.assertEqual(app.request("gate_begin"), {"leased": True})
+                self.assertEqual(app.request("quiescent"), {"safe": True})
+                c.send("(")
+                self.assertIn(b"BUSY:", c.prompt())
+                c.send("assertz(debug_fixture_marker(unauthenticated)).")
+                self.assertIn(b"BUSY:", c.prompt())
+                self.assertFalse(app.request("marker")["mutated"])
+                self.assertEqual(app.request("gate_end"), {"leased": False})
+                c.send("current_prolog_flag(pid, PID).")
+                self.assertIn(str(app.pid).encode(), c.prompt())
+                c.send("end_of_file.")
+            finally:
+                c.close()
+
+    def test_active_alternatives_timeouts_and_nested_admin_release_admission(self):
+        with App() as app:
+            app.start(query_timeout=.6)
+            c = app.connect()
+            try:
+                c.prompt()
+                c.send("member(X,[first,second]).")
+                self.assertIn(b"more", c.prompt())
+                self.assertEqual(app.request("activity")["active"], 1)
+                self.assertEqual(app.request("admission")["activeCommands"], 1)
+                self.assertIn("error", app.request("gate_begin"))
+                c.send("")
+                c.prompt()
+                self.assertEqual(app.request("activity")["active"], 0)
+                c.send("sleep(3).")
+                self.assertIn(b"Time limit", c.prompt())
+                self.assertEqual(app.request("activity")["active"], 0)
+                c.send("kb_activity:with_exclusive_reload(true).")
+                self.assertIn(b"BUSY:", c.prompt())
+                c.send("kb_activity:begin_admission_lease(_).")
+                self.assertIn(b"BUSY:", c.prompt())
+                c.send("kb_debug_admin:stop_host_debug.")
+                self.assertIn(b"ERROR:", c.prompt())
+                self.assertFalse(app.request("shutdown_flag")["shutdown"])
+                self.assertEqual(app.request("activity")["active"], 0)
+                self.assertEqual(app.request("gate_begin"), {"leased": True})
+                self.assertEqual(app.request("quiescent"), {"safe": True})
+                c.send("end_of_file.")
+                read_all(c.socket)
+                app.request("gate_end")
+            finally:
+                c.close()
+            self.assertIsNone(app.process.poll())
+
+    def test_legacy_reader_requires_gate_attestation_before_checkpoint(self):
+        with App() as app:
+            app.start()
+            c = app.connect()
+            try:
+                c.prompt()
+                self.assertEqual(app.request("legacy_reader"), {"legacy": True})
+                self.assertEqual(app.request("admission")["legacySessions"], 1)
+                self.assertEqual(app.request("gate_begin"), {"leased": True})
+                self.assertIn("error", app.request("quiescent"))
+                app.request("gate_end")
+                c.send("true.")
+                self.assertIn(b"true.", c.prompt())
+                self.assertEqual(app.request("admission")["legacySessions"], 0)
+                self.assertEqual(app.request("gate_begin"), {"leased": True})
+                self.assertEqual(app.request("quiescent"), {"safe": True})
+                app.request("gate_end")
+                c.send("end_of_file.")
+            finally:
+                c.close()
+
     def test_pending_read_poll_preserves_partial_auth_and_idle_session(self):
         with App() as app:
             app.start(auth_timeout=2, idle_timeout=2, session_timeout=5)

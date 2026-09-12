@@ -162,6 +162,84 @@ is loopback plaintext, not encrypted or protected against a privileged local
 attacker. Ctrl+C in the bundled client exits that client only; an in-progress
 remote goal may continue until its limit or host stop.
 
+## Checkpoint profiles and command admission
+
+These are trusted host APIs, not additional HTTP operations:
+
+```prolog
+kb_debug_telnet:debug_resume_profile(Profile).
+kb_debug_telnet:debug_profile_options(Profile, Options).
+kb_debug_admin:stop_debug_for_transfer.
+kb_debug_admin:start_host_debug(Profile).
+```
+
+`Profile` is a complete, strictly whitelisted dictionary containing only
+`enabled`, `port`, `max_sessions`, `attempt_limit`, `max_line`, `auth_timeout`,
+`idle_timeout`, `session_timeout`, `query_timeout`, and `attempt_window`.
+Capture it **before** stopping. Active configuration is authoritative; while
+stopped, the last successful configuration is retained in volatile memory with
+`enabled:false` (including custom port/limits). Old, already-disabled processes
+that never recorded configuration fall back to defaults. There are no tokens,
+digests, PIDs, filenames, sockets, thread IDs, or user query contents. Bind is
+always 127.0.0.1, never configurable.
+
+`start_host_debug(Profile)` is a **one-shot fresh start**, not a scope wrapper:
+it requires fully stopped debug resources, validates the complete profile,
+starts new credentials if enabled, and clears the admin shutdown latch only
+after success. Failure (including an occupied port) leaves the latch unchanged.
+It never implicitly stops/reconfigures a running service. For RPC retries,
+reconcile actual status/profile rather than expecting another fresh start to
+be idempotent. `stop_debug_for_transfer/0` is temporary stop without marking the
+host permanently shut down; `stop_host_debug/0` remains final retirement.
+All host lifecycle helpers reject debug-client callers before acquiring their
+administrative mutex or changing shutdown state.
+
+Every complete authenticated command acquires `kb_activity:with_application/1`
+**before UTF-8 decoding/Prolog parsing** and retains that admission through goal
+execution, answer printing, and the alternatives prompt. Idle line reads and
+Telnet negotiation do not hold application admission. Literal disconnect/EOF
+remains available while paused. Refused commands return `BUSY` without parsing
+or executing; they are not silently retried. Ordinary exceptions/timeouts
+release admission and return to the same connection. A nested exclusive
+operation fails promptly rather than waiting on its own admission; this is not
+a transaction and does not undo earlier subgoals.
+
+Use the existing application drain, followed by the debug readiness check:
+
+```prolog
+setup_call_cleanup(
+    kb_jobs:begin_checkpoint_drain(Lease),
+    ( kb_debug_telnet:debug_require_admission_quiescence,
+      ProtectedSnapshotOrPromotion
+    ),
+    kb_jobs:end_checkpoint_drain(Lease)).
+```
+
+The readiness check requires an exclusive application lease owned by the
+calling thread and rejects
+active commands or legacy authenticated reader frames from before gate
+publication. `debug_admission_status/1` reports only `sessions`,
+`activeCommands`, and `legacySessions`. Idle gated sessions are allowed and
+stay connected; do **not** reject every nonzero session count. Pre-publication
+reader frames must finish an ordinary command and enter the new reader, or
+reconnect, before a checkpoint can pass the readiness barrier. A command
+already running when code was published cannot retroactively acquire a lease.
+
+This is cooperative application coordination, not a sandbox against a
+credential holder deliberately altering internal gates or spawning unmanaged
+background writers. Such work must use the application's own admissions/jobs.
+
+**Port-transfer rule:** a trial candidate cannot bind the old app's still-owned
+debug port. Keep its captured desired profile separate and defer startup with
+`Profile.put(enabled,false)` until explicitly coordinated transfer. Once
+application admissions are drained, temporarily stop the old debug service,
+start the candidate's captured desired profile, and reconcile success before
+retirement. On rollback, stop candidate debug first and fresh-start the old
+captured profile once its port is free. These operations close affected TCP
+connections and generate new credentials; a connection-preserving admission
+pause alone does neither. No helper performs cross-process transfer or steals
+a port automatically.
+
 ## Limits, cleanup, and checkpoints
 
 Options and defaults:

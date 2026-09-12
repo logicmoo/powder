@@ -1,7 +1,9 @@
 :- use_module('../kb_debug_telnet').
+:- use_module('../kb_debug_admin',[]).
 :- use_module(library(http/json)).
 :- use_module(library(readutil)).
 :- dynamic debug_fixture_marker/1.
+:- dynamic fixture_admission/1.
 :- initialization(main,main).
 
 main([PortText]) :-
@@ -11,7 +13,8 @@ main([PortText]) :-
     current_prolog_flag(pid,PID),
     setup_call_cleanup(true,
       (reply(_{pid:PID}),commands(Port)),
-      catch(stop_debug_telnet,_,true)).
+      (forall(retract(fixture_admission(Token)),kb_activity:end_admission_lease(Token)),
+       catch(stop_debug_telnet,_,true))).
 commands(Port) :-
     read_line_to_string(user_input,Line),
     (Line==end_of_file->true;
@@ -35,6 +38,32 @@ command(R,Port,Result) :-
     ;R.action=="stop" -> stop_debug_telnet,Result=_{stopped:true}
     ;R.action=="status" -> debug_telnet_status(Result)
     ;R.action=="snapshot" -> debug_snapshot_safe,Result=_{safe:true}
+    ;R.action=="profile" -> debug_resume_profile(Result)
+    ;R.action=="start_profile" ->
+      kb_debug_admin:start_host_debug(R.profile),
+      debug_telnet_status(S),
+      (debug_credentials_file(File)->true;File=null),
+      Result=_{status:S,credentialFile:File}
+    ;R.action=="transfer_stop" ->
+      kb_debug_admin:stop_debug_for_transfer,Result=_{stopped:true}
+    ;R.action=="retire_debug" ->
+      kb_debug_admin:stop_host_debug,Result=_{stopped:true}
+    ;R.action=="shutdown_flag" ->
+      (kb_debug_admin:host_shutdown->Flag=true;Flag=false),Result=_{shutdown:Flag}
+    ;R.action=="gate_begin" ->
+      kb_activity:begin_admission_lease(Token),assertz(fixture_admission(Token)),
+      Result=_{leased:true}
+    ;R.action=="gate_end" ->
+      forall(retract(fixture_admission(Token)),kb_activity:end_admission_lease(Token)),
+      Result=_{leased:false}
+    ;R.action=="activity" -> kb_activity:activity_status(Result)
+    ;R.action=="admission" -> debug_admission_status(Result)
+    ;R.action=="quiescent" -> debug_require_admission_quiescence,Result=_{safe:true}
+    ;R.action=="legacy_reader" ->
+      with_mutex(powder_debug_clients,
+        (retract(kb_debug_telnet:client(G,Id,T,Socket,authenticated_gated)),
+         assertz(kb_debug_telnet:client(G,Id,T,Socket,authenticated)))),
+      Result=_{legacy:true}
     ;R.action=="reload_transport" ->
       source_file(kb_debug_telnet:debug_telnet_status(_),File),
       load_files(File,[if(true),silent(true),imports([])]),Result=_{reloaded:true}
