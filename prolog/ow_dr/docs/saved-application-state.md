@@ -290,30 +290,38 @@ Images now retain validated SourcePack roots, choices, members and resolution
 data as well as startup/pool settings. Their semantic content participates in
 configuration identity. `effective_configuration/1` and GET
 `api/checkpoint/configuration` use existing validated sidecars when present and
-immutable image data when absent. Corrupt existing sidecars are errors, not a
+module-owned imported fallback when absent. Corrupt existing sidecars are errors, not a
 reason to silently fall back. Independent image verification removes settings,
 SourcePacks, native annotations, originals and caches before restoring.
 
-For the parent-owned ordinary Settings/SourcePack readers, the missing-file
-branches must call `kb_saved_state:restored_server_settings/1` and
-`kb_saved_state:restored_source_packs/1`, respectively. These are memory-only
-accessors and fail outside an image; they never create or overwrite a sidecar.
-Their revision is `none` because no current sidecar exists. Existing sidecars
-retain their own real optimistic revision. Do not replace the existing-file
-validation branches. SourcePack mutations must also join application admission
-before publication; that shared-module wiring remains outside this module.
+Ordinary Settings/SourcePack readers now own their missing-sidecar fallback.
+See [settings snapshots](settings-snapshots.md) and
+[SourcePack snapshots](source-pack-snapshots.md) for the frozen export/import/
+inspection contracts. No snapshot operation creates or overwrites a sidecar.
+Effective missing-sidecar reads use revision `none`; existing sidecars retain
+their real optimistic revision. SourcePack writes now join application admission
+before authorization/publication, retaining native locking and revision checks.
 
-The latest extended actual-native Windows test passed in 319.270 seconds:
+Runtime data schema 7 stores the full authority/revision/packs DTO separately as
+`Metadata.sourcePackSnapshot`. Its volatile fallback is explicitly reimported
+on restore, without source/cache reads. Semantic configuration identity remains
+separate from document authority. Before future activation the coordinator must
+verify the captured DTO against live SourcePack authority under its lease.
+
+An earlier extended actual-native Windows test passed in 319.270 seconds:
 trial, busy refusal, cancel, injected-bind-failure rollback, successful takeover,
 sidecar-free repeat save and selected startup with an explicit port override.
-The final frozen backend suite passed all 31 tests; both Chrome/UI tests passed.
+That stage passed 31 backend and two Chrome/UI tests. These are historical
+results, not validation of the current paused checkpoint workflow.
 
 Earlier native runs exposed intermittent old-host
 `thread_join/2: thread ... does not exist` shutdown failures (exit 2).
 The latest run did not reproduce them; this is not proof that the underlying
 shutdown race is fixed. Cleanup stages now identify debug/HTTP/control/pools
-failures. Parent app/Settings wiring, ordinary missing-sidecar reader integration,
-SourcePack admission and the shutdown-race review remain release considerations.
+failures. A subsequent expanded native test also exposed an unresolved candidate
+exit `0xC000013A`; no cause or fix is claimed. Parent app/Settings wiring, the
+manual-only non-serving workflow and native shutdown review remain release
+considerations. Existing checkpoint-policy execution guards remain in force.
 
 ## Focused verification
 

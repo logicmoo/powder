@@ -1,7 +1,9 @@
 :- module(kb_source_packs,
           [list_packs/1,get_pack/2,create_pack/4,save_pack/3,
            resolve_pack/4,load_pack/4,refresh_provider_index/2,
-           resolve_graph/4,packs_file/1]).
+           resolve_graph/4,packs_file/1,
+           export_source_pack_snapshot/1,import_source_pack_snapshot/1,
+           restored_source_pack_snapshot/1,verify_source_pack_snapshot_authority/1]).
 
 /** <module> Named, opt-in source compositions
 
@@ -45,6 +47,7 @@ checks. Source files, adjacent statistics and corpus caches are never written.
 :- use_module(kb_cache,[read_cache/3,file_digest/2,terms_digest/2,try_lock/2,release_lock/1,
                         stage_path/2,install_stage/2,remove_if_exists/1]).
 :- use_module(kb_store,[]).
+:- use_module(kb_activity,[]).
 :- use_module(kb_catalog_query,[source_pack_snapshot/1]).
 :- use_module(kb_source_pack_catalog).
 :- use_module(library(apply)).
@@ -59,6 +62,8 @@ checks. Source files, adjacent statistics and corpus caches are never written.
 :- use_module(library(crypto),[crypto_file_hash/3]).
 
 :- dynamic provider_memory/3.
+:- dynamic restored_pack_snapshot/1.
+:- volatile restored_pack_snapshot/1.
 
 packs_file(File) :-
     (getenv('POWDER_SOURCE_PACKS',Given),Given\==''->
@@ -79,6 +84,8 @@ create_pack(Name,Roots,Expected,Reply) :-
                    resolution:resolution{ready:false,state:draft}},Expected,Reply).
 
 save_pack(Input,Expected,Reply) :-
+    kb_activity:with_application(kb_source_packs:save_pack_admitted(Input,Expected,Reply)).
+save_pack_admitted(Input,Expected,Reply) :-
     normalize_pack(Input,Pack),read_packs(Before,Revision),check_revision(Expected,Revision),
     (member(Old,Before),Old.id==Pack.id->pack_paths(Old,OldPaths);OldPaths=[]),
     pack_paths(Pack,Paths),ord_subtract(Paths,OldPaths,Introduced),
@@ -90,15 +97,90 @@ save_pack(Input,Expected,Reply) :-
 same_pack(Id,Pack) :- Pack.id==Id.
 
 read_packs(Packs,Revision) :-
-    packs_file(File),
+    pack_snapshot_authority(Authority),
+    read_authority_packs(Authority,Packs,Revision),
+    pack_snapshot_authority(After),same_pack_authority(Authority,After).
+read_authority_packs(Authority,Packs,Revision) :-
+    File=Authority.sidecar,
     (exists_file(File)->
       file_digest(File,Revision),read_document(File,Data),file_digest(File,After),
       (Revision==After->true;throw(error(source_packs_changed_during_read,_))),
-      (Data.schema=='powder.source-packs.v1'->true;domain_error(source_pack_schema,Data.schema)),
-      must_be(list,Data.packs),maplist(normalize_pack,Data.packs,Packs),
-      findall(Id,(member(P,Packs),Id=P.id),Ids),sort(Ids,Unique),
-      (same_length(Ids,Unique)->true;domain_error(duplicate_pack_ids,Ids))
-    ;Packs=[],Revision=none).
+      validate_pack_document(Data,Packs)
+    ;require_absent_pack_document(File),
+     (restored_source_pack_snapshot(State)->
+      same_pack_authority(State.authority,Authority),Packs=State.packs
+     ;Packs=[]),
+     Revision=none).
+validate_pack_document(Data,Packs) :-
+    must_be(dict,Data),
+    (Data.schema=='powder.source-packs.v1'->true;domain_error(source_pack_schema,Data.schema)),
+    must_be(list,Data.packs),maplist(normalize_pack,Data.packs,Packs),
+    findall(Id,(member(P,Packs),Id=P.id),Ids),sort(Ids,Unique),
+    (same_length(Ids,Unique)->true;domain_error(duplicate_pack_ids,Ids)).
+require_absent_pack_document(File) :-
+    (exists_file(File)->throw(error(source_packs_changed_during_read,_))
+    ;exists_directory(File)->type_error(source_pack_document,File)
+    ;read_link(File,_,_)->type_error(source_pack_document,File)
+    ;catch(setup_call_cleanup(open(File,read,S,[encoding(utf8)]),
+       throw(error(source_packs_changed_during_read,_)),close(S)),
+      error(existence_error(source_sink,_),_),true)).
+
+export_source_pack_snapshot(State) :-
+    pack_snapshot_authority(Authority),
+    read_authority_packs(Authority,Packs,Revision),
+    pack_snapshot_authority(After),same_pack_authority(Authority,After),
+    validate_pack_snapshot(source_pack_snapshot{schema:'powder.source-pack-snapshot.v1',
+      authority:Authority,revision:Revision,packs:Packs},State).
+import_source_pack_snapshot(Input) :-
+    validate_pack_snapshot(Input,State),
+    (kb_activity:owns_admission_lease->install_pack_snapshot(State)
+    ;kb_activity:with_application(kb_source_packs:install_pack_snapshot(State))).
+install_pack_snapshot(State) :-
+    with_mutex(kb_source_pack_snapshot,
+      transaction((retractall(restored_pack_snapshot(_)),assertz(restored_pack_snapshot(State))))).
+restored_source_pack_snapshot(State) :-
+    with_mutex(kb_source_pack_snapshot,
+      (findall(S,restored_pack_snapshot(S),Stored),
+      (Stored=[]->fail;Stored=[One]->validate_pack_snapshot(One,State)
+      ;throw(error(source_pack_snapshot_conflict,_))))).
+verify_source_pack_snapshot_authority(Input) :-
+    validate_pack_snapshot(Input,Expected),export_source_pack_snapshot(Current),
+    same_pack_authority(Expected.authority,Current.authority),
+    (Expected.revision==Current.revision->true;
+      throw(error(source_pack_snapshot_revision_changed(Expected.revision,Current.revision),_))),
+    (Expected.packs==Current.packs->true;throw(error(source_pack_snapshot_content_changed,_))).
+pack_snapshot_authority(authority{repositoryRoot:Root,sidecar:File}) :-
+    repo_root(Root),packs_file(File).
+same_pack_authority(Expected,Current) :-
+    (Expected==Current->true;throw(error(source_pack_snapshot_authority_changed(Expected,Current),_))).
+validate_pack_snapshot(Input,State) :-
+    (acyclic_term(Input)->true;type_error(acyclic_source_pack_snapshot,Input)),
+    json_ground(Input,Ground),must_be(dict,Ground),must_be(ground,Ground),
+    dict_pairs(Ground,_,Pairs),pairs_keys(Pairs,Keys),
+    (Keys==[authority,packs,revision,schema]->true;domain_error(source_pack_snapshot_fields,Keys)),
+    (Ground.schema=='powder.source-pack-snapshot.v1'->true;
+      domain_error(source_pack_snapshot_schema,Ground.schema)),
+    snapshot_pack_authority(Ground.authority,Authority),
+    snapshot_pack_revision(Ground.revision,Revision),
+    validate_pack_document(packs_document{schema:'powder.source-packs.v1',packs:Ground.packs},Packs),
+    State=source_pack_snapshot{schema:Ground.schema,authority:Authority,revision:Revision,packs:Packs},
+    must_be(ground,State),atom_json_dict(_,State,[as(atom),width(0)]).
+snapshot_pack_authority(Input,authority{repositoryRoot:Root,sidecar:File}) :-
+    must_be(dict,Input),dict_pairs(Input,_,Pairs),pairs_keys(Pairs,Keys),
+    (Keys==[repositoryRoot,sidecar]->true;domain_error(source_pack_snapshot_authority_fields,Keys)),
+    snapshot_absolute_path(Input.repositoryRoot,Root),snapshot_absolute_path(Input.sidecar,File).
+snapshot_absolute_path(Input,Path) :-
+    text_atom(Input,Path),atom_codes(Path,Codes),
+    (Codes\=[],forall(member(C,Codes),C>=32),is_absolute_file_name(Path)->true;
+      domain_error(source_pack_snapshot_absolute_path,Input)).
+snapshot_pack_revision(Input,Revision) :-
+    text_atom(Input,Revision),
+    (valid_pack_snapshot_revision(Revision)->true;
+      domain_error(source_pack_snapshot_revision,Input)).
+valid_pack_snapshot_revision(none) :- !.
+valid_pack_snapshot_revision(Revision) :-
+    atom_codes(Revision,Codes),length(Codes,64),
+    forall(member(C,Codes),(between(0'0,0'9,C);between(0'a,0'f,C))).
 read_document(File,Data) :-
     size_file(File,Size),(Size=<67108864->true;resource_error(source_pack_document_size)),
     setup_call_cleanup(open(File,read,S,[encoding(utf8)]),
@@ -110,6 +192,8 @@ check_revision(Expected0,Actual) :-
     text_atom(Expected0,Expected),
     (Expected==Actual->true;throw(error(source_packs_conflict(Expected,Actual),_))).
 write_document(File,Expected,Data,Revision) :-
+    kb_activity:with_application(kb_source_packs:write_document_admitted(File,Expected,Data,Revision)).
+write_document_admitted(File,Expected,Data,Revision) :-
     file_directory_name(File,Dir),make_directory_path(Dir),
     with_mutex(kb_source_packs,
       (atom_concat(File,'.lock',LockFile),try_lock(LockFile,Lock),

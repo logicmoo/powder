@@ -181,7 +181,8 @@ create_locked(Name,Expected,ExpectedRevision,Result) :-
 
 create_work(Name,Id,Expected,Compatibility,Work,Final,Catalog,Result) :-
     with_snapshot_lock((snapshot(Expected,Sources,Summary),
-      native_snapshot(Native),configuration_with_native(Native,Configuration),capture_checkpoint_stamp(Stamp),
+      native_snapshot(Native),configuration_with_native(Native,Configuration,PackSnapshot),
+      capture_checkpoint_stamp(Stamp),
       utility_snapshot(Utility))),
     snapshot_digest(Sources,SnapshotDigest),
     utility_summary(Utility,UtilitySummary),
@@ -190,7 +191,8 @@ create_work(Name,Id,Expected,Compatibility,Work,Final,Catalog,Result) :-
     Meta=state{format:1,id:Id,name:Name,createdAt:Created,
       generation:Summary.generation,files:Summary.files,counts:Summary.counts,
       compatibility:Compatibility,snapshotDigest:SnapshotDigest,
-      configuration:Configuration,checkpoint:Stamp,ruleUtility:UtilitySummary,
+      configuration:Configuration,sourcePackSnapshot:PackSnapshot,
+      checkpoint:Stamp,ruleUtility:UtilitySummary,
       retentionPolicy:RetentionPolicy},
     directory_file_path(Work,'snapshot.term',Snapshot),
     write_term_file(Snapshot,snapshot(Meta,Sources,Utility,Native)),
@@ -254,7 +256,9 @@ verify_saved_native(Metadata,Summary) :-
     (json_value_equal(Metadata.configuration.nativeTVA,Summary)->true;
       throw(error(saved_state_native_annotations_mismatch,_))).
 configuration_with_native(Native,Identity) :-
-    effective_configuration(Effective),Settings=Effective.settings,
+    configuration_with_native(Native,Identity,_).
+configuration_with_native(Native,Identity,PackSnapshot) :-
+    effective_configuration(Effective,PackSnapshot),Settings=Effective.settings,
     Config=configuration{startupConfigured:Settings.startupConfigured,
       startupFiles:Settings.startupFiles,pools:Settings.pools},
     native_summary(Native,NativeSummary),
@@ -264,19 +268,20 @@ configuration_with_native(Native,Identity) :-
     crypto_data_hash(JSON,Hash,[algorithm(sha256),encoding(utf8)]),
     Identity=Material.put(hash,Hash).
 effective_configuration(Configuration) :-
+    effective_configuration(Configuration,_).
+effective_configuration(Configuration,PackSnapshot) :-
     kb_config:export_settings_snapshot(SettingsSnapshot),
     Settings=SettingsSnapshot.settings.put(_{revision:SettingsSnapshot.revision,issues:[]}),
-    kb_source_packs:packs_file(PacksFile),
-    (exists_file(PacksFile)->kb_source_packs:list_packs(Packs)
-    ;restored_source_packs(Packs)->true;kb_source_packs:list_packs(Packs)),
+    kb_source_packs:export_source_pack_snapshot(PackSnapshot),
+    Packs=packs{revision:PackSnapshot.revision,packs:PackSnapshot.packs},
     Configuration=configuration{settings:Settings,sourcePacks:Packs}.
 % The config module owns its imported fallback; metadata remains immutable evidence.
 restored_server_settings(Settings) :-
     kb_config:restored_settings_snapshot(Snapshot),
     Settings=Snapshot.settings.put(_{revision:none,issues:[]}).
 restored_source_packs(Packs) :-
-    image_manifest(Metadata),
-    Packs=packs{revision:none,packs:Metadata.configuration.sourcePacks}.
+    kb_source_packs:restored_source_pack_snapshot(Snapshot),
+    Packs=packs{revision:none,packs:Snapshot.packs}.
 current_snapshot_identity(Identity) :-
     with_snapshot_lock((kb_store:generation(G),snapshot(G,Sources,Status),
       configuration_identity(Configuration),capture_checkpoint_stamp(Stamp))),
@@ -424,6 +429,7 @@ install_image_data(Snapshot,Work,Metadata) :-
     compatibility(Current),require_compatible(Metadata.compatibility,Current),
     kb_config:import_settings_snapshot(settings_snapshot{
       schema:1,settings:Metadata.configuration.settings,revision:none}),
+    restore_source_pack_configuration(Metadata),
     maplist(install_snapshot_source(Work),Sources),
     kb_store:rebuild_rankings,
     retractall(kb_store:generation(_)),assertz(kb_store:generation(Metadata.generation)),
@@ -434,6 +440,17 @@ verify_saved_settings(Metadata) :-
     (kb_config:restored_settings_snapshot(Snapshot),
      json_value_equal(Snapshot.settings,Metadata.configuration.settings)->true;
       throw(error(saved_state_settings_snapshot_mismatch,_))).
+restore_source_pack_configuration(Metadata) :-
+    Snapshot=Metadata.sourcePackSnapshot,
+    (json_value_equal(Snapshot.packs,Metadata.configuration.sourcePacks)->true;
+      throw(error(saved_state_source_pack_snapshot_mismatch,_))),
+    kb_source_packs:import_source_pack_snapshot(Snapshot),
+    verify_saved_source_packs(Metadata).
+verify_saved_source_packs(Metadata) :-
+    (kb_source_packs:restored_source_pack_snapshot(Snapshot),
+     json_value_equal(Snapshot,Metadata.sourcePackSnapshot),
+     json_value_equal(Snapshot.packs,Metadata.configuration.sourcePacks)->true;
+       throw(error(saved_state_source_pack_snapshot_mismatch,_))).
 adapt_snapshot_data(InputMetadata,OriginalSources,Metadata,Sources) :-
     forall(member(source(_,_,Records),OriginalSources),maplist(validate_record,Records)),
     verify_snapshot_digest(OriginalSources,InputMetadata.snapshotDigest),
@@ -506,6 +523,7 @@ restore_saved_data(Metadata) :-
       (restored->true;
        compatibility(Current),require_compatible(Metadata.compatibility,Current),
        clean_builder_resources,
+       restore_source_pack_configuration(Metadata),
        rebuild_native_registry,
        raw_snapshot(Metadata.generation,RawSources,_),
        saved_snapshot_digest(Metadata,ExpectedDigest),
@@ -514,6 +532,7 @@ restore_saved_data(Metadata) :-
        kb_rule_utility:reset_transient,
        verify_saved_utility(Metadata,_),
        verify_saved_settings(Metadata),
+       verify_saved_source_packs(Metadata),
        verify_saved_native(Metadata,_),
        (validate_restored_store->true;throw(error(saved_state_restored_store_invalid,_))),
        snapshot(Metadata.generation,Sources,_),verify_snapshot_digest(Sources,ExpectedDigest),
@@ -635,7 +654,7 @@ compatibility(Compatibility) :-
     external_dependencies(App,Home,Dependencies),
     native_dependencies(Home,SWI,Arch,NativeLibraries),
     kb_metadata_policy:retention_policy(RetentionPolicy),
-    Compatibility=compatibility{format:Format,runtimeDataSchema:6,retentionPolicy:RetentionPolicy,
+    Compatibility=compatibility{format:Format,runtimeDataSchema:7,retentionPolicy:RetentionPolicy,
       cacheSchema:CacheSchema,codeHash:CodeHash,
       swi:VersionText,architecture:Arch,addressBits:Bits,swiHash:SWIHash,
       swiHome:Home,application:App,repository:Repo,externalDependencies:Dependencies,
