@@ -45,6 +45,7 @@ grammar_record(Records,Mt,Case,production(Id,Category,Slots,Meaning)) :-
     length(RawSlots,N),bounded(N,0,32,production_slots),
     maplist(grammar_slot(Case),RawSlots,Slots).
 
+cyc_list(Term,_) :- var(Term),!,instantiation_error(Term).
 cyc_list(x_TheList,[]) :- !.
 cyc_list(Term,Items) :-
     nonvar(Term),compound(Term),Term=..[x_TheList|Items],!.
