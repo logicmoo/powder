@@ -53,7 +53,8 @@ capability(Name,Capability) :-
     Capability=capability{name:Name,schemaVersion:1,operation:Operation,description:Description,
       inputSpec:Spec,inputSchema:Schema,permission:Permission,permissions:[Permission|Extra],
       effects:Effects,dependencies:[],domain:Domain,
-      scope:Scope,mutation:Mutation,symbolic:true,seconds:30}.
+      scope:Scope,mutation:Mutation,symbolic:true,seconds:30,
+      providerExport:json{rawResultAllowed:false,projection:host_approved_only,gateImplemented:false}}.
 requirements(Operation,Permission,Extra,Mutation,application_todo) :-
     kb_kee_todo_schema:input_spec(Operation,_),!,
     (memberchk(Operation,[todo_create,todo_update,todo_delete])->
@@ -91,5 +92,5 @@ write_reference(Path) :-
 write_capability_line(S,C) :-
     format(S,'| `~w` | ~d | `~w` | `~w` | `~w` |~n',[C.name,C.schemaVersion,C.permissions,C.scope,C.effects]).
 write_capability_schema(S,C) :-
-    format(S,'~n## `~w`~n~n~w.~n~n```json~n',[C.name,C.description]),
+    format(S,'~n## `~w`~n~n~w.~n~nRaw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.~n~n```json~n',[C.name,C.description]),
     json_write_dict(S,C.inputSchema,[width(100)]),format(S,'~n```~n',[]).

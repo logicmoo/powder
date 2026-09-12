@@ -87,6 +87,37 @@ contexts cannot invoke direct or dependent `llm`, `network`, `proxy`,
 `generate_comment`, or `agent_delegation` effects. Capability dependencies are compiled registry data,
 not declarations that a KB/model can modify or use to self-grant permissions.
 
+## Provider/export boundary
+
+Every current capability explicitly reports:
+
+```json
+{"providerExport":{"rawResultAllowed":false,"projection":"host_approved_only","gateImplemented":false}}
+```
+
+This is a default-deny marker, **not** an export grant. No result field is
+automatically model-safe. KEE has no approved-grounding selection/token API or
+automatic result projection yet. Do not forward `invoke.result`, errors,
+catalog/status DTOs, audit images or agent/task payloads to a provider merely
+because local invocation succeeded. Catalog metadata may include source names,
+paths, diagnostics and corpus statistics; it is not categorically nonsensitive.
+
+A future host export gate must be created from an actual authenticated user
+action, never a model/KB approval flag. It must bind the actor/conversation,
+exact destination/model/logging policy, expiry, concrete selected references,
+content revisions/hashes and an explicit allowed-field projection. Read MT
+ceilings are a separate local authorization check, not a wildcard export
+selection. Recheck selected content before each outgoing use; changed,
+unselected or unresolved material fails closed. Query proofs/bindings and new
+derived material do not automatically inherit permission to be exported.
+
+Until that separate gate is real, omit substantive grounding functions from
+provider exposure or return a host-generated `grounding_not_approved` result
+without KB data. Do not replace filtered results with a misleading claim that
+the KB is empty. Transport health/capability information must use a reviewed
+static operational allowlist, not arbitrary catalog fields. The outer host may
+retain approval evidence, but it is not an accepted KEE context/envelope field.
+
 ## Invocation contract
 
 ```json

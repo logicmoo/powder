@@ -33,6 +33,7 @@ public_capability(Principal,C,Public) :-
     (C.mutation==true->Cancellation=before_durable_commit;Cancellation=bounded_read),
     Public=json{name:C.name,schemaVersion:C.schemaVersion,description:C.description,
       inputSchema:C.inputSchema,permission:C.permission,permissions:C.permissions,scope:C.scope,effects:Effects,
+       providerExport:C.providerExport,
       dependencies:C.dependencies,mutation:C.mutation,symbolic:C.symbolic,
       available:Available,unavailableReason:Why,
       cancellation:Cancellation,maximumSeconds:C.seconds}.

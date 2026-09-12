@@ -1,6 +1,6 @@
 # KEE callable reference
 
-Generated from `kb_kee_registry.pl`; revision `4c3a61402dfa2dd800231454fdee930340ac094d9e3ca0c1cbe219ff1e720931`.
+Generated from `kb_kee_registry.pl`; revision `7c07acc9ad281714ead7fc4c80940b6d7ff00fb339373d405436a5168329f81c`.
 
 | Tool | Schema | Permission | Scope | Effects |
 |---|---|---|---|---|
@@ -31,6 +31,8 @@ Generated from `kb_kee_registry.pl`; revision `4c3a61402dfa2dd800231454fdee93034
 
 Inspect catalog coverage and freshness.
 
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
+
 ```json
 {"additionalProperties":false,"properties": {},"required": [],"type":"object"}
 ```
@@ -38,6 +40,8 @@ Inspect catalog coverage and freshness.
 ## `kee_find_terms`
 
 Find terms in the published all-file catalog.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
@@ -72,6 +76,8 @@ Find terms in the published all-file catalog.
 
 Read source-verified definitions in one explicit MT.
 
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
+
 ```json
 {
   "additionalProperties":false,
@@ -90,6 +96,8 @@ Read source-verified definitions in one explicit MT.
 ## `kee_occurrences`
 
 Read semantic occurrences in one explicit MT.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
@@ -110,6 +118,8 @@ Read semantic occurrences in one explicit MT.
 
 Read one source-verified catalog assertion.
 
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
+
 ```json
 {
   "additionalProperties":false,
@@ -128,6 +138,8 @@ Read one source-verified catalog assertion.
 
 Read one loaded assertion at an expected generation.
 
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
+
 ```json
 {
   "additionalProperties":false,
@@ -144,6 +156,8 @@ Read one loaded assertion at an expected generation.
 ## `kee_query`
 
 Execute bounded KB inference in one explicit MT.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
@@ -164,6 +178,8 @@ Execute bounded KB inference in one explicit MT.
 
 Inspect managed application ledger revision and counts.
 
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
+
 ```json
 {"additionalProperties":false,"properties": {},"required": [],"type":"object"}
 ```
@@ -171,6 +187,8 @@ Inspect managed application ledger revision and counts.
 ## `kee_call_status`
 
 Inspect a durable call receipt without retrying or reserving a mutation.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
@@ -184,6 +202,8 @@ Inspect a durable call receipt without retrying or reserving a mutation.
 ## `kee_todo_list`
 
 List persistent application TODOs in one scope.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
@@ -203,6 +223,8 @@ List persistent application TODOs in one scope.
 
 Inspect one persistent application TODO.
 
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
+
 ```json
 {
   "additionalProperties":false,
@@ -215,6 +237,8 @@ Inspect one persistent application TODO.
 ## `kee_todo_create`
 
 Create an audited application TODO automatically.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
@@ -303,6 +327,8 @@ Create an audited application TODO automatically.
 ## `kee_todo_update`
 
 Replace an application TODO at an expected revision.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
@@ -394,6 +420,8 @@ Replace an application TODO at an expected revision.
 
 Tombstone an application TODO without deleting its audit history.
 
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
+
 ```json
 {
   "additionalProperties":false,
@@ -410,6 +438,8 @@ Tombstone an application TODO without deleting its audit history.
 ## `kee_audit`
 
 Read MT-authorized managed application changesets.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
@@ -428,6 +458,8 @@ Read MT-authorized managed application changesets.
 
 Undo a TODO changeset only when affected versions still match.
 
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
+
 ```json
 {
   "additionalProperties":false,
@@ -444,6 +476,8 @@ Undo a TODO changeset only when affected versions still match.
 
 Redo an undo changeset only when affected versions still match.
 
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
+
 ```json
 {
   "additionalProperties":false,
@@ -459,6 +493,8 @@ Redo an undo changeset only when affected versions still match.
 ## `kee_agent_run_create`
 
 Create durable agent lifecycle data without starting an agent.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
@@ -478,6 +514,8 @@ Create durable agent lifecycle data without starting an agent.
 
 Read owned durable agent state.
 
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
+
 ```json
 {
   "additionalProperties":false,
@@ -490,6 +528,8 @@ Read owned durable agent state.
 ## `kee_agent_run_list`
 
 List authorized agent state summaries in one MT.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
@@ -507,6 +547,8 @@ List authorized agent state summaries in one MT.
 ## `kee_agent_run_event`
 
 Atomically CAS agent state and its inert event without executing an action.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
@@ -573,6 +615,8 @@ Atomically CAS agent state and its inert event without executing an action.
 ## `kee_agent_run_events`
 
 Read authorized ordered agent events and outcome links.
+
+Raw provider export: **not allowed**. Requires a separate approved host projection; no KEE export gate is installed.
 
 ```json
 {
