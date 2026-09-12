@@ -4,6 +4,7 @@
 :- use_module(kb_store, []).
 :- use_module(kb_catalog).
 :- use_module(kb_catalog_http).
+:- use_module(kb_debug_admin,[]).
 :- use_module(kb_statistics).
 :- use_module(kb_source_packs, []).
 :- use_module(kb_mt_graph, []).

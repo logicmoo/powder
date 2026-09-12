@@ -8,6 +8,7 @@
 :- use_module(kb_paths).
 :- use_module(kb_urls).
 :- use_module(kb_config,[server_settings/1,startup_selection/3]).
+:- use_module(kb_debug_admin,[debug_cli_options/3,with_debug_service/2]).
 :- use_module(kb_lifecycle).
 :- use_module(kb_listener_control).
 :- use_module(kb_interactive_control).
@@ -19,24 +20,27 @@
 main(Args) :-
     catch(run(Args),Error,(print_message(error,Error),halt(1))).
 run(Args) :-
-    arguments(Args,3050,Port,[],Selected),
+    debug_cli_options(Args,AppArgs,DebugOptions),
+    arguments(AppArgs,3050,Port,[],Selected),
     server_settings(Settings),
     (Selected=[]->startup_selection([],Settings,Sources);
      reverse(Selected,Sources)),
     setup_call_cleanup(kb_jobs:start_pools(Settings),
-      serve_sources(Sources,Port),kb_jobs:stop_pools).
+      serve_sources(Sources,Port,DebugOptions),kb_jobs:stop_pools).
 serve_sources(Sources,Port) :-
+    serve_sources(Sources,Port,[enabled(false)]).
+serve_sources(Sources,Port,DebugOptions) :-
     load_sources(Sources,any,Status),
     kb_catalog:remember_startup_sources,
     setup_call_cleanup(start_server(Port),
-      (app_base(Base),
+      with_debug_service(DebugOptions,(app_base(Base),
        format('powder - Paraconsistent Open World Defeasible Epistemic Reasoner~nReady: http://localhost:~d~w~n',[Port,Base]),
        format('Generation ~d; ~d assertions.~n',[Status.generation,Status.counts.assertions]),
        wait_for_stop([make(kb_listener_control:make_application),
                       restart(kb_listener_control:restart_listeners),
                       bind(kb_listener_control:bind_loopback_listener),
                       prolog(kb_interactive_control:prolog_console),
-                      shell(kb_interactive_control:os_shell)])),
+                      shell(kb_interactive_control:os_shell)]))),
       stop_listeners).
 arguments([],Port,Port,Sources,Sources).
 arguments(['--'|Rest],P,Port,S,Files) :- !,arguments(Rest,P,Port,S,Files).

@@ -4,33 +4,71 @@ This service runs queries **inside the existing app process and its loaded KB**.
 It does not start another SWI interpreter, inspect an unrelated catalog daemon,
 or resurrect the exited external process 68040.
 
-## Deployment contract — disabled until explicitly started
+## Host integration — disabled by default
 
-Importing `prolog\ow_dr\kb_debug_telnet.pl` starts nothing. Parent-owned app
-integration may load just this module through an authorized code-load mechanism,
-then invoke:
+Importing `kb_debug_telnet.pl` or `kb_debug_admin.pl` does not start a debug
+listener. The primary `app.pl` now consumes these optional flags before its
+unchanged `arguments/5` parser:
 
-```prolog
-kb_debug_telnet:start_debug_telnet([port(3051)]).
-kb_debug_telnet:stop_debug_telnet.
+```powershell
+swipl prolog\ow_dr\app.pl -- --debug-port=3051
+swipl prolog\ow_dr\app.pl -- --debug-off
 ```
 
-Do not inject commands into P/S controls or globally reload/restart the app.
-Live activation must wait for the parent's frozen handoff. No HTTP endpoint is
-installed by this module. If the host adds an administration endpoint, it must
-be explicitly local/typed, enforce strong exact-origin checks, and never expose
-credentials or their private path in HTTP responses, catalogs, status, or logs.
+`--debug-port=PORT` enables debug on that port; `--debug-off` disables startup.
+With neither flag debug stays disabled. Repeated debug flags use the last
+selection. Other CLI arguments and saved KB/pool settings are unchanged.
+No debug preference is written to disk.
 
-For normal startup/shutdown, wrap the app's existing serving scope with
-`setup_call_cleanup(start_debug_telnet(Options), ExistingScope, stop_debug_telnet)`.
-The host should default its saved enable setting to **false**. Passing
-`[enabled(false)]` stops the service. An unchanged start is idempotent; changing
-options while running requires explicit stop then start. No settings file,
-compiler fingerprint, corpus, listening HTTP port, or pool is changed here.
+`app.pl` wraps its existing serving/wait scope with `with_debug_service/2`.
+Normal scope cleanup stops debug before closing the HTTP listeners. A
+once-registered halt cleanup also covers already-running app frames that
+predate this wrapper. Startup is blocked once host shutdown starts. These hooks
+do not change P/S callbacks or scanner behavior. HTTP-only listener stops,
+restarts, and code reloads do not start, stop, or duplicate debug listeners.
 
 The TCP bind is always **127.0.0.1**, never an unspecified address. `port/1`
 defaults to 3051 and accepts 1–65535; an occupied port fails without displacing
 its owner. There is no address override, port fallback, or firewall change.
+
+### Typed local HTTP administration
+
+`kb_server.pl` imports the separate `kb_debug_admin.pl` router. Relative to the
+configured app base (currently `/swish/openworld_dr/`):
+
+| Method | Endpoint | JSON body |
+|---|---|---|
+| GET | `api/debug/status` | none |
+| POST | `api/debug/start` | `{}` (3051) or `{"port":3051}` |
+| POST | `api/debug/stop` | `{}` |
+
+**Every request, including GET, requires exactly one `Origin` header** matching
+`http://localhost:APP_HTTP_PORT` or `http://127.0.0.1:APP_HTTP_PORT` for a recorded
+owned HTTP listener, plus an actual 127.0.0.1 peer. Missing origins, trailing
+slashes, alternate schemes/hosts/ports, query options, arbitrary goal/options
+fields, oversized JSON, and chunked bodies are rejected. POST bodies have a
+128-byte cap and three-second read deadline. No CORS relaxation is installed.
+Raw local programs can forge Origin, so these controls are not OS-user
+authentication; they never confer REPL access or reveal its credential.
+
+Successful replies whitelist only `enabled`, `state`, `host`, `port`,
+`sessions`, `maxSessions`, and the **hosting app's** `pid`; stopped ports/count
+limits may be null. Errors are fixed sanitized messages. No reply contains a
+token, digest, private credential path, arbitrary exception, or user input.
+An unchanged start reuses the listener and credential; a conflicting active
+configuration returns 409. Stop/start rotates the credential.
+
+After the parent publishes the frozen code, it can activate the existing
+process without a restart, broad reload, or console key injection:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:3050/swish/openworld_dr/api/debug/start" -H "Origin: http://localhost:3050" -H "Content-Type: application/json" --data "{}"
+```
+
+Use the returned `pid` with the client below. To inspect or stop, call the
+corresponding endpoint with the same required Origin (`POST stop` uses `{}`).
+Code publication/live activation remains parent-owned; implementation tests
+do not enable any production process.
 
 ## Private credentials and connection
 
@@ -67,8 +105,8 @@ Never copy the token into a command line, chat, log, or debugger screenshot.
 
 ## Protocol and REPL behavior
 
-This is a **raw TCP, Telnet-style line console**, not HTTP/JSON and not a full
-Telnet terminal implementation. Use the bundled client. It sends UTF-8 and
+This is a **raw UTF-8 TCP line console, not standard Telnet**, HTTP/JSON, or a
+terminal emulator. **The bundled compatible client is required.** It sends UTF-8 and
 LF/CRLF (CR-NUL is also accepted). Telnet IAC negotiation and terminal-control
 bytes are rejected, not interpreted. Standard Windows Telnet clients that send
 negotiation are therefore not supported. There is no history, completion,
@@ -132,7 +170,7 @@ prevent timely cleanup: stop reports this honestly and retains `stopping`
 ownership for retry instead of silently leaking it or force-killing a process.
 
 All service, socket, thread, digest, and rate records are declared volatile.
-The isolated checkpoint builder should call
+`kb_saved_state:clean_builder_resources/0` now conditionally calls
 `kb_debug_telnet:debug_snapshot_safe/0` when this module is loaded. It rejects
 active/stopping service resources. Do not copy the private credential directory
 into source packs or checkpoints. After restoring data, the host explicitly
@@ -144,6 +182,8 @@ initialization directive resurrects stale handles or authentication.
 ```powershell
 swipl -q -g run_tests -t halt prolog\ow_dr\tests\test_debug_telnet.pl
 python prolog\ow_dr\tests\test_debug_telnet_integration.py -v
+swipl -q -g run_tests -t halt prolog\ow_dr\tests\test_debug_admin.pl
+python prolog\ow_dr\tests\test_debug_http_integration.py -v
 ```
 
 Tests use only isolated SWI children and ephemeral loopback ports. They verify
@@ -151,3 +191,7 @@ same-process facts/PID, rejected unauthenticated goals, real Windows private
 ACLs, credential rotation/removal, main-I/O preservation, occupied ports,
 limits, and client-only EOF with `toplevel_goal=halt`. No live app is enabled
 or restarted by these tests.
+The HTTP fixture loads the actual primary app/server without loading a KB. It
+also checks strict Origin/typed bodies, unchanged `arguments/5`, startup flags,
+same-app authenticated queries, handler reload idempotence, occupied ports,
+normal scope/halt shutdown, and the integrated builder guard.
