@@ -143,6 +143,12 @@ test(partial_payload_never_replaces_final,
     kb_catalog_index:source_path(Source,File),kb_cache:file_digest(File,Before),
     catch(kb_catalog_index:atomic_data(File,source_catalog(source{})),Error,true),
     assertion(nonvar(Error)),kb_cache:file_digest(File,Before).
+test(native_replacement_retry_does_not_hide_permanent_failure,
+     [condition(current_prolog_flag(windows,true)),
+      setup(fixture(S)),cleanup(cleanup(S)),throws(error(permission_error(rename,file,_),_))]) :-
+    repo_root(Root),directory_file_path(Root,'missing-stage',Missing),
+    directory_file_path(Root,'output.data',Final),
+    kb_catalog_index:install_catalog_stage(Missing,Final,20).
 test(out_of_order_durable_ids_keep_exact_offsets,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('a.krf',"(p a)\n(p b)\n",Source),

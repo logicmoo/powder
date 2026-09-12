@@ -256,8 +256,16 @@ atomic_data(File,Term) :-
          (kb_cache:write_one_line(S,catalog_header(1)),
           kb_cache:write_one_line(S,Term),kb_cache:write_one_line(S,catalog_footer(Digest)),
           flush_output(S)),close(S)),
-       read_data(Stage,Term),kb_cache:install_stage(Stage,File)),
+      read_data(Stage,Term),install_catalog_stage(Stage,File,0)),
       kb_cache:remove_if_exists(Stage)).
+install_catalog_stage(Stage,File,Attempt) :-
+    catch(kb_cache:install_stage(Stage,File),
+      error(permission_error(rename,file,Blocked),Context),
+      (current_prolog_flag(windows,true),exists_file(Stage),Attempt<20->
+        (Attempt=:=0->format(user_error,'CATALOG waiting for native file replacement: ~w~n',[File]),
+                      flush_output(user_error);true),
+        sleep(0.1),Next is Attempt+1,install_catalog_stage(Stage,File,Next)
+      ;throw(error(permission_error(rename,file,Blocked),Context)))).
 read_data(File,Term) :-
     setup_call_cleanup(open(File,read,S,[encoding(utf8)]),
       (safe_term(S,catalog_header(1)),safe_term(S,Term),safe_term(S,catalog_footer(Digest)),
