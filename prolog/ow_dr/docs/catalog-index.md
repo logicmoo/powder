@@ -137,6 +137,14 @@ provenance. Multiple categories are retained. MetaRelation schema predicates
 require proven relation-valued target slots; membership alone does not imply
 argument 1. Known schema-role helpers remain available where ontology evidence
 is absent. Type classification is catalog taxonomy, not cross-MT entailment.
+Unrecognized declared classes form the `typed_other` remainder, never an inferred
+ontological Individual. Old `individuals` group keys are translated to that
+honest label when reading an older projection. Unknown untyped terms remain
+`unclassified`. Current query rows expose type names with
+`typeEvidenceCoverage:summary_only`; the underlying taxonomy retains their
+source/ID/context supports, but dedicated compact type-support links are not yet
+exposed. Filtering occurrences to loaded files does not turn catalog-wide types
+into loaded-KB or MT entailments.
 
 The read-only `/api/catalog/status`, `/search`, `/term` and `/assertion`
 endpoints report snapshot coverage and active-generation membership separately.

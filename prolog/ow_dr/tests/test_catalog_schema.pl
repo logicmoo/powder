@@ -21,7 +21,7 @@ test(meta_function_is_predicate_not_callable_function) :-
     assertion(R.groups==[predicates]),assertion(R.metaRelation\==[]).
 test(suffix_is_not_ontology_evidence) :-
     schema([c(isa,x_p,x_SomethingFunction)],S),term_classification(x_p,[],S,R),
-    assertion(R.groups==[individuals]).
+    assertion(R.groups==[typed_other]).
 test(meta_relation_requires_proven_target_slot) :-
     schema([c(isa,x_unknownSchema,x_MetaRelation)],S),
     definition_slots(x_unknownSchema,S,Slots),assertion(Slots==[]).

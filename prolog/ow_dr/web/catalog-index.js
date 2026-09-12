@@ -7,7 +7,7 @@ export const CATALOG_GROUPS = Object.freeze([
   ['all', 'All categories'], ['predicates', 'Predicates'], ['functions', 'Functions'],
   ['collections', 'Collections'], ['microtheories', 'Microtheories'],
   ['do_invocations', 'doInvocations'],
-  ['external_symbols', 'External symbols'], ['individuals', 'Individuals'],
+  ['external_symbols', 'External symbols'], ['typed_other', 'Other recorded types'],
   ['unclassified', 'Unclassified'],
 ]);
 export function catalogParameters(route, term = false) {
@@ -16,7 +16,8 @@ export function catalogParameters(route, term = false) {
   if (!CATALOG_SCOPES.some(([key]) => key === result.scope)) throw new Error('Unknown catalog file scope.');
   if (term) Object.assign(result, { term: params.get('term') || '', facet: params.get('facet') || 'definition',
     source: params.get('source') || '', mt: params.get('mt') || '' });
-  else Object.assign(result, { q: params.get('q') || '', group: params.get('group') || 'all' });
+  else Object.assign(result, { q: params.get('q') || '', group: params.get('group') === 'individuals'
+    ? 'typed_other' : params.get('group') || 'all' });
   return result;
 }
 export function catalogCoverageText(coverage) {
@@ -96,7 +97,7 @@ export async function catalogSearchPage(host, route, signal) {
         el('td', {}, link(`Definitional Info (${item.definitions})`, 'definitions', { term: item.term, scope: params.scope }),
           el('div', {}, link('All occurrences', 'definitions', { term: item.term, facet: 'semantic', scope: params.scope })))))))));
   page.append(pagination(data, route),
-    el('p', { className: 'muted' }, 'Categories retain multiple memberships and unknowns. Type declarations and static definitions do not establish an executable implementation.'));
+    el('p', { className: 'muted' }, 'Categories retain multiple memberships and unknowns. Recorded types use catalog-wide evidence, even when occurrences are filtered to loaded files. Detailed type-support links are pending. Type declarations and static definitions do not establish an executable implementation.'));
   return page;
 }
 

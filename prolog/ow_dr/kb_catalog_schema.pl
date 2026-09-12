@@ -128,7 +128,7 @@ term_classification(Key,Roles,Schema,Reply) :-
     (do_invocation_symbol(Key),relation_evidence(Key,Types,BasePairs,Schema,Basis)->
        Pairs0=[do_invocations-named_relation_reference(Basis)|BasePairs];Pairs0=BasePairs),
     sort(Pairs0,Pairs),pairs_keys(Pairs,Groups0),sort(Groups0,Known),
-    (Known==[]->(Types==[]->Groups=[unclassified];Groups=[individuals]);Groups=Known),
+    (Known==[]->(Types==[]->Groups=[unclassified];Groups=[typed_other]);Groups=Known),
     associated(Schema.metaRelations,Key,Meta),
     Reply=classification{groups:Groups,types:Types,evidence:Pairs,metaRelation:Meta,
       scope:Schema.scope,implementation:unknown}.

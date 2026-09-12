@@ -282,7 +282,7 @@ options(Input,Options) :-
     maplist(text_option(Options),[q,term,scope,group,facet,source,mt]),
     (memberchk(Options.scope,[all,loaded,unloaded])->true;domain_error(catalog_scope,Options.scope)),
     (memberchk(Options.group,[all,predicates,functions,collections,microtheories,
-       external_symbols,do_invocations,individuals,unclassified])->true;domain_error(catalog_group,Options.group)),
+       external_symbols,do_invocations,typed_other,individuals,unclassified])->true;domain_error(catalog_group,Options.group)),
     (memberchk(Options.facet,[semantic,definition,context])->true;domain_error(catalog_facet,Options.facet)).
 text_option(Dict,Key) :- get_dict(Key,Dict,Value),must_be(atom,Value).
 
@@ -309,14 +309,18 @@ search_entry(Model,Options,Active,Query,Key) :-
     member(Key,Model.ranked),
     (Query==''->true;downcase_atom(Key,Lower),once(sub_atom(Lower,_,_,_,Query))),
     (Options.group==all->true;
-     get_assoc(Key,Model.terms,entry(_,Groups,_,_,_,_)),memberchk(Options.group,Groups)),
+     get_assoc(Key,Model.terms,entry(_,StoredGroups,_,_,_,_)),
+     maplist(public_group,StoredGroups,Groups),public_group(Options.group,Group),memberchk(Group,Groups)),
     (Options.scope==all->true;key_in_scope(Model,Options.scope,Active,Key)).
 key_in_scope(Model,Scope,Active,Key) :-
     get_assoc(Key,Model.postings,Posts),
     once((member(p(Source,_,_,_,_,_),Posts),scope_file(Scope,Source,Active))).
 search_key_json(Model,Active,Scope,Key,Row) :-
     get_assoc(Key,Model.terms,Entry),search_json(Model,Active,Scope,Key,Entry,Row).
-search_json(Model,Active,Scope,Key,entry(_,Groups,Types,Roles,_,_),Row) :-
+public_group(individuals,typed_other) :- !.
+public_group(Group,Group).
+search_json(Model,Active,Scope,Key,entry(_,StoredGroups,Types,Roles,_,_),Row) :-
+    maplist(public_group,StoredGroups,Groups),
     get_assoc(Key,Model.postings,Posts),
     findall(p(S,O,N,C,D,M),(member(p(S,O,N,C,D,M),Posts),scope_file(Scope,S,Active)),Selected),
     findall(N,member(p(_,_,N,_,_,_),Selected),Ns),sum_list(Ns,Sentences),
@@ -325,7 +329,8 @@ search_json(Model,Active,Scope,Key,entry(_,Groups,Types,Roles,_,_),Row) :-
     length(Selected,FileCount),key_expression(Key,Expression),
     findall(json{term:T,expression:AST},(member(T,Types),key_expression(T,AST)),TypeEntries),
     Row=json{term:Key,expression:Expression,groups:Groups,types:Types,roles:Roles,
-      typeEntries:TypeEntries,
+      typeEntries:TypeEntries,typeEvidenceCoverage:summary_only,
+      classificationScope:catalog_taxonomy_not_mt_entailment,
       files:FileCount,sentences:Sentences,occurrences:Occurrences,definitions:Definitions}.
 key_expression(Key,Expression) :-
     (atom_concat('nat:',_,Key)->non_atomic_from_key(Key,Term),annotated_context_ast(Term,Expression)

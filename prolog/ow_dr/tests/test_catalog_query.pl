@@ -80,6 +80,16 @@ test(search_cache_keeps_filters_and_pages_distinct,
     First.items=[A],Second.items=[B],assertion(A.term\==B.term),
     catalog_query_search(json{q:x_,scope:loaded},Loaded),assertion(Loaded.total==0),
     catalog_query_search(json{q:x_p},Only),Only.items=[P],assertion(P.term==x_p).
+test(legacy_typed_remainder_never_claims_ontological_individual,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(isa item UnclassifiedKind)\n",_),build,
+    kb_catalog_query:model(Model),kb_catalog_query:active(_,Active),
+    kb_catalog_query:search_json(Model,Active,all,x_item,
+      entry(x_item,[individuals],[x_UnclassifiedKind],[],1,1),Legacy),
+    assertion(Legacy.groups==[typed_other]),
+    catalog_query_search(json{group:typed_other,q:x_item},Reply),Reply.items=[Item],
+    assertion(Item.types==[x_UnclassifiedKind]),assertion(Item.groups==[typed_other]),
+    assertion(Item.typeEvidenceCoverage==summary_only).
 test(repeated_projection_reuses_validated_postings_and_taxonomy,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('a.krf',"(p a a)\n(arity p 2)\n",_),build,
