@@ -21,6 +21,7 @@
 :- use_module(library(lists)).
 :- use_module(library(pairs)).
 :- use_module(library(process)).
+:- use_module(library(readutil)).
 :- use_module(library(uuid)).
 :- dynamic loaded_catalog/3.
 :- dynamic loaded_catalog_status/3.
@@ -386,11 +387,29 @@ install_catalog_stage(Stage,File,Attempt) :-
         sleep(0.1),Next is Attempt+1,install_catalog_stage(Stage,File,Next)
       ;throw(error(permission_error(rename,file,Blocked),Context)))).
 read_data(File,Term) :-
-    setup_call_cleanup(open(File,read,S,[encoding(utf8)]),
-      (safe_term(S,catalog_header(1)),safe_term(S,Term),safe_term(S,catalog_footer(Digest)),
-       read_term(S,end_of_file,[]),kb_cache:terms_digest([Term],Digest),
+    setup_call_cleanup(open(File,read,S,[encoding(octet),newline(posix)]),
+      (payload_digest(S,Digest),seek(S,0,bof,_),set_stream(S,encoding(utf8)),
+       safe_term(S,catalog_header(1)),safe_term(S,Term),safe_term(S,catalog_footer(Digest)),
+       read_term(S,end_of_file,[]),
        validate_payload(Term)),close(S)),!.
 read_data(File,_) :- throw(error(invalid_catalog_file(File),_)).
+payload_digest(S,Digest) :-
+    read_line_to_string(S,"catalog_header(1)."),
+    stream_property(S,position(Position)),stream_position_data(byte_count,Position,Start),
+    seek(S,0,eof,Size),TailStart is max(Start,Size-256),TailSize is Size-TailStart,
+    seek(S,TailStart,bof,_),read_string(S,TailSize,Tail),
+    split_string(Tail,"\n","",Lines),append(_,[Footer,""],Lines),
+    setup_call_cleanup(open_string(Footer,End),
+      (safe_term(End,catalog_footer(Digest)),read_term(End,end_of_file,[])),close(End)),
+    string_length(Footer,FooterSize),Bytes is Size-FooterSize-1-Start,Bytes>0,
+    seek(S,Start,bof,_),
+    crypto_context_new(Before,[algorithm(sha256),encoding(octet)]),
+    hash_payload_bytes(S,Bytes,Before,After),crypto_context_hash(After,Actual),Actual==Digest.
+hash_payload_bytes(_,0,Context,Context) :- !.
+hash_payload_bytes(S,Remaining,Before,After) :-
+    Count is min(Remaining,65536),read_string(S,Count,Chunk),string_length(Chunk,Count),
+    crypto_data_context(Chunk,Before,Next),Rest is Remaining-Count,
+    hash_payload_bytes(S,Rest,Next,After).
 safe_term(S,Term) :-
     read_term(S,Term,[syntax_errors(error),double_quotes(string),cycles(false),quasi_quotations(Q)]),
     (Q==[],ground(Term),acyclic_term(Term)->true;throw(error(invalid_catalog_term,_))).

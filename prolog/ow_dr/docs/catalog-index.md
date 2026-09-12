@@ -43,6 +43,11 @@ source/locator counts and term-hit counts before using it. Writes use unique
 same-directory stages and publish only validated complete payloads. The source's
 existing native compiler lock is held during indexing. A retained aggregate lock
 serializes catalog refreshes; another refresh receives an explicit busy error.
+The digest covers the emitted UTF-8 payload line including its LF. Readers hash
+those bytes in bounded chunks on the same open handle, rewind, and parse once.
+They do not reserialize a hundreds-of-megabytes model merely to check its digest.
+The canonical single-payload-line envelope, full structural validation and
+Unicode/control-character integrity remain enforced.
 
 The source identity binds original path and SHA-256, current compiler/options/
 mapping/MT policy, semantic-index bytes, normalized bytes and catalog schema.

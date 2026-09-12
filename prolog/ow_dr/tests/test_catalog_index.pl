@@ -239,6 +239,21 @@ test(corrupt_artifact_is_diagnosed_then_rebuilt,
     compiled('a.krf',"(p a)\n",Source),source_catalog(Source,Before),
     kb_catalog_index:source_path(Source,Artifact),write_text(Artifact,"catalog_header(1).\n"),
     source_catalog(Source,After),assertion(After==Before).
+test(streamed_digest_preserves_unicode_and_escaped_control_bytes,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    catalog_paths(_,File),
+    Data=catalog_progress(json{label:"café λ\nnext\rline",completed:0}),
+    kb_catalog_index:atomic_data(File,Data),kb_catalog_index:read_data(File,Read),
+    assertion(Read==Data).
+test(streamed_digest_rejects_changed_payload,
+     [setup(fixture(S)),cleanup(cleanup(S)),throws(error(invalid_catalog_file(_),_))]) :-
+    catalog_paths(_,File),
+    kb_catalog_index:atomic_data(File,catalog_progress(json{completed:1})),
+    read_file_to_string(File,Text,[encoding(utf8)]),
+    sub_string(Text,Before,11,After,"completed:1"),
+    sub_string(Text,0,Before,_,Prefix),sub_string(Text,_,After,0,Suffix),
+    atomics_to_string([Prefix,"completed:2",Suffix],Changed),
+    write_text(File,Changed),kb_catalog_index:read_data(File,_).
 test(partial_payload_never_replaces_final,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     compiled('a.krf',"(p a)\n",Source),source_catalog(Source,_),
