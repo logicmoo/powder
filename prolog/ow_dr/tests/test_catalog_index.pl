@@ -144,6 +144,72 @@ test(subset_refresh_keeps_completion_denominator,
     refresh_catalog(['KBs/a.krf'],R),
     assertion(R.expectedFiles==2),assertion(R.freshFiles==1),assertion(R.complete==false),
     R.issues=[Issue],assertion(Issue.status==pending).
+test(subset_replaces_only_selected_memberships_and_preserves_other_artifacts,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(p old)\n",_),compiled('b.krf',"(p kept kept)\n",B),
+    refresh_catalog(all,_),source_catalog(B,Before),
+    kb_catalog_index:source_path(B,Cache),kb_cache:file_digest(Cache,CacheHash),
+    time_file(Cache,CacheTime),
+    compiled('a.krf',"(p new)\n",_),refresh_catalog(['KBs/a.krf'],R),
+    assertion(R.complete==true),assertion(R.freshFiles==2),
+    catalog_search("x_old",0,10,Old),assertion(Old.total==0),
+    catalog_search("x_new",0,10,New),assertion(New.total==1),
+    catalog_search("x_kept",0,10,Kept),Kept.items=[Item],
+    assertion(Item.files==1),assertion(Item.sentences==1),assertion(Item.occurrences==2),
+    kb_catalog_index:read_data(Cache,source_catalog(After)),
+    assertion(Before.sentences==After.sentences),
+    kb_cache:file_digest(Cache,CacheHash),time_file(Cache,CacheTime).
+test(unchanged_subset_and_inventory_reconciliation_keep_revision,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(p a)\n",_),compiled('b.krf',"(p b)\n",_),
+    refresh_catalog(all,_),catalog_revision(Before),
+    refresh_catalog(['KBs/a.krf'],_),
+    catalog_revision(After),assertion(After==Before),
+    refresh_catalog([],R),assertion(R.complete==true),catalog_revision(Before).
+test(stale_unselected_source_loses_memberships_without_recompiling,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(p retained)\n",_),compiled('b.krf',"(p stale)\n",B),
+    refresh_catalog(all,_),
+    write_text(B,"(p replacement)\n"),refresh_catalog(['KBs/a.krf'],R),
+    assertion(R.complete==false),assertion(R.freshFiles==1),
+    R.issues=[Issue],assertion(Issue.path=='KBs/b.krf'),assertion(Issue.status==stale),
+    catalog_search("x_stale",0,10,Old),assertion(Old.total==0),
+    catalog_search("x_replacement",0,10,NotIndexed),assertion(NotIndexed.total==0).
+test(failed_selected_source_removes_old_memberships_not_good_other_sources,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(p failed)\n",A),compiled('b.krf',"(p retained)\n",_),
+    refresh_catalog(all,_),
+    kb_catalog_index:source_path(A,Cache),kb_cache:file_digest(Cache,Before),
+    cache_paths(A,Normal,_),write_text(Normal,"invalid\n"),
+    refresh_catalog(['KBs/a.krf'],R),
+    assertion(R.complete==false),assertion(R.freshFiles==1),
+    R.issues=[Issue],assertion(Issue.status==failed),
+    catalog_search("x_failed",0,10,Missing),assertion(Missing.total==0),
+    catalog_search("x_retained",0,10,Kept),assertion(Kept.total==1),
+    kb_cache:file_digest(Cache,Before).
+test(removal_and_rename_reconcile_paths_without_deleting_historical_artifacts,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('old.krf',"(p renamed)\n",Old),compiled('kept.krf',"(p retained)\n",_),
+    refresh_catalog(all,_),kb_catalog_index:source_path(Old,OldCache),
+    kb_cache:file_digest(OldCache,OldHash),
+    kb_root(KBs),directory_file_path(KBs,'new.krf',New),rename_file(Old,New),
+    repo_root(Root),directory_file_path(Root,state,State),
+    kb_compile:compile_source(New,[state_dir(State),diagnostics(false)],_),
+    refresh_catalog(['KBs/new.krf'],R),assertion(R.complete==true),
+    kb_catalog_index:read_catalog(Catalog),
+    assertion(Catalog.expected==['KBs/kept.krf','KBs/new.krf']),
+    memberchk(x_renamed-Entries,Catalog.terms),
+    assertion(Entries=[f('KBs/new.krf',1,1,0,0,[value])]),
+    kb_cache:file_digest(OldCache,OldHash),
+    delete_file(New),refresh_catalog([],Removed),
+    assertion(Removed.expectedFiles==1),assertion(Removed.complete==true),
+    catalog_search("x_renamed",0,10,Missing),assertion(Missing.total==0).
+test(new_unselected_source_is_pending_not_silently_absent,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(p retained)\n",_),refresh_catalog(all,_),
+    kb_root(KBs),directory_file_path(KBs,'new.krf',New),write_text(New,"(p pending)\n"),
+    refresh_catalog([],R),assertion(R.expectedFiles==2),assertion(R.freshFiles==1),
+    R.issues=[Issue],assertion(Issue.path=='KBs/new.krf'),assertion(Issue.status==pending).
 test(bounded_worker_processes_preserve_complete_manifest,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-
     forall(between(1,5,N),

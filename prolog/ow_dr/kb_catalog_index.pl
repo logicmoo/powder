@@ -2,7 +2,8 @@
     [refresh_catalog/2,catalog_status/1,catalog_search/4,catalog_term/5,
      catalog_assertion/3,catalog_paths/2,source_catalog/2,build_source_data/5,
      catalog_worker/3,external_job_status/3,request_catalog_cancel/3,
-     begin_catalog_run/2,fail_catalog_run/2,check_catalog_cancel/1,rebuild_catalog_summary/1]).
+     begin_catalog_run/2,fail_catalog_run/2,check_catalog_cancel/1,rebuild_catalog_summary/1,
+     catalog_revision/1]).
 :- use_module(kb_paths).
 :- use_module(kb_catalog,[directory_manifest/3,authorize_sources/2]).
 :- use_module(kb_cache,[]).
@@ -55,29 +56,100 @@ refresh_catalog(Selection,Report) :-
         Error,(fail_catalog_run(Progress,Error),throw(Error))),
       kb_cache:release_lock(Lock)).
 refresh_locked(Expected,Sources,File,Progress,Report) :-
-    statistics(walltime,[Start,_]),length(Expected,Total),empty_assoc(Empty),
+    statistics(walltime,[Start,_]),length(Expected,Total),
     kb_compile:implementation_hash(Implementation),
     flag(powder_catalog_completed,_,0),
     write_progress(Progress,json{phase:catalog,completed:0,total:Total,expected:Expected}),
+    previous_memberships(File,Expected,Sources,Implementation,Progress,Previous,Retained,Initial),
     (length(Sources,Count),Count=<4->
        maplist(refresh_source(Implementation,Progress,Start,Total),Sources,Results)
     ;process_sources(Implementation,Progress,Start,Total,Sources,Results)),
-    foldl(merge_source,Results,work([],Empty,0),work(Reversed,Terms,Completed)),
-    reverse(Reversed,Files),findall(P,(member(F,Files),P=F.path),Covered),
-    findall(json{path:P,status:pending,message:"Not included in this refresh."},
-      (member(P,Expected),\+memberchk(P,Covered)),Pending),
-    append(Files,Pending,All),coverage(All,Coverage),get_time(At),
-    schema(Schema),assoc_to_list(Terms,TermPairs),
+    foldl(merge_source,Results,work(Retained,Initial,0),work(Files,Terms,Completed)),
+    directory_manifest('KBs',_,FinalManifest),pairs_keys(FinalManifest,FinalExpected),
+    inventory_files(FinalExpected,Files,All),coverage(All,Coverage),get_time(At),
+    include(fresh_source,All,Fresh),file_map(Fresh,FreshMap),
+    assoc_to_list(Terms,AllTerms),retain_terms(AllTerms,FreshMap,TermPairs),
+    schema(Schema),
     Snapshot=catalog{schema:Schema,expected:Expected,files:All,terms:TermPairs,
       coverage:Coverage,verifiedAt:At,sourcePolicy:original_sha256,normalizedPolicy:validated_payload_digest},
-    atomic_data(File,catalog_snapshot(Snapshot)),retractall(loaded_catalog(_,_,_)),
+    Final=Snapshot.put(expected,FinalExpected),
+    publish_snapshot(File,Previous,Final,Published),retractall(loaded_catalog(_,_,_)),
     retractall(loaded_catalog_status(_,_,_)),
-    publish_catalog_summary(File,Snapshot,_),
+    publish_catalog_summary(File,Published,_),
     length(TermPairs,UniqueTerms),
     statistics(walltime,[End,_]),Seconds is (End-Start)/1000,
-    Report=Coverage.put(json{completed:Completed,terms:UniqueTerms,seconds:Seconds}),
+    length(Retained,RetainedCount),
+    Report=Coverage.put(json{completed:Completed,retainedFiles:RetainedCount,terms:UniqueTerms,seconds:Seconds}),
     (Report.complete==true->State=succeeded;State=failed),
-    write_progress(Progress,Report.put(json{state:State,phase:completed,total:Total})).
+    write_progress(Progress,Report.put(json{state:State,phase:completed,total:Coverage.expectedFiles})).
+
+previous_memberships(File,Expected,Sources,Implementation,Progress,Previous,Files,Terms) :-
+    (exists_file(File)->
+       read_data(File,catalog_snapshot(Previous)),
+       path_map(Expected,ExpectedMap),maplist(public_path,Sources,Selected),
+       path_map(Selected,SelectedMap),
+       include(retain_file(ExpectedMap,SelectedMap),Previous.files,Candidates),
+       length(Expected,Total),flag(powder_catalog_retained,_,0),
+       maplist(validate_retained(Implementation,Progress,Total),Candidates,Files),
+       include(fresh_source,Files,Fresh),file_map(Fresh,FreshMap),
+       retain_terms(Previous.terms,FreshMap,Pairs),list_to_assoc(Pairs,Terms)
+    ;Previous=none,Files=[],empty_assoc(Terms)).
+path_map(Paths,Map) :-
+    findall(Key-true,(member(Path,Paths),path_key(Path,Key)),Pairs),
+    sort(Pairs,Sorted),list_to_assoc(Sorted,Map).
+path_key(Path,Key) :- (current_prolog_flag(windows,true)->downcase_atom(Path,Key);Key=Path).
+file_map(Files,Map) :-
+    findall(Key-File,(member(File,Files),path_key(File.path,Key)),Pairs),
+    keysort(Pairs,Sorted),list_to_assoc(Sorted,Map).
+retain_file(Expected,Selected,File) :-
+    path_key(File.path,Key),get_assoc(Key,Expected,_),\+get_assoc(Key,Selected,_).
+validate_retained(Implementation,Progress,Total,Before,After) :-
+    check_catalog_cancel(Progress),
+    flag(powder_catalog_retained,N,N+1),
+    write_progress(Progress,json{phase:validating_retained,path:Before.path,
+      completed:0,total:Total,retainedChecked:N}),
+    (Before.status==fresh->
+       catch((verify_retained(Before,Implementation)->After=Before;
+               throw(error(catalog_stale(retained_identity),_))),
+         Error,error_source(Before.path,Error,After))
+    ;After=Before).
+verify_retained(File,Implementation) :-
+    (exists_file(File.cache)->true;throw(error(catalog_stale(missing_catalog(File.path)),_))),
+    atom_concat(File.normalized,'.lock',LockPath),kb_cache:try_lock(LockPath,Lock),
+    (Lock==busy->throw(error(catalog_source_busy,_));true),
+    setup_call_cleanup(true,
+      (repo_root(Root),directory_file_path(Root,File.path,Source),
+       Recorded=File.identity.compiler,
+       kb_compile:with_prepared_source(Source,Implementation,
+         kb_compile:cache_identity(Source,Recorded.options,Current)),
+       (kb_compile:identity_matches(Current,Recorded)->true;
+          throw(error(catalog_stale(compiler_identity),_))),
+       current_source(File)),
+      kb_cache:release_lock(Lock)).
+retain_terms([],_,[]).
+retain_terms([Key-Entries|Rest],Files,Kept) :-
+    include(retained_entry(Files),Entries,Found),sort(Found,Sorted),
+    (Sorted==[]->Kept=Tail;Kept=[Key-Sorted|Tail]),
+    retain_terms(Rest,Files,Tail).
+retained_entry(Files,f(Source,_,_,_,_,_)) :- path_key(Source,Key),get_assoc(Key,Files,_).
+inventory_files(Expected,Files,All) :-
+    file_map(Files,ByFile),maplist(inventory_file(ByFile),Expected,All).
+inventory_file(Files,Path,File) :-
+    path_key(Path,Key),
+    (get_assoc(Key,Files,Before)->
+       (Before.status==fresh,\+source_stamps_current(Before)->
+          File=json{path:Path,status:stale,message:"Source changed during catalog maintenance."}
+       ;File=Before)
+    ;File=json{path:Path,status:pending,message:"Not indexed in this catalog snapshot."}).
+source_stamps_current(File) :-
+    repo_root(Root),directory_file_path(Root,File.path,Source),
+    catch((file_stamp(Source,stamp(File.sizeBytes,File.modified)),
+           file_stamp(File.normalized,File.normalizedStamp)),_,fail).
+publish_snapshot(File,Previous,Snapshot,Published) :-
+    (is_dict(Previous),del_dict(verifiedAt,Previous,_,Before),
+       del_dict(verifiedAt,Snapshot,_,After),Before==After->
+       Published=Previous
+    ;atomic_data(File,catalog_snapshot(Snapshot)),Published=Snapshot).
 
 refresh_source(Implementation,Progress,Start,Total,Source,result(Result,Terms)) :-
     public_path(Source,Public),
@@ -549,10 +621,17 @@ read_catalog_summary(File,Stamp,Base) :-
       freshness:explicit_refresh_snapshot}).
 publish_catalog_summary(File,Catalog,Base) :-
     file_stamp(File,Stamp),length(Catalog.terms,Count),
+    kb_cache:file_digest(File,Revision),
     Data=catalog_summary{catalog:File,stamp:Stamp,coverage:Catalog.coverage,
-      verifiedAt:Catalog.verifiedAt,terms:Count},
+      verifiedAt:Catalog.verifiedAt,terms:Count,revision:Revision},
     atom_concat(File,'.summary',Summary),atomic_data(Summary,catalog_summary(Data)),
     read_catalog_summary(File,Stamp,Base).
+catalog_revision(Revision) :-
+    catalog_paths(File,_),atom_concat(File,'.summary',Summary),
+    (exists_file(File),exists_file(Summary),
+       file_stamp(File,Stamp),read_data(Summary,catalog_summary(Data)),Data.stamp==Stamp->
+       (get_dict(revision,Data,Revision)->true;Revision=legacy)
+    ;Revision=unavailable).
 rebuild_catalog_summary(Report) :-
     catalog_paths(File,_),atom_concat(File,'.lock',LockFile),kb_cache:try_lock(LockFile,Lock),
     (Lock==busy->throw(error(catalog_busy,_));true),

@@ -17,9 +17,21 @@ access violation was observed in the installed Windows SWI. Missing/stale compan
 active compiler ownership and malformed artifacts appear as individual failures
 or deferred files. Other files continue. Exit 0 means the complete discovered
 eligible set was indexed; exit 1 means incomplete coverage or failure. A subset
-refresh retains the full eligible denominator and marks unselected files pending.
+refresh retains previously indexed, identity-validated files and their memberships;
+only selected files are rebuilt. Never-indexed files remain pending.
 Coverage describes the explicit refresh snapshot, with its verification time;
 it is not a promise that files cannot subsequently change.
+
+Subset maintenance reads the existing aggregate once and filters its compact
+file memberships, rather than rereading every source's term payload. Retained
+files are checked against current compiler identity and source/normalized hashes
+under their native source locks; this is explicit maintenance I/O, not view-time
+parsing. Stale, failed and busy sources stay in the inventory but lose their old
+fresh memberships. Removed/renamed paths disappear from the current inventory;
+their historical artifacts and IDs are not deleted. A final manifest/stamp check
+handles files changing during maintenance. An unchanged refresh preserves the
+aggregate revision. `refresh_catalog([], Report)` reconciles inventory without
+indexing any newly discovered file.
 
 ## Persistent data
 
@@ -229,5 +241,5 @@ measured definition requests took 13.5 seconds cold / 14.5 seconds warm, and
 isolated browser startup took 49.5 seconds. A separate-process exact request took
 3.843 seconds, including 2.258 seconds for full source/normalized hash validation.
 These are working correctness results, **not** a subsecond performance claim.
-Per-request hash cost, broad-search cold reads, incremental subset retention and
+Per-request hash cost, broad-search cold reads, automatic scheduling and
 compact inspectable type-support links remain limitations.
