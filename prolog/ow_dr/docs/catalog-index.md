@@ -287,3 +287,12 @@ This isolated result does not certify a restored/running primary's thread or
 loaded-module state. A reported primary timeout must still be checked there;
 increasing its heap ceiling or rebuilding the validated projection is not justified
 by the measured bounded-directory path.
+
+`/api/catalog/status` includes `exactLookups`: the serving PID, bounded-path
+implementation marker, active request phases and the latest completed lookup.
+Phases distinguish directory access, active-manifest capture, source descriptor,
+posting, authorization, source identity and rendering. Timings use monotonic
+process wall time. This bounded, volatile diagnostic state contains only ground
+labels/timings, is cleared on request cleanup, and is not part of a saved KB.
+It allows a coordinator to inspect a pending request without submitting a duplicate.
+Completion covers lookup/rendering, not subsequent HTTP JSON transmission.

@@ -120,6 +120,20 @@ test(readers_do_not_leave_native_file_handles,
     S=state(Root,_),
     findall(File,(stream_property(_,file_name(File)),sub_atom(File,0,_,_,Root)),Open),
     assertion(Open==[]).
+test(exact_lookup_phase_diagnostics_are_ground_and_clean_after_success_and_error,
+     [setup(fixture(S)),cleanup(cleanup(S))]) :-
+    compiled('a.krf',"(arity p 1)\n",Source),build,
+    once(catalog_query_term(json{term:x_p},_)),
+    kb_catalog_query:lookup_diagnostics(Success),
+    assertion(Success.active==[]),assertion(Success.last.state==succeeded),
+    assertion(Success.last.phase==rendering),assertion(Success.last.elapsedMs>=0),
+    with_output_to(string(_),json_write_dict(current_output,Success)),
+    kb_paths:cache_paths(Source,Normal,_),plunit_catalog_index:write_text(Normal,"invalid\n"),
+    catch(catalog_query_term(json{term:x_p},_),Error,true),
+    assertion(nonvar(Error)),
+    kb_catalog_query:lookup_diagnostics(Failure),
+    assertion(Failure.active==[]),assertion(Failure.last.state==failed),
+    assertion(Failure.last.phase==source_identity).
 
 test(real_http_definition_and_coverage_routes_without_kb_loading,
      [setup(fixture(S)),cleanup(cleanup(S))]) :-

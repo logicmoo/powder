@@ -20,6 +20,8 @@
 :- use_module(library(filesex)).
 :- use_module(library(lists)).
 :- use_module(library(pairs)).
+:- dynamic lookup_phase/6,lookup_finished/1.
+:- volatile lookup_phase/6,lookup_finished/1.
 
 /** <module> Catalog query projection with direct-seek term postings.
 
@@ -251,7 +253,38 @@ catalog_query_status(Reply) :-
        Projection=json{available:false}),
     query_progress(Progress),kb_catalog_index:external_job_status(File,Progress,Job),
     kb_catalog_directory:directory_status(Directory),
-    Reply=Status.put(json{projection:Projection,projectionProgress:Job,lookupDirectory:Directory}).
+    lookup_diagnostics(Diagnostics),
+    Reply=Status.put(json{projection:Projection,projectionProgress:Job,lookupDirectory:Directory,
+      exactLookups:Diagnostics}).
+lookup_diagnostics(json{implementation:bounded_directory_v1,pid:Pid,active:Active,last:Last}) :-
+    current_prolog_flag(pid,Pid),
+    statistics(walltime,[Now,_]),
+    with_mutex(powder_catalog_lookup_diagnostics,
+      (findall(json{request:Run,thread:Thread,term:Key,phase:Phase,
+          elapsedMs:Elapsed,phaseElapsedMs:PhaseElapsed},
+        (lookup_phase(Run,Thread,Key,Start,Phase,PhaseStart),
+         Elapsed is max(0,Now-Start),PhaseElapsed is max(0,Now-PhaseStart)),Active),
+       (lookup_finished(Last)->true;Last=null))).
+begin_lookup(Key,Run) :-
+    flag(powder_catalog_lookup_sequence,Run,Run+1),thread_self(ThreadId),term_string(ThreadId,Thread),
+    statistics(walltime,[Start,_]),
+    with_mutex(powder_catalog_lookup_diagnostics,
+      assertz(lookup_phase(Run,Thread,Key,Start,directory,Start))).
+set_lookup_phase(Run,Phase) :-
+    statistics(walltime,[Now,_]),
+    with_mutex(powder_catalog_lookup_diagnostics,
+      (retract(lookup_phase(Run,Thread,Key,Start,_,_))->
+       assertz(lookup_phase(Run,Thread,Key,Start,Phase,Now));true)).
+finish_lookup(Run,Catcher) :-
+    statistics(walltime,[Now,_]),
+    with_mutex(powder_catalog_lookup_diagnostics,
+      (retract(lookup_phase(Run,Thread,Key,Start,Phase,_)) ->
+       Elapsed is max(0,Now-Start),
+       ((Catcher==exit;Catcher==(!))->State=succeeded;State=failed),
+       retractall(lookup_finished(_)),
+       assertz(lookup_finished(json{request:Run,thread:Thread,term:Key,phase:Phase,
+         elapsedMs:Elapsed,state:State}))
+      ;true)).
 source_pack_snapshot(Snapshot) :-
     kb_catalog_directory:directory_status(Directory),
     (Directory.available==true->source_pack_directory_snapshot(Directory,Snapshot);
@@ -412,13 +445,19 @@ file_matching_count(context,p(_,_,_,_,_,N),N).
 
 catalog_query_term(Input,Reply) :-
     options(Input,Options),canonical_key(Options.term,Key),
-    kb_catalog_directory:lookup_term(Key,Model,_),active(Generation,Active),
+    setup_call_catcher_cleanup(begin_lookup(Key,Run),
+      exact_term_lookup(Options,Key,Run,Reply),Catcher,finish_lookup(Run,Catcher)).
+exact_term_lookup(Options,Key,Run,Reply) :-
+    kb_catalog_directory:lookup_term(Key,Model,_),
+    set_lookup_phase(Run,active_manifest),active(Generation,Active),
     provider_coverage(Model,ProviderCoverage),
     (get_assoc(Key,Model.postings,Posts)->true;Posts=[]),
     findall(Source-Rows,(member(Post,Posts),Post=p(Source,Offset,_,_,_,_),
       relevant_posting(Options.facet,Post),
       source_filter(Options,Source,Active),
-      file_for(Model,Source,File),read_posting(File,Offset,Key,All),
+      set_lookup_phase(Run,source_descriptor),
+      file_for(Model,Source,File),set_lookup_phase(Run,posting),
+      read_posting(File,Offset,Key,All),
       include(row_matches(Options),All,Rows),Rows\=[]),UnsortedSourceRows),
     keysort(UnsortedSourceRows,SourceRows),
     findall(Source-Row,(member(Source-Rows,SourceRows),member(Row,Rows)),Rows),
@@ -428,7 +467,9 @@ catalog_query_term(Input,Reply) :-
     sum_list(Counts,Occurrences),
     findall(json{source:Source,sentences:Count,loaded:Loaded},
       (member(Source-Found,SourceRows),length(Found,Count),loaded(Source,Active,Loaded)),Files),
-    verified_page_files(Selected,Model),
+    set_lookup_phase(Run,authorization),
+    verified_page_files(Selected,Model,Run),
+    set_lookup_phase(Run,rendering),
     maplist(detail_row(Model,Active,Options.facet),Selected,Items),
     key_expression(Key,Expression),
     Reply=json{term:Key,expression:Expression,facet:Options.facet,scope:Options.scope,
@@ -459,9 +500,10 @@ read_posting(File,Offset,Key,Rows) :-
       (seek(S,Offset,bof,_),kb_catalog_index:safe_term(S,posting(Key,Rows,Digest)),
        kb_cache:terms_digest([posting(Key,Rows)],Digest)),close(S))->true;
      throw(error(invalid_catalog_posting(File.path,Key),_))).
-verified_page_files(Selected,Model) :-
+verified_page_files(Selected,Model,Run) :-
     pairs_keys(Selected,Sources),sort(Sources,Unique),
     authorize_sources(Unique,_),
+    set_lookup_phase(Run,source_identity),
     forall(member(Source,Unique),(file_for(Model,Source,File),kb_catalog_index:current_source(File))).
 detail_row(Model,Active,Facet,Source-Row,Reply) :-
     file_for(Model,Source,File),row_detail(File,Row,Base),
