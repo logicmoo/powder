@@ -555,7 +555,7 @@ export function compilationIssues(error) {
     issue && typeof issue === 'object' && (!issue.status || issue.status === 'failed' || issue.status === 'busy'));
 }
 
-export async function requestJSON(path, { method = 'GET', body, signal, fetch: fetcher = globalThis.fetch } = {}) {
+export async function requestJSON(path, { method = 'GET', body, signal, allowErrorResult = false, fetch: fetcher = globalThis.fetch } = {}) {
   let response;
   try {
     response = await fetcher(path, {
@@ -570,7 +570,7 @@ export async function requestJSON(path, { method = 'GET', body, signal, fetch: f
   let result;
   try { result = await response.json(); }
   catch { throw new APIError(`The server returned an unreadable response (HTTP ${response.status}).`, 'invalid_response', response.status); }
-  if (!response.ok || result?.error) {
+  if (!response.ok || (result?.error && !allowErrorResult)) {
     throw new APIError(result?.error?.message ?? `Request failed (HTTP ${response.status}).`, result?.error?.code ?? 'request_failed', response.status, result?.error);
   }
   return result;

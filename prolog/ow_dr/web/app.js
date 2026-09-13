@@ -27,7 +27,7 @@ const state = {
   settings: { ...DEFAULT_SETTINGS },
   query: { query: '', mt: '', limit: DEFAULT_SETTINGS.queryLimit, timeout: 3 },
   fileMetadata: new FileMetadata(), fileViews: new Map(),
-  startupPending: new Set(), collapsedGroups: new Set(),
+  startupPending: new Set(), fileLoads: new Map(), collapsedGroups: new Set(),
 };
 let fileInformationTimer, fileInformationBusy = false;
 const presentation = createPresentationStore({ onError: error => showNotice(`Display preferences could not be saved: ${error.message}`, true) });
@@ -312,10 +312,52 @@ function sourceFileDisplay(path, label, options = {}) {
     properties: sourceFileProperties,
     renderMT: mtLink,
     enableStartup, startupPending: file => state.startupPending.has(file),
+    loadNow: loadFileNow, loadState: file => state.fileLoads.get(file),
     retry: file => { state.fileMetadata.retry(file); scheduleFileInformation(); } });
   state.fileViews.set(view.node, { ...view, path });
   scheduleFileInformation();
   return view.node;
+}
+
+async function loadFileNow(path) {
+  const previous = state.fileLoads.get(path);
+  if (previous && !['failed', 'cancelled'].includes(previous.state)) return;
+  state.fileLoads.set(path, { state: 'queuing' }); refreshFileDisplays();
+  try {
+    setStatus(await api('status'));
+    if (state.fileMetadata.get(path).loaded === true) {
+      state.fileLoads.delete(path);
+      showNotice(`${path} is already loaded. Startup selection is unchanged.`);
+      return;
+    }
+    const job = await api('kb/file-load', {}, { method: 'POST', body: { path, generation: state.status.generation } });
+    state.fileLoads.set(path, { state: 'queued', jobId: job.jobId });
+    pendingJobs.add(job.jobId);
+    showNotice(element('span', {}, `Whole-file loading queued for ${path}. Other loaded sources and startup selection are kept. `,
+      link('View task', 'task', { id: job.jobId })));
+  } catch (error) {
+    state.fileLoads.set(path, { state: 'failed', message: error.message });
+    showNotice(requestErrorDetails(error, { preserveSelection: true }), true);
+  } finally { refreshFileDisplays(); }
+}
+
+function finishFileLoad(path, job) {
+  if (job.state !== 'succeeded') {
+    state.fileLoads.set(path, { state: job.state, message: job.error?.message ?? job.state });
+    showNotice(`${path}: ${job.error?.message ?? job.state}. Activate Load now to retry.`, true);
+    return;
+  }
+  state.fileLoads.delete(path);
+  state.fileMetadata.clearOperations([path]);
+  const route = parseRoute(location.hash);
+  const loaded = state.fileMetadata.get(path).loaded === true;
+  const view = route.params.has('term')
+    ? link('View loaded occurrences', 'definitions', { ...Object.fromEntries(route.params), source: path, scope: 'loaded', offset: 0 })
+    : link('View loaded sources', 'sources');
+  showNotice(element('span', {}, loaded
+    ? `${path} loaded successfully. Startup selection is unchanged. `
+    : `${path} finished loading, but a later source update has removed it. `,
+  route.params.get('scope') === 'unloaded' ? 'The Unloaded filter excludes loaded files. ' : '', view));
 }
 
 async function enableStartup(path) {
@@ -2169,21 +2211,28 @@ function startLiveReload() {
         if (!sourceEditor?.hasDirty()) { location.reload(); return; }
         target.textContent = 'Interface update waiting for source edits to be saved or discarded.';
       }
+      if (pendingJobs.size) {
+        const completed = [];
+        for (const id of [...pendingJobs].slice(0, 10)) {
+          const job = await api('tasks/result', { id }, { signal: requestController.signal, allowErrorResult: true });
+          const entry = [...state.fileLoads].find(([, load]) => load.jobId === id);
+          if (['succeeded', 'failed', 'cancelled'].includes(job.state)) completed.push({ id, job, path: entry?.[0] });
+          else if (entry) state.fileLoads.set(entry[0], { state: job.state, jobId: id });
+        }
+        // Confirm active membership before showing success or discarding a tracked job.
+        setStatus(await api('status', {}, { signal: requestController.signal }));
+        for (const { id, job, path } of completed) {
+          pendingJobs.delete(id);
+          if (path) finishFileLoad(path, job);
+          else if (job.state !== 'succeeded') showNotice(`Task ${id}: ${job.error?.message ?? job.state}`, true);
+        }
+        refreshFileDisplays(); scheduleFileInformation();
+      }
       if (annotations.active()) {
         const native = await api('tva/status', {}, { signal: requestController.signal });
         if (native.revision !== annotationRevision) {
           annotationRevision = native.revision;
           annotations.invalidate({ revision: native.revision, generation: state.status?.generation });
-        }
-        if (pendingJobs.size) {
-          for (const id of [...pendingJobs].slice(0, 10)) {
-            const job = await api('tasks/result', { id }, { signal: requestController.signal });
-            if (['succeeded', 'failed', 'cancelled'].includes(job.state)) {
-              pendingJobs.delete(id);
-              if (job.state !== 'succeeded') showNotice(`Task ${id}: ${job.error?.message ?? job.state}`, true);
-            }
-          }
-          setStatus(await api('status', {}, { signal: requestController.signal }));
         }
       }
       if (['microtheory', 'microtheories'].includes(parseRoute(location.hash).name)) {

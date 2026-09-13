@@ -72,6 +72,7 @@
 :- http_handler(openworld_dr(api/tasks/result), endpoint(task_result), [method(get)]).
 :- http_handler(openworld_dr(api/tasks/cancel), endpoint(task_cancel), [method(post)]).
 :- http_handler(openworld_dr(api/kb/queue), endpoint(queue_load), [method(post)]).
+:- http_handler(openworld_dr('api/kb/file-load'), endpoint(queue_file_load), [method(post)]).
 :- http_handler(openworld_dr(api/kb/index), endpoint(queue_index), [method(post)]).
 :- http_handler(openworld_dr(api/kb/startup), endpoint(startup_status), [method(get)]).
 :- http_handler(openworld_dr(api/kb/startup/add), endpoint(startup_add), [method(post)]).
@@ -291,6 +292,9 @@ action(task_cancel,Request,Reply) :-
 action(queue_load,Request,Reply) :-
     native_body(Request,[files,generation],Body),must_be(integer,Body.generation),
     authorize_sources(Body.files,Paths),kb_jobs:queue_load(Paths,Body.generation,Reply).
+action(queue_file_load,Request,Reply) :-
+    native_body(Request,[path,generation],Body),must_be(integer,Body.generation),
+    authorize_sources([Body.path],[Path]),kb_jobs:queue_file_load(Path,Body.generation,Reply).
 action(queue_index,Request,Reply) :-
     native_body(Request,[files],Body),authorize_sources(Body.files,Paths),
     kb_jobs:queue_index(Paths,[],Reply).

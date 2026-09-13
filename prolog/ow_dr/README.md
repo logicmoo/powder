@@ -91,6 +91,15 @@ while work proceeds. Directory selection separates Subdirectories and Local
 files; selected totals are distinct from all-files totals. **Not at startup**
 adds only that file to the saved next-startup selection without loading it now.
 
+The shared **Not loaded** file badge reveals **Load now** on hover or keyboard
+focus; only activation queues that whole file. `POST api/kb/file-load` accepts
+`{path, generation}`, validates the concrete catalog file, compiles or reuses its
+cache, and publishes additively through the file pool. Other active sources
+(including partial selections) and startup settings are untouched. Stale
+generations reject rather than overwriting concurrent work. Pending badges link
+to task progress through the notice; failures remain visible and can be retried.
+Loading does not navigate away or discard source-editor buffers.
+
 Source links open the local [CodeMirror workspace](docs/source-editor.md).
 Save changes only the original file, with a revision precondition; reload is
 separate. Tabs and split panes retain buffers across routes and layout switches.

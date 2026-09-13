@@ -193,6 +193,58 @@ test(publication_is_fifo_and_does_not_rebase_stale_intent,
        Answer.solutions=[S],S.bindings=[Binding],assertion(Binding.value.value==x_first)),
       destroy_gate(Entered,Continue)).
 
+test(whole_file_addition_compiles_only_target_and_reuses_cache,
+     [setup(fixture(D,O)),cleanup(cleanup(D))]) :-
+    source(D,'kept.krf',kept,Kept),source(D,'added.krf',added,Added),
+    kb_config:server_settings(SettingsBefore),
+    queue_load([Kept],any,O,Initial),await(Initial,Before),
+    kb_store:source_info(Kept,KeptInfo),kb_store:source_module(Kept,Module,Native),
+    kb_cache:file_digest(Added,Original),
+    delete_file(Kept),
+    queue_file_load(Added,Before.generation,O,Job),await(Job,After),
+    assertion(After.counts.assertions==2),assertion(After.addition.changed==[Added]),
+    kb_store:source_info(Kept,KeptInfo),kb_store:source_module(Kept,Module,Native),
+    kb_store:source_info(Added,Info),assertion(Info.status==generated),
+    kb_store:query_text("(p added)",x_M,2,2,Answer),assertion(Answer.solutions=[_]),
+    queue_file_load(Added,After.generation,O,Again),await(Again,Reused),
+    assertion(Reused.generation==After.generation),assertion(Reused.addition.changed==[]),
+    assertion(Reused.addition.reused==[Added]),
+    kb_cache:file_digest(Added,Original),
+    kb_config:server_settings(SettingsAfter),assertion(SettingsAfter==SettingsBefore).
+
+test(whole_file_addition_conflicts_without_discarding_concurrent_load,
+     [setup(fixture(D,O)),cleanup(cleanup(D))]) :-
+    source(D,'kept.krf',kept,Kept),source(D,'first.krf',first,First),source(D,'second.krf',second,Second),
+    queue_load([Kept],any,O,Initial),await(Initial,Before),
+    setup_call_cleanup(gate(First,Entered,Continue),
+      (wrap_compile,queue_file_load(First,Before.generation,O,A),entered(Entered,_),
+      queue_file_load(Second,Before.generation,O,B),wait_staged(B,Native),
+      thread_send_message(Continue,continue),await(A,Loaded),
+      await_failed(B,Error),assertion(Error=error(generation_conflict(_,_),_)),
+      assertion(\+exists_file(Native)),kb_store:source_info(Kept,_),kb_store:source_info(First,_),
+      assertion(\+kb_store:source_info(Second,_)),kb_store:generation(Loaded.generation),
+      catch(queue_file_load(Second,Before.generation,O,_),Stale,true),
+      assertion(Stale=error(generation_conflict(_,_),_)),
+      queue_file_load(Second,Loaded.generation,O,Retry),await(Retry,After),
+      assertion(After.counts.assertions==3)),
+      destroy_gate(Entered,Continue)).
+
+test(whole_file_failure_preserves_generation_and_allows_repair,
+     [setup(fixture(D,O)),cleanup(cleanup(D))]) :-
+    source(D,'kept.krf',kept,Kept),source(D,'broken.krf','(',Broken),
+    queue_load([Kept],any,O,Initial),await(Initial,Before),
+    queue_file_load(Broken,Before.generation,O,Job),await_failed(Job,Error),
+    assertion(Error=error(compile_incomplete(_),_)),
+    kb_store:generation(Before.generation),kb_store:source_info(Kept,_),
+    assertion(\+kb_store:source_info(Broken,_)),
+    source(D,'broken.krf',repaired,Broken),
+    queue_file_load(Broken,Before.generation,O,Retry),await(Retry,After),
+    assertion(After.counts.assertions==2).
+
+test(whole_file_action_rejects_directories,
+     [setup(fixture(D,O)),cleanup(cleanup(D)),throws(error(domain_error(kb_source_file,_),_))]) :-
+    queue_file_load(D,any,O,_).
+
 test(cancelled_claim_cleans_up_and_the_worker_is_reusable,
      [setup(fixture(D,O)),cleanup(cleanup(D))]) :-
     source(D,'cancel.krf',cancelled,File),

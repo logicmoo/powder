@@ -1,7 +1,8 @@
 :- module(kb_jobs,
     [start_file_pool/1,stop_file_pool/1,file_pool_started/0,in_file_worker/0,
      start_inference_pool/1,stop_inference_pool/1,inference_pool_started/0,in_inference/0,
-     queue_load/3,queue_load/4,queue_index/3,queue_cached_load/3,queue_unload/3,
+     queue_load/3,queue_load/4,queue_file_load/3,queue_file_load/4,
+     queue_index/3,queue_cached_load/3,queue_unload/3,
      queue_query/5,queue_question/4,submit_inference/3,
      job_status/2,await_result/2,await_result/3,cancel_job/1,task_overview/1,
      current_job_id/1,compiler_progress/3,
@@ -220,6 +221,12 @@ queue_load(Paths,Expected,Accepted) :- queue_load(Paths,Expected,[],Accepted).
 queue_load(Paths,Expected,Options,Accepted) :-
     selection(Paths,Files),compiler_options(Options,Safe),
     submit(replace(Files,Safe),Expected,"Load sources",Files,Accepted).
+queue_file_load(Path,Expected,Accepted) :- queue_file_load(Path,Expected,[],Accepted).
+queue_file_load(Path,Expected,Options,Accepted) :-
+    canonical_path(Path,File),compiler_options(Options,Safe),
+    (exists_file(File),kb_compile:discover_sources([File],[File])->true;
+     domain_error(kb_source_file,Path)),
+    submit(add_file(File,Safe),Expected,"Load whole file",[File],Accepted).
 queue_index(Paths,Options,Accepted) :-
     selection(Paths,Files),compiler_options(Options,Safe),
     submit(index(Files,Safe),none,"Index sources",Files,Accepted).
@@ -384,6 +391,7 @@ choose_work(Type,Id,N,File,Action) :-
     keysort(Candidates,[_-_-Id-N-File-Action|_]).
 
 mutation(replace(_,_)).
+mutation(add_file(_,_)).
 mutation(cached(_)).
 mutation(unload(_)).
 publication_turn(Id) :-
@@ -466,6 +474,8 @@ execute_file_work(cached_source(Snapshot),Id,N) :-
 plan_operation(replace(Paths,Options),Units,Files) :-
     kb_compile:implementation_hash(Hash),
     kb_compile:discover_sources(Paths,Files),maplist(compile_unit(Options,load,Hash),Files,Units).
+plan_operation(add_file(File,Options),[Unit],[File]) :-
+    kb_compile:implementation_hash(Hash),compile_unit(Options,load,Hash,File,Unit).
 plan_operation(index(Paths,Options),Units,Files) :-
     kb_compile:implementation_hash(Hash),
     kb_compile:discover_sources(Paths,Files),maplist(compile_unit(Options,index,Hash),Files,Units).
@@ -564,6 +574,10 @@ publish_operation(replace(_,_),Values,Expected,Start,Status) :-
     compilation_summary(Values,Summary),complete_compilation(Summary),
     findall(Entry,member(compiled(_,Entry),Values),Staged),
     kb_store:publish_staged_sources(Staged,Expected,Start,Status).
+publish_operation(add_file(_,_),Values,Expected,_,Status) :-
+    compilation_summary(Values,Summary),complete_compilation(Summary),
+    findall(Entry,member(compiled(_,Entry),Values),Staged),
+    kb_store:publish_staged_addition(Staged,Expected,Status).
 publish_operation(cached(_),Values,Expected,_,Status) :-
     findall(Entry,member(cached(Entry),Values),Staged),
     kb_store:publish_staged_addition(Staged,Expected,Status).

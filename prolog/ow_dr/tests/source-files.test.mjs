@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FileMetadata, SourceSelection, recordedFileMT, sourceFileRecord, sourceFileStates } from '../web/model.js';
-import { fileBadgeDescriptions } from '../web/source-files.js';
+import { FileMetadata, SourceSelection, recordedFileMT, requestJSON, sourceFileRecord, sourceFileStates } from '../web/model.js';
+import { fileBadgeDescriptions, renderFileBadges } from '../web/source-files.js';
 
 const first = 'KBs/group/first.kif', later = 'KBs/group/nested/later.metta';
 const startup = { known: true, paths: [first], evidence: 'initial_successful_load' };
@@ -140,4 +140,40 @@ test('file-implied MT requires actual positive cached content, never a candidate
     impliedMT: { ...record.dependencies.impliedMT, ...bad } } }), null);
   assert.equal(recordedFileMT({ dependencies: { ...record.dependencies, status: 'unavailable' } }), null);
   assert.equal(recordedFileMT({}), null);
+});
+
+test('only known unloaded files expose the whole-file action, separately from startup', () => {
+  const el = (tag, attributes = {}, ...children) => ({ tag, attributes, children, append(child) { this.children.push(child); } });
+  let loads = 0, startups = 0, stopped = 0;
+  const options = { loadNow: () => loads++, enableStartup: () => startups++ };
+  const loadedBadge = record => renderFileBadges(first, record, el, options).children.find(node => node.attributes['data-kind'] === 'loaded');
+  for (const loaded of [true, null, undefined]) assert.equal(loadedBadge({ loaded }).tag, 'span');
+  const coverage = { total: 0, startup: 0, loaded: 0, cached: 0, indexed: 0, warnings: 0, errors: 0, sizeBytes: 0 };
+  assert.equal(loadedBadge({ type: 'directory', loaded: false, coverage }).tag, 'span');
+  const record = { type: 'file', loaded: false, startup: false };
+  const button = loadedBadge(record);
+  assert.equal(button.tag, 'button');
+  assert.deepEqual(Object.keys(button.attributes).filter(key => key.startsWith('on')), ['onclick']);
+  assert.equal(loads, 0); assert.equal(startups, 0);
+  const event = { preventDefault: () => stopped++, stopPropagation: () => stopped++ };
+  button.attributes.onclick(event);
+  assert.equal(loads, 1); assert.equal(startups, 0); assert.equal(stopped, 2);
+  const pending = renderFileBadges(first, record, el, { ...options, loadState: { state: 'queued' } })
+    .children.find(node => node.attributes['data-kind'] === 'loaded');
+  assert.equal(pending.attributes['aria-disabled'], 'true');
+  pending.attributes.onclick(event);
+  assert.equal(loads, 1);
+});
+
+test('task polling may read failed job documents without swallowing HTTP errors', async () => {
+  const result = { id: 'fixture', state: 'failed', error: { kind: 'compilation', message: 'Fixture failure' } };
+  const fetch = async () => ({ ok: true, status: 200, json: async () => result });
+  assert.equal(await requestJSON('tasks/result', { fetch, allowErrorResult: true }), result);
+  await assert.rejects(requestJSON('other', { fetch }), /Fixture failure/u);
+  await assert.rejects(requestJSON('tasks/result', { allowErrorResult: true,
+    fetch: async () => ({ ok: false, status: 409, json: async () => result }) }), /Fixture failure/u);
+  await assert.rejects(requestJSON('tasks/result', { allowErrorResult: true,
+    fetch: async () => { throw new Error('offline'); } }), /Cannot reach/u);
+  await assert.rejects(requestJSON('tasks/result', { allowErrorResult: true,
+    fetch: async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('invalid'); } }) }), /unreadable response/u);
 });

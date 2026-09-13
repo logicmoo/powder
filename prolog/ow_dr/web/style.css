@@ -232,6 +232,12 @@ main:focus { outline: none; }
 .source-state-badges { display: inline-flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
 .source-row > .source-state-badges { flex-basis: 100%; margin-left: 40px; }
 .source-state-badge[data-presence="present"] { color: var(--ink); }
+.source-load-badge { display: inline-grid; min-width: 9ch; text-align: center; cursor: pointer; }
+.source-load-badge > span { grid-area: 1 / 1; }
+.source-load-action { visibility: hidden; }
+.source-load-badge:is(:hover, :focus-visible) .source-load-rest { visibility: hidden; }
+.source-load-badge:is(:hover, :focus-visible) .source-load-action { visibility: visible; }
+.source-load-badge[aria-disabled="true"] { cursor: wait; opacity: .7; }
 .source-file-display { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 10px; min-width: 0; }
 .source-file-name { min-width: 0; overflow-wrap: anywhere; }
 .source-file-metadata { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 10px; min-width: 0; flex: 1 1 16rem; }
