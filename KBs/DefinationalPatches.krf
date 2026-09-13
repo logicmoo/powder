@@ -1,0 +1,137 @@
+(set-direction :FORWARD)
+
+(<==
+  ?Post
+  (constraintTemplate ?General ?Specific ?Pre ?Post)
+  (genlPreds ?Specific ?General)
+  ?Pre
+  (missingConstraintSlot ?Post))
+
+(<==
+  ?Post
+  (constraintTemplate ?General ?Specific ?Pre ?Post)
+  (genlFuncts ?Specific ?General)
+  ?Pre
+  (missingConstraintSlot ?Post))
+
+(set-direction :BACKWARD)
+
+(<==
+  (constraintTemplate ?General ?Specific ?Pre ?Post)
+
+  (constraintTemplate-Proto ?Orig)
+
+  (replaceMarker ?Orig :P ?General  ?Pre)
+  (replaceMarker ?Orig :P ?Specific ?Post))
+
+
+;; Argument counts
+
+(constraintTemplate-Proto (arity    :P ??NN))
+(constraintTemplate-Proto (arityMin :P ??NN))
+(constraintTemplate-Proto (arityMax :P ??NN))
+
+;; Constraints on a numbered argument
+
+(constraintTemplate-Proto (argIsa       :P ??NN ??Col))
+(constraintTemplate-Proto (argGenl      :P ??NN ??Col))
+(constraintTemplate-Proto (argQuotedIsa :P ??NN ??Col))
+
+;; Constraints on every argument
+
+(constraintTemplate-Proto (argsIsa       :P ??Col))
+(constraintTemplate-Proto (argsGenl      :P ??Col))
+(constraintTemplate-Proto (argsQuotedIsa :P ??Col))
+
+;; Constraints from argument NN onward
+
+(constraintTemplate-Proto (argAndRestIsa       :P ??NN ??Col))
+(constraintTemplate-Proto (argAndRestGenl      :P ??NN ??Col))
+(constraintTemplate-Proto (argAndRestQuotedIsa :P ??NN ??Col))
+
+;; Explicit argument-position forms
+
+(constraintTemplate-Proto (arg1Isa :P ??Col))
+(constraintTemplate-Proto (arg2Isa :P ??Col))
+(constraintTemplate-Proto (arg3Isa :P ??Col))
+(constraintTemplate-Proto (arg4Isa :P ??Col))
+(constraintTemplate-Proto (arg5Isa :P ??Col))
+(constraintTemplate-Proto (arg6Isa :P ??Col))
+
+(constraintTemplate-Proto (arg1Genl :P ??Col))
+(constraintTemplate-Proto (arg2Genl :P ??Col))
+(constraintTemplate-Proto (arg3Genl :P ??Col))
+(constraintTemplate-Proto (arg4Genl :P ??Col))
+(constraintTemplate-Proto (arg5Genl :P ??Col))
+(constraintTemplate-Proto (arg6Genl :P ??Col))
+
+(constraintTemplate-Proto (arg1QuotedIsa :P ??Col))
+(constraintTemplate-Proto (arg2QuotedIsa :P ??Col))
+(constraintTemplate-Proto (arg3QuotedIsa :P ??Col))
+(constraintTemplate-Proto (arg4QuotedIsa :P ??Col))
+(constraintTemplate-Proto (arg5QuotedIsa :P ??Col))
+(constraintTemplate-Proto (arg6QuotedIsa :P ??Col))
+
+;; Function-result constraints
+
+(constraintTemplate-Proto (resultIsa                 :P ??Col))
+(constraintTemplate-Proto (resultGenl                :P ??Col))
+(constraintTemplate-Proto (resultQuotedIsa           :P ??Col))
+(constraintTemplate-Proto (evaluationResultQuotedIsa :P ??Col))
+
+;; Result constrained by a collection supplied as an argument
+
+(constraintTemplate-Proto (resultIsaArg  :P ??NN))
+(constraintTemplate-Proto (resultGenlArg :P ??NN))
+
+;; Conditional argument typing:
+;; the first collection constrains the triggering argument;
+;; the second constrains the dependent argument.
+
+(constraintTemplate-Proto (interArgIsa1-2 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa1-3 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa1-4 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa1-5 :P ??FromCol ??ToCol))
+
+(constraintTemplate-Proto (interArgIsa2-1 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa2-3 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa2-4 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa2-5 :P ??FromCol ??ToCol))
+
+(constraintTemplate-Proto (interArgIsa3-1 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa3-2 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa3-4 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa3-5 :P ??FromCol ??ToCol))
+
+(constraintTemplate-Proto (interArgIsa4-1 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa4-2 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa4-3 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa4-5 :P ??FromCol ??ToCol))
+
+(constraintTemplate-Proto (interArgIsa5-1 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa5-2 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa5-3 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgIsa5-4 :P ??FromCol ??ToCol))
+
+;; Conditional exclusion and generalization constraints
+
+(constraintTemplate-Proto (interArgNotIsa1-2 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgNotIsa2-1 :P ??FromCol ??ToCol))
+
+(constraintTemplate-Proto (interArgGenl1-2 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgGenl2-1 :P ??FromCol ??ToCol))
+(constraintTemplate-Proto (interArgGenl2-4 :P ??FromCol ??ToCol))
+
+;; Two argument positions must have different values
+
+(constraintTemplate-Proto (interArgDifferent :P ?N1 ?N2))
+
+;; At-most-one-value constraints
+
+(constraintTemplate-Proto (argFormat  :P ?NN SingleEntry))
+(constraintTemplate-Proto (arg1Format :P SingleEntry))
+(constraintTemplate-Proto (arg2Format :P SingleEntry))
+(constraintTemplate-Proto (arg3Format :P SingleEntry))
+(constraintTemplate-Proto (arg4Format :P SingleEntry))
+(constraintTemplate-Proto (arg5Format :P SingleEntry))
+(constraintTemplate-Proto (arg6Format :P SingleEntry))

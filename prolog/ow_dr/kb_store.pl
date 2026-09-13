@@ -128,12 +128,25 @@ retained_preparation(retained(_)).
 reused_entry(entry(_,_,_,_,_,true)).
 commit_addition([],_,[]) :- !.
 commit_addition(Changes,Current,Obsolete) :-
-    findall(Native,(member(entry(S,_,_,_,_,_),Changes),source_module(S,_,Native)),Obsolete),
+    findall(Native,(member(entry(S,_,_,_,_,_),Changes),source_module(S,_,Native)),Replaced),
+    (member(entry(_,Info,_,_,_,_),Changes),\+definitional_patch_info(Info)->
+      definitional_patch_sources(PatchSources,PatchNatives)
+    ;PatchSources=[],PatchNatives=[]),
+    append(Replaced,PatchNatives,AllObsolete),sort(AllObsolete,Obsolete),
     transaction((
+      maplist(remove_live_source,PatchSources),
       forall(member(entry(S,_,_,_,_,_),Changes),remove_live_source(S)),
       maplist(activate_source,Changes),rebuild_rankings,
       retractall(generation(_)),Next is Current+1,assertz(generation(Next))
     )).
+
+% Derived defaults belong to their evidence generation. Source edits retire
+% them, never regenerate them; native query snapshots keep their pinned copies.
+definitional_patch_info(Info) :- get_dict(definitionalPatch,Info,true).
+definitional_patch_sources(Sources,Natives) :-
+    findall(Source-Native,
+      (source_info(Source,Info),definitional_patch_info(Info),source_module(Source,_,Native)),Pairs),
+    pairs_keys_values(Pairs,Sources,Natives).
 cleanup_obsolete([],[]).
 cleanup_obsolete([Native|Rest],Issues) :-
     catch((cleanup_native(Native)->Issue=none;
@@ -421,7 +434,10 @@ unload_locked(Path, Expected, Status) :-
     ; throw(error(generation_conflict(Expected,Current),_)) ),
     ( source_module(Path,_,Native) -> true
     ; throw(error(existence_error(active_source,Path),_)) ),
+    definitional_patch_sources(PatchSources,PatchNatives),
+    sort([Native|PatchNatives],Obsolete),
     transaction((
+        maplist(remove_live_source,PatchSources),
         retractall(source_module(Path,_,_)),retractall(source_info(Path,_)),
         public_path(Path,Public),
         forall((assertion(Id,Data),Data.source==Public),
@@ -429,7 +445,8 @@ unload_locked(Path, Expected, Status) :-
         rebuild_rankings,retractall(generation(_)),
         Next is Current+1,assertz(generation(Next))
     )),
-    cleanup_native(Native), status(Status).
+    cleanup_obsolete(Obsolete,CleanupIssues),status(Base),
+    Status=Base.put(cleanupIssues,CleanupIssues).
 
 active_modules(Modules) :- findall(M,source_module(_,M,_),Modules).
 assertions(Items) :-
