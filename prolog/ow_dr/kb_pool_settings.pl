@@ -117,6 +117,7 @@ task_summary(Id,Summary) :-
       cancellationRequested:Cancelling,fileCount:FileCount,progress:Progress}.
 request_kind(index(_,_),index).
 request_kind(replace(_,_),load).
+request_kind(add_file(_,_),load).
 request_kind(cached(_),cached_load).
 request_kind(unload(_),unload).
 request_kind(infer(query(_,_,_,_)),query).

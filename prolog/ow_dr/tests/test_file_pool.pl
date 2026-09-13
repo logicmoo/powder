@@ -5,6 +5,7 @@
 :- use_module('../kb_cache',[]).
 :- use_module('../kb_paths',[]).
 :- use_module('../kb_activity',[]).
+:- use_module('../kb_pool_settings',[]).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
 :- use_module(library(prolog_wrap)).
@@ -244,6 +245,23 @@ test(whole_file_failure_preserves_generation_and_allows_repair,
 test(whole_file_action_rejects_directories,
      [setup(fixture(D,O)),cleanup(cleanup(D)),throws(error(domain_error(kb_source_file,_),_))]) :-
     queue_file_load(D,any,O,_).
+
+test(whole_file_jobs_expose_task_lists_and_details,
+     [setup(fixture(D,O)),cleanup(cleanup(D))]) :-
+    source(D,'task.krf','(',File),
+    setup_call_cleanup(gate(File,Entered,Continue),
+      (wrap_compile,queue_file_load(File,any,O,Job),entered(Entered,_),
+       kb_pool_settings:task_list(_{pool:file,state:active},Active),
+       Active.items=[Task],assertion(Task.id==Job.jobId),assertion(Task.kind==load),
+       kb_pool_settings:task_details(Job.jobId,_{section:files},Details),
+       assertion(Details.task.id==Job.jobId),assertion(Details.request.kind==load),
+       assertion(Details.total==1),
+       thread_send_message(Continue,continue),await_failed(Job,_),
+       kb_pool_settings:task_list(_{pool:file,state:completed},Completed),
+       Completed.items=[Failed],assertion(Failed.state==failed),
+       kb_pool_settings:task_details(Job.jobId,_{section:results},Result),
+       assertion(Result.task.state==failed)),
+      destroy_gate(Entered,Continue)).
 
 test(cancelled_claim_cleans_up_and_the_worker_is_reusable,
      [setup(fixture(D,O)),cleanup(cleanup(D))]) :-
