@@ -86,6 +86,31 @@ test(two_equals_preserved) :-
     Term='x_<=='(x_p(X),x_q(Y)), X==Y,
     memberchk(mapping_rows-['backward-rule-operator'],Props).
 
+test(direction_is_file_local_metadata_not_execution) :-
+    parse_text("(set-direction :FORWARD)\n(<== (p ?X) (q ?X))\n(in-microtheory NextMt)\n(p A)\n(set-direction :BACKWARD)\n(p B)",
+      krf,[],[assertion(Rule,_,_,_,P1,_),assertion(_,_,x_NextMt,_,P2,_),
+              assertion(_,_,x_NextMt,_,P3,_)]),
+    assertion(Rule =@= 'x_<=='(x_p(X),x_q(X))),
+    assertion(memberchk(direction-':FORWARD',P1)),
+    assertion(memberchk(direction-':FORWARD',P2)),
+    assertion(memberchk(direction-':BACKWARD',P3)),
+    one("(p C)",krf,[],_,_,_,Fresh,_),
+    assertion(\+memberchk(direction-_,Fresh)).
+
+test(wrapper_direction_overrides_default) :-
+    parse_text("(set-direction :FORWARD)\n(:DIRECTION :BACKWARD :KIF (p A))",
+      krf,[],[assertion(_,_,_,_,Props,_)]),
+    findall(D,member(direction-D,Props),Directions),
+    assertion(Directions==[':BACKWARD']).
+
+test(malformed_direction_is_error,[throws(error(source_error(_,_,_,_),_))]) :-
+    parse_text("(set-direction :FORWARD extra)",krf,[],_).
+
+test(metta_direction_is_data) :-
+    one("(set-direction :FORWARD)",metta,[],Term,[],_,Props,_),
+    assertion(Term=='x_set-direction'(':FORWARD')),
+    assertion(\+memberchk(direction-_,Props)).
+
 test(ordinary_implication_formula) :-
     one("(=> (isa ?X Dog) (isa ?X Animal))",kif,[],
         x_implies(x_isa(X,x_Dog),x_isa(Y,x_Animal)),["?X"],_,_,_),

@@ -296,9 +296,16 @@ read_assertions(Stream,Ctx,Mt,DirectiveProps,Assertions,Warnings) :-
     ( Node==end_of_file -> Assertions=[], Warnings=[]
     ; Ctx=ctx(File,Dialect,_,_,_),
       ( Dialect\==metta, microtheory_declaration(Node)
-      -> parse_microtheory(Node,File,NewMt,NewProps),
+      -> parse_microtheory(Node,File,NewMt,MtProps),
+         include(direction_property,DirectiveProps,DirectionProps),
+         append(DirectionProps,MtProps,NewProps),
          record_form_span(Stream,Node,ignored),
          read_assertions(Stream,Ctx,NewMt,NewProps,Assertions,Warnings)
+      ; Dialect\==metta, direction_declaration(Node)
+      -> parse_direction(Node,File,Direction),
+         exclude(direction_property,DirectiveProps,OtherProps),
+         record_form_span(Stream,Node,ignored),
+         read_assertions(Stream,Ctx,Mt,[direction-Direction|OtherProps],Assertions,Warnings)
       ; source_assertion(Node,Ctx,Mt,DirectiveProps,Assertion,LocalWarnings),
         record_form_span(Stream,Node,assertion),
         Assertions=[Assertion|Tail],
@@ -315,7 +322,8 @@ source_assertion(Node,ctx(File,Dialect,_,Options,Map),DefaultMt,DirectiveProps,
     -> unwrap_assertion(Node,File,Origin,Formula,WrapperProps,Override),
        ( Override==none -> Mt=DefaultMt ; Mt=Override )
     ; Formula=Node, WrapperProps=[], Mt=DefaultMt ),
-    append(DirectiveProps,WrapperProps,BaseProps),
+    exclude(overridden_property(WrapperProps),DirectiveProps,Defaults),
+    append(Defaults,WrapperProps,BaseProps),
     transform_ast(Formula,Map,File,Options,Mapped,Rows,MappingWarnings),
     interpretation_events(Mapped,Dialect,File,Options,Events),
     interpretation_event_diagnostics(Events,InterpretationDiagnostics,DataWarnings),
@@ -331,6 +339,15 @@ source_assertion(Node,ctx(File,Dialect,_,Options,Map),DefaultMt,DirectiveProps,
     term_string(occurrence(Dialect,Mt,DirectiveProps,Original),Identity,
                 [quoted(true),ignore_ops(true)]),
     crypto_data_hash(Identity,Key,[algorithm(sha256),encoding(utf8)]).
+
+direction_property(direction-_).
+overridden_property(Properties,Key-_) :- memberchk(Key-_,Properties).
+
+direction_declaration(n(_,_,list([n(_,_,sym('set-direction'))|_]))).
+parse_direction(n(_,_,list([_,n(_,_,sym(Direction))])),_,Direction) :-
+    memberchk(Direction,[':FORWARD',':BACKWARD']), !.
+parse_direction(Node,File,_) :-
+    node_error(Node,File,'set-direction expects exactly :FORWARD or :BACKWARD').
 
 warning_diagnostic(warning(_,_,_,Message),diagnostic(warnings,Message)).
 
