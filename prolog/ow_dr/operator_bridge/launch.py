@@ -21,7 +21,10 @@ def main() -> None:
         process = subprocess.Popen(command, **options)
     except OSError as error:
         raise SystemExit(f"Independent launch failed ({error.winerror}); no inherited-job fallback was attempted.") from None
-    print(f"Created owned bridge process {process.pid}. Pair using its new console; no credential is printed.")
+    if any(arg == "--pairing-file" or arg.startswith("--pairing-file=") for arg in sys.argv[1:]):
+        print(f"Created owned bridge process {process.pid} with explicit private-file pairing. Verify readiness separately; no credential is printed.")
+    else:
+        print(f"Created owned bridge process {process.pid}. Pair using its new console; no credential is printed.")
 
 
 if __name__ == "__main__":

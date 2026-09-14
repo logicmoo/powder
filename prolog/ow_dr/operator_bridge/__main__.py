@@ -50,8 +50,11 @@ def main() -> None:
     parser.add_argument("--copilot-model", help="Optional operator-only native Copilot model identifier")
     parser.add_argument("--codex-model", help="Optional operator-only native Codex model identifier")
     parser.add_argument("--offline", action="store_true", help="Recovery view only; disable both native adapters")
-    parser.add_argument("--pairing-stdin", action="store_true",
-                        help="Read the local phrase from an inherited private UTF-8 pipe; never argv/environment/files")
+    pairing = parser.add_mutually_exclusive_group()
+    pairing.add_argument("--pairing-stdin", action="store_true",
+                         help="Read the local phrase from an inherited private UTF-8 pipe")
+    pairing.add_argument("--pairing-file", type=Path,
+                         help="Explicit owner-private UTF-8 phrase file beneath operator .state (Windows ACL guarded)")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be between 1024 and 65535")
@@ -64,6 +67,8 @@ def main() -> None:
     from .server import create_app
     from .service import OperatorService
     from .workspace import Workspace
+    from .workspace import BridgeError
+    from .pairing_file import read_pairing_file
 
     workspace = Workspace.inspect(args.project_root)
     if Path(workspace.root) != Path(__file__).resolve().parents[3]:
@@ -72,15 +77,23 @@ def main() -> None:
     state = args.state_dir.resolve()
     if not state.is_relative_to(state_root):
         parser.error("state-dir must be inside operator_bridge\\.state, never KBs or shared loading caches")
-    private_directory(state)
+    file_phrase = None
+    if args.pairing_file is not None:
+        try:
+            file_phrase = read_pairing_file(args.pairing_file)
+        except BridgeError as error:
+            parser.error(error.message)
+    # A provisioned root was checked, not repaired. Do not rewrite its healthy ACL.
+    if args.pairing_file is None or state != state_root:
+        private_directory(state)
     lock = InstanceLock(state)
     try:
         try:
-            phrase = read_pairing_phrase(from_stdin=args.pairing_stdin)
+            phrase = file_phrase if file_phrase is not None else read_pairing_phrase(from_stdin=args.pairing_stdin)
         except ValueError as error:
             parser.error(str(error))
         auth = Auth(phrase)
-        del phrase
+        del phrase, file_phrase
         services = {}
         for provider, filename in (("copilot", "operator.sqlite3"), ("codex", "codex.sqlite3")):
             journal = Journal(state / filename, workspace, provider=provider)

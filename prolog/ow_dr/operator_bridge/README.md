@@ -50,14 +50,14 @@ Default activation still obtains the phrase from the bridge's private native
 console. A non-private `getpass` fallback now fails rather than echoing input.
 If the user is absent and no phrase has been securely provisioned, leave that
 console waiting; **do not claim the HTTP bridge is ready**, invent a known
-password, write a phrase to disk, or expose it in a tool log.
+password, write a phrase to an unguarded file, or expose it in a tool log.
 
 An explicitly trusted OS launcher may instead launch
 `python -m prolog.ow_dr.operator_bridge --pairing-stdin` with a private inherited
 stdin pipe. Supply exactly one UTF-8 line containing a 16–1024 character local
 phrase, then close the pipe. TTY input, empty/unterminated input, invalid UTF-8,
-and oversized input fail closed. The phrase is not accepted in argv, environment
-variables, URLs or files, and is never printed. The launcher must obtain/retain it
+and oversized input fail closed. This pipe mode never accepts a redirected regular file. The phrase is not
+accepted in argv, environment variables or URLs, and is never printed. The launcher must obtain/retain it
 securely for the human; generating a secret nobody can recover does not complete
 pairing. Browser/main-Prolog code must never provide or receive that pipe.
 
@@ -66,6 +66,53 @@ inheritance is not a secret pipe. A trusted direct launcher must explicitly own
 its pipe and process creation flags. Reading the phrase only permits bridge
 pairing; idle HTTP startup still creates **zero native sessions or prompts**.
 This option was validated with synthetic input only, not production activation.
+
+#### Explicit owner-private pairing file (Windows)
+
+When the human has authorized persistent local provisioning, a trusted host
+launcher may use:
+
+```powershell
+prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m prolog.ow_dr.operator_bridge.launch --pairing-file prolog\ow_dr\operator_bridge\.state\pairing.txt
+```
+
+Only the path enters argv, never the phrase. Console `getpass` remains the default;
+`--pairing-file` and `--pairing-stdin` are mutually exclusive. The file is an
+explicit exception to non-persistent phrase provisioning, **not** permission to
+persist browser/session capabilities.
+
+Provision with a cryptographic random generator and exclusive file creation
+inside the operator's already owner-private `.state`. The existing
+`security.private_directory` helper establishes its protected owner/SYSTEM
+inheritable DACL before any secret is written. Do not write a secret into a
+permissive file and fix permissions afterward. The user reads this local file
+through their OS, then enters the phrase **inside the operator iframe**; no
+browser/main-Prolog endpoint reads it. Never paste its contents into tool output,
+logs, main configuration, assets, URLs or commits.
+
+The native reader:
+
+* permits only descendants of this installed operator's `.state`, rejecting
+  traversal, alternate streams and ambiguous trailing-dot/space paths;
+* rejects symlinks/junctions/reparse points throughout the path ancestry, then
+  verifies opened handles' final native paths;
+* checks the owner is the current user and all allowing DACL entries are only
+  that user, SYSTEM or OWNER RIGHTS, on `.state`, intermediate directories and
+  the file; absent/broad/unsupported ACLs fail closed rather than being repaired;
+* holds private directory/file handles without write/delete sharing while
+  reading, rejects hard links, directories and files larger than 4098 bytes;
+* accepts one UTF-8 phrase (16–1024 characters), optionally terminated by one
+  newline, rejects embedded NUL/newlines, and never outputs the contents.
+
+This file mode is Windows-only; unsupported platforms fail closed. No state
+directory, phrase file or ACL is recreated/repaired by the reader. The validated
+default `.state` ACL is not rewritten during this startup path. The existing
+native instance lock still prevents a second owner. Before any provisioning or
+launch, the coordinator must preserve an already healthy bridge/state; do not
+replace its phrase or rotate its credentials merely to start another process.
+An authorized unattended start is possible only after valid private provisioning.
+Authentication/native availability must still be observed, never inferred.
+No operator/model Start is performed by this mode.
 
 Optional CLI-only settings: `--copilot-bin=PATH`, `--codex-bin=PATH`,
 `--copilot-model=ID`, `--codex-model=ID`, and `--offline` for recovery-only mode.
@@ -461,6 +508,7 @@ are deliberately not sent to this pinned stable protocol.
 ```powershell
 prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_embed prolog.ow_dr.operator_bridge.tests.test_service prolog.ow_dr.operator_bridge.tests.test_http prolog.ow_dr.operator_bridge.tests.test_providers prolog.ow_dr.operator_bridge.tests.test_native_adapters
 prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_pairing_input
+prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_pairing_file
 node --test prolog\ow_dr\operator_bridge\tests\embed-browser.test.mjs
 ```
 
