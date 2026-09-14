@@ -267,16 +267,16 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
         task = asyncio.current_task()
         embedded_streams.add(task)
         operator.attach(principal)
-        conversation = operator.journal.get("conversation_id")
+        selection = (operator.journal.get("conversation_id"), operator.catalog.revision())
         try:
             await stream.prepare(request)
             while True:
                 embed_auth.require(token, operator.provider)
                 if request.transport is None or request.transport.is_closing():
                     break
-                current = operator.journal.get("conversation_id")
-                if current != conversation:
-                    conversation, cursor = current, 0
+                current = (operator.journal.get("conversation_id"), operator.catalog.revision())
+                if current != selection:
+                    selection, cursor = current, 0
                 batch = operator.journal.events(cursor)
                 serialized, next_cursor = encode_snapshot(operator.provider, operator.status(), batch, cursor)
                 await asyncio.wait_for(stream.write(serialized), 5)
@@ -296,6 +296,10 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
         if operator.connections.get(principal, 0) >= 4:
             raise BridgeError("connection_limit", "At most four views per paired session.", 429)
         cursor = int(request.query.get("since", "0"))
+        if "conversationId" in request.query and (
+                request.query["conversationId"] != operator.journal.get("conversation_id")
+                or request.query.get("revision") != str(operator.catalog.revision())):
+            cursor = 0
         operator.journal.events(cursor, 1)
         ws = web.WebSocketResponse(heartbeat=20, max_msg_size=1024)
         await ws.prepare(request)
@@ -304,14 +308,15 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
 
         async def output_events():
             nonlocal cursor
-            conversation = None
+            selection = None
             while not ws.closed:
                 auth.require(request.cookies.get(COOKIE))
                 current = operator.journal.get("conversation_id")
-                if current != conversation:
-                    if conversation is not None:
+                current_selection = (current, operator.catalog.revision())
+                if current_selection != selection:
+                    if selection is not None:
                         cursor = 0
-                    conversation = current
+                    selection = current_selection
                 status_data = operator.status()
                 batch = operator.journal.events(cursor)
                 await ws.send_json({"type": "status", "provider": operator.provider, "data": status_data})

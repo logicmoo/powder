@@ -208,9 +208,10 @@ class CopilotAdapter:
     async def cancel(self) -> bool:
         if self.session is None or self.terminal is None or self.terminal.done():
             return False
+        terminal = self.terminal
         await asyncio.wait_for(self.session.abort(), 15)
         try:
-            return await asyncio.wait_for(asyncio.shield(self.terminal), 15) == "cancelled"
+            return await asyncio.wait_for(asyncio.shield(terminal), 15) == "cancelled"
         except asyncio.TimeoutError:
             self.uncertain = True
             return False

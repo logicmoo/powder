@@ -65,7 +65,8 @@ class OperatorHub:
             if "conversationId" in payload:
                 operator.require_conversation(payload["conversationId"])
             existing = operator.journal.existing(payload.get("id"), kind, text)
-            if existing is not None or operator.connected:
+            pending = operator.active or operator.dispatching or not operator.queue.empty()
+            if existing is not None or operator.connected or (kind == "prompt" and pending):
                 return await operator.submit(principal, payload)
             conflicts = self.conflicts(provider)
             if conflicts and not payload.get("startAnyway", False):

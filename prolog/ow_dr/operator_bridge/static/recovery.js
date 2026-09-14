@@ -9,7 +9,7 @@ const prefix = `/api/operators/${provider}`;
 let socket, sequence = 0, connected = false, state, reconnect, refreshTimer, draftTimer, pendingSend;
 let draftLoaded = false, draftWrites = Promise.resolve();
 let permissionsKey, commandsKey;
-let switching = false, draftConversation, catalogKey, manualNotice, pendingBranch;
+let switching = false, draftConversation, catalogKey, manualNotice, pendingBranch, interruptPending;
 const localDrafts = new Map();
 $(`${provider}-chip`)?.setAttribute('aria-current', 'page');
 $('native-label').textContent = providerName;
@@ -51,6 +51,13 @@ async function api(path, body) {
   }
   return value;
 }
+function renderComposer() {
+  const ready = connected && draftLoaded && !switching;
+  $('send').textContent = state?.workPending ? 'Enqueue' : 'Send';
+  $('send').disabled = !ready || !state?.adapter.available || (state.stopped && !state.canRestart)
+    || Boolean(pendingSend?.sending) || !$('prompt').value.trim();
+  $('interrupt').disabled = !connected || switching || Boolean(interruptPending) || !state?.activeCommandId;
+}
 function renderStatus(value) {
   if (state && value.selectionRevision < state.selectionRevision) return;
   const changed = !state || state.conversationId !== value.conversationId;
@@ -59,7 +66,7 @@ function renderStatus(value) {
     clearTimeout(draftTimer); draftLoaded = false; draftConversation = value.conversationId;
     sequence = 0; $('transcript').replaceChildren(); $('empty').hidden = false;
     $('event-journal').replaceChildren();
-    $('prompt').value = ''; pendingSend = pendingBranch = null; permissionsKey = commandsKey = null;
+    $('prompt').value = ''; pendingSend = pendingBranch = interruptPending = null; permissionsKey = commandsKey = null;
     $('conflict').hidden = true;
     $('model').value = value.settings?.model || '';
   }
@@ -71,8 +78,7 @@ function renderStatus(value) {
   const available = connected && value.adapter.available;
   $('start').disabled = !available || (value.stopped && !value.canRestart) || value.state !== 'offline';
   $('prompt').disabled = !connected || !draftLoaded || switching;
-  $('send').disabled = !available || !draftLoaded || switching || (value.stopped && !value.canRestart);
-  $('say-something').disabled = !connected || !draftLoaded || switching;
+  renderComposer();
   $('conversation-select').disabled = !connected || switching;
   $('branch-conversation').disabled = !connected || switching || !draftLoaded || !value.branch?.ready;
   $('branch-conversation').title = value.branch?.reason || 'Native branching is unavailable in this bridge version.';
@@ -201,7 +207,9 @@ function connect() {
     return;
   }
   clearTimeout(reconnect);
-  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/events/${provider}?since=${sequence}`);
+  const cursor = new URLSearchParams({since: String(sequence), conversationId: state?.conversationId || '',
+    revision: String(state?.selectionRevision ?? '')});
+  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/events/${provider}?${cursor}`);
   socket.addEventListener('open', () => { connected = true; refresh(); });
   socket.addEventListener('message', message => {
     const value = JSON.parse(message.data);
@@ -219,12 +227,14 @@ function connect() {
   });
 }
 async function submit(kind, content = '', startAnyway = false) {
-  if (pendingSend?.sending) return;
+  if (pendingSend?.sending || switching || !connected || (kind === 'prompt' && (!draftLoaded || !content.trim()))) return;
   manualNotice = null;
-  const id = pendingSend && pendingSend.kind === kind && pendingSend.text === content
+  const id = pendingSend && pendingSend.conversationId === state.conversationId && pendingSend.kind === kind && pendingSend.text === content
     ? pendingSend.id : crypto.randomUUID();
   const conversationId = state.conversationId;
-  pendingSend = {id, kind, text: content, conversationId, sending: true};
+  const request = {id, kind, text: content, conversationId, sending: true};
+  pendingSend = request;
+  renderComposer();
   try {
     const body = {id, kind, text: content, conversationId};
     if (kind === 'prompt') body.startIfNeeded = true;
@@ -236,11 +246,11 @@ async function submit(kind, content = '', startAnyway = false) {
       clearTimeout(draftTimer); $('prompt').value = '';
       localDrafts.set(conversationId, {text:'', dirty:true}); await saveDraft('', conversationId);
     }
-    pendingSend = null;
+    if (pendingSend === request) pendingSend = null;
     await refresh();
   } catch (error) {
-    if (pendingSend?.conversationId !== conversationId) return;
-    pendingSend.sending = false;
+    if (pendingSend !== request) return;
+    request.sending = false;
     if (error.code === 'operator_conflict') {
       $('conflict-message').textContent = `${error.message} Active: ${error.details.conflicts.join(', ')}.`;
       $('conflict').hidden = false; $('start-anyway').focus(); return;
@@ -253,10 +263,13 @@ async function submit(kind, content = '', startAnyway = false) {
     } catch {
       notice(`${error.message} Command ${id}: outcome unknown. Any manual retry of unchanged input keeps this same identifier.`, true);
     }
+  } finally {
+    renderComposer();
   }
 }
 $('composer').addEventListener('submit', event => { event.preventDefault(); submit('prompt', $('prompt').value); });
 $('prompt').addEventListener('input', () => {
+  renderComposer();
   clearTimeout(draftTimer);
   const conversationId = draftConversation, value = $('prompt').value;
   localDrafts.set(conversationId, {text:value, dirty:true});
@@ -297,9 +310,22 @@ $('settings-form').addEventListener('submit', async event => {
     if (state?.conversationId === conversationId) notice('Settings saved for this conversation. The next explicit Send resumes with these settings.');
   } catch (error) { notice(error.message, true); }
 });
-$('say-something').addEventListener('click', () => {
-  $('prompt').value = 'Say hello briefly. Do not use tools or inspect files.';
-  $('prompt').dispatchEvent(new Event('input')); $('prompt').focus();
+$('interrupt').addEventListener('click', async () => {
+  if (!connected || switching || interruptPending || !state?.activeCommandId) return;
+  const request = {conversationId: state.conversationId, id: state.activeCommandId};
+  interruptPending = request; manualNotice = null; renderComposer();
+  try {
+    const command = await api(`/api/commands/${encodeURIComponent(request.id)}/cancel`, {conversationId: request.conversationId});
+    if (state?.conversationId === request.conversationId) {
+      notice(command.state === 'unknown' ? 'Interrupt outcome is unknown. Inspect Recent commands; do not resend.'
+        : 'Interrupt request finished. Queued messages remain in order.', command.state === 'unknown');
+    }
+  } catch (error) {
+    if (state?.conversationId === request.conversationId) notice(error.message, true);
+  } finally {
+    if (interruptPending === request) interruptPending = null;
+    renderComposer(); await refresh();
+  }
 });
 async function chooseConversation(choice, startAnyway = false) {
   if (switching || !draftLoaded) return;
@@ -327,8 +353,7 @@ async function chooseConversation(choice, startAnyway = false) {
     switching = false;
     $('conversation-select').disabled = !connected;
     $('prompt').disabled = !connected || !draftLoaded;
-    $('send').disabled = !connected || !draftLoaded || !state.adapter.available || (state.stopped && !state.canRestart);
-    $('say-something').disabled = !connected || !draftLoaded;
+    renderComposer();
     $('branch-conversation').disabled = !connected || !draftLoaded || !state.branch?.ready;
   }
 }

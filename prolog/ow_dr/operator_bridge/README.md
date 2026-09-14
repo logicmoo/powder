@@ -140,10 +140,11 @@ authenticates the **human to the bridge**, not either native provider account.
 ### Chat-first, multiple durable conversations
 
 Both embedded and standalone views have a **Conversation** dropdown with **New
-conversation…** and previous conversations, a composer with **Send**, a **Say
-something** text starter, and a **Settings** toggle. Say something only fills an
-editable greeting instructing the model not to use tools or inspect files; it
-does not submit it. Tests never press this button. Settings contains model
+conversation…** and previous conversations, a composer with **Send** when idle
+or **Enqueue** while work is pending, **Interrupt**, and a **Settings** toggle.
+No greeting shortcut or generated greeting is offered while its intended meaning
+is unconfirmed. Empty/disconnected Send and inactive Interrupt controls are
+visibly disabled, including on hover. Settings contains model
 selection, explicit native Start/resume, status/identity, command controls,
 recorded events and Stop. Pending native permissions remain visible **outside**
 collapsed Settings. The main transcript shows human/assistant messages and
@@ -207,9 +208,22 @@ cannot route an old request there. Explicit Send uses
 two-provider warning applies to this startup path too: explicit **Start anyway**
 resubmits the same identifier with `startAnyway:true`, never grants permissions.
 
+Enqueue uses the existing command FIFO and exact same idempotent prompt endpoint;
+it does not start a parallel turn or silently interrupt existing work. Status
+adds `workPending:boolean` and `activeCommandId:string|null` inside the operator
+origin only. **Interrupt** captures that command ID plus the selected conversation
+and calls `/commands/{id}/cancel`; it does not stop the provider or remove queued
+messages. Dispatch of the next FIFO item waits for the previous interrupt
+acknowledgement, and native adapters retain the interrupted turn's own completion
+future. Interrupt during startup suppresses the pending prompt. Unknown native
+outcomes are reported, not interpreted as permission to replay.
+
 Selection revisions prevent delayed read/stream responses from replacing a
 newer conversation in the UI. Event cursors reset only when the selected
-conversation changes; durable event watermarks remain per conversation.
+selection changes, including rapid A→B→A switches between output polls; durable
+event watermarks remain per conversation. Standalone reconnect cursors include
+the app conversation ID and selection revision so another selection's cursor
+cannot suppress history. These are public identity fields, not credentials.
 Complete embedded snapshots retain their 1 MiB serialized budget. Catalog reads
 are separate, bounded by the 500-conversation/120-character-title limits.
 Unflushed drafts also remain in frame-local memory by conversation when another
@@ -271,10 +285,11 @@ existing 8063 bridge, or perform real native/model turns.
 
 Validation for this stage: native SDK/stdio fixture tests exercise distinct
 native IDs, New/Previous, restart/resume, draft/model persistence, idempotency,
-cancel/permission routing, native forks and cancelled detach. Seven real Chromium scenarios
+cancel/permission routing, native forks and cancelled detach. Eight real Chromium scenarios
 cover standalone and embedded chat, stale/delayed responses, Unicode replay,
 permissions outside Settings, origin/window isolation, liveness recovery,
-branch acknowledgement/provenance, and disabled styles including hover/active.
+branch acknowledgement/provenance, FIFO Enqueue/Interrupt, and disabled styles
+including hover/active.
 These are synthetic conversations, not evidence of a logged-in account or
 successful real model inference.
 

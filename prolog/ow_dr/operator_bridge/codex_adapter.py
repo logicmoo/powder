@@ -266,9 +266,10 @@ class CodexAdapter:
     async def cancel(self) -> bool:
         if self.turn_id is None or self.terminal is None or self.terminal.done():
             return False
+        terminal = self.terminal
         await self.rpc.call("turn/interrupt", {"threadId": self.session_id, "turnId": self.turn_id}, timeout=15)
         try:
-            return await asyncio.wait_for(asyncio.shield(self.terminal), 15) == "cancelled"
+            return await asyncio.wait_for(asyncio.shield(terminal), 15) == "cancelled"
         except asyncio.TimeoutError:
             self.uncertain = True
             return False

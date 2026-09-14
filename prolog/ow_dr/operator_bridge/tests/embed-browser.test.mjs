@@ -74,6 +74,61 @@ async function pairFrame(child) {
   await child.until('document.querySelector("#bridge")?.textContent === "Online"');
 }
 
+test('Send becomes Enqueue; Interrupt targets active work and preserves each native provider FIFO', {
+  timeout: 90000, skip: !existsSync(executable) || !existsSync(python),
+}, async () => {
+  const fixture = await startFixture(), browser = await launchChromium(executable);
+  const {send, evaluate, wait} = browser;
+  const stats = async () => (await fetch(fixture.parentURL + '/fixture/stats')).json();
+  try {
+    await send('Page.navigate', {url:fixture.parentURL});
+    await wait('window.states?.copilot?.status === "pairing"');
+    for (const provider of ['copilot', 'codex']) {
+      await evaluate(`document.getElementById('${provider}').click()`);
+      const child = await attachFrame(browser, provider);
+      await pairFrame(child);
+      await child.until('!document.querySelector("#prompt").disabled');
+      assert.equal(await child.run('document.querySelector("#send").disabled'), true);
+      assert.equal(await child.run('document.querySelector("#interrupt").disabled'), true);
+      assert.equal(await child.run('getComputedStyle(document.querySelector("#send")).backgroundColor'), 'rgb(223, 229, 236)');
+      assert.equal(await child.run('document.querySelector("#say-something")'), null);
+      const enter = text => child.run(`document.querySelector("#prompt").value=${JSON.stringify(text)};
+        document.querySelector("#prompt").dispatchEvent(new Event("input")); document.querySelector("#send").click()`);
+      await enter('hang');
+      if (provider === 'codex') {
+        await child.until('!document.querySelector("#conflict").hidden');
+        await child.run('document.querySelector("#start-anyway").click()');
+      }
+      await child.until('!document.querySelector("#interrupt").disabled && document.querySelector("#send").textContent === "Enqueue" && document.querySelector("#prompt").value === ""');
+      const active = await child.run('operatorEmbed.api("/api/status")');
+      assert.ok(active.activeCommandId);
+      assert.equal(active.workPending, true);
+      for (const text of ['queued one', 'queued two']) {
+        await enter(text);
+        await child.until('document.querySelector("#prompt").value === ""');
+      }
+      const queued = await child.run('operatorEmbed.api("/api/status")');
+      assert.equal(queued.commands.filter(command => command.state === 'queued').length, 2);
+      await wait(`fetch('/fixture/stats').then(r=>r.json()).then(value=>value.${provider}Prompts === 1)`);
+      assert.equal((await stats())[provider + 'Prompts'], 1, 'Enqueue does not dispatch parallel native turns');
+      const running = await child.run('operatorEmbed.api("/api/status")');
+      assert.equal(running.activeCommandId, active.activeCommandId);
+      assert.equal(await child.run('document.querySelector("#inspector").hidden'), true);
+      await child.run('document.querySelector("#interrupt").click()');
+      await child.until('document.querySelector("#send").textContent === "Send" && document.querySelector("#interrupt").disabled');
+      const finished = await child.run('operatorEmbed.api("/api/status")');
+      assert.equal(finished.commands.find(command => command.id === active.activeCommandId).state, 'cancelled');
+      assert.equal(finished.commands.filter(command => command.state === 'complete').length, 2);
+      assert.equal(finished.nativeSessionId, running.nativeSessionId);
+      assert.equal((await stats())[provider + 'Prompts'], 3);
+      const roles = await child.run('[...document.querySelectorAll("#transcript li")].filter(node=>node.querySelector(".event-label").textContent==="You").map(node=>node.querySelector("pre").textContent)');
+      assert.deepEqual(roles, ['hang','queued one','queued two']);
+      await child.run(`operatorEmbed.api('/api/commands/${active.activeCommandId}/cancel',{conversationId:${JSON.stringify(active.conversationId)}})`);
+      assert.equal((await stats())[provider + 'Prompts'], 3, 'repeated old Interrupt cannot replay or cancel later work');
+    }
+  } finally { await browser.close(); await fixture.close(); }
+});
+
 test('disabled controls stay visibly disabled; Codex forks only on explicit Branch and keeps approvals scoped', {
   timeout: 90000, skip: !existsSync(executable) || !existsSync(python),
 }, async () => {
@@ -85,7 +140,7 @@ test('disabled controls stay visibly disabled; Codex forks only on explicit Bran
     await wait('window.states?.copilot?.status === "pairing"');
     const copilot = await attachFrame(browser, 'copilot');
     await pairFrame(copilot);
-    await copilot.until('!document.querySelector("#send").disabled');
+    await copilot.until('!document.querySelector("#prompt").disabled');
     assert.equal(await copilot.run('document.querySelector("#branch-conversation").disabled'), true);
     assert.match(await copilot.run('document.querySelector("#branch-conversation").title'), /no public conversation fork/);
     const style = '(() => { const s=getComputedStyle(document.querySelector("#branch-conversation")); return {background:s.backgroundColor,color:s.color,opacity:s.opacity,cursor:s.cursor}; })()';
@@ -100,7 +155,7 @@ test('disabled controls stay visibly disabled; Codex forks only on explicit Bran
     await evaluate('document.getElementById("codex").click()');
     const codex = await attachFrame(browser, 'codex');
     await pairFrame(codex);
-    await codex.until('!document.querySelector("#send").disabled');
+    await codex.until('!document.querySelector("#prompt").disabled');
     assert.equal(await codex.run('document.querySelector("#branch-conversation").disabled'), true);
     assert.equal((await stats()).codexForks, 0);
     await codex.run('document.querySelector("#prompt").value="permission"; document.querySelector("#composer").requestSubmit()');
@@ -160,18 +215,18 @@ test('standalone recovery offers the same chat-first history and native controls
     await send('Page.navigate', {url: fixture.bridgeURL});
     await wait('document.querySelector("#phrase")');
     await evaluate('document.querySelector("#phrase").value="isolated fixture pairing phrase"; document.querySelector("form").requestSubmit()');
-    await wait('document.querySelector("#send")?.disabled === false');
+    await wait('document.querySelector("#prompt")?.disabled === false');
     assert.equal(await evaluate('document.querySelector("#inspector").hidden'), true);
     const original = await evaluate('document.querySelector("#conversation-select").value');
     await evaluate('document.querySelector("#prompt").value="standalone original draft"; document.querySelector("#prompt").dispatchEvent(new Event("input"))');
     await evaluate('document.querySelector("#conversation-select").value="__new__"; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))');
-    await wait(`document.querySelector("#conversation-select").value !== ${JSON.stringify(original)} && document.querySelector("#conversation-select").value !== "__new__" && !document.querySelector("#send").disabled`);
+    await wait(`document.querySelector("#conversation-select").value !== ${JSON.stringify(original)} && document.querySelector("#conversation-select").value !== "__new__" && !document.querySelector("#prompt").disabled`);
     const second = await evaluate('document.querySelector("#conversation-select").value');
     assert.equal(await evaluate('document.querySelector("#prompt").value'), '');
     await evaluate('document.querySelector("#prompt").value="standalone synthetic fixture"; document.querySelector("#composer").requestSubmit()');
     await wait('document.querySelector("#transcript").textContent.includes("fixture output")');
     await evaluate(`document.querySelector("#conversation-select").value=${JSON.stringify(original)}; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))`);
-    await wait('document.querySelector("#prompt").value === "standalone original draft"');
+    await wait('document.querySelector("#prompt").value === "standalone original draft" && !document.querySelector("#conversation-select").disabled');
     assert.equal(await evaluate('document.querySelector("#transcript").textContent.includes("fixture output")'), false);
     await evaluate(`document.querySelector("#conversation-select").value=${JSON.stringify(second)}; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))`);
     await wait('document.querySelector("#transcript").textContent.includes("fixture output")');
@@ -203,9 +258,10 @@ test('chat-first operators keep real native conversations, drafts, settings and 
       const child = await attachFrame(browser, provider);
       lastChild = child;
       await pairFrame(child);
-      await child.until('!document.querySelector("#send").disabled');
+      await child.until('!document.querySelector("#prompt").disabled');
       assert.equal(await child.run('document.querySelector("#inspector").hidden'), true);
-      assert.equal(await child.run('document.querySelector("#say-something").textContent'), 'Say something');
+      assert.equal(await child.run('document.querySelector("#say-something")'), null);
+      assert.equal(await child.run('document.querySelector("#interrupt").disabled'), true);
       const original = await child.run('operatorEmbed.api("/api/status")');
       const before = await stats();
       assert.equal(original.nativeSessionId, null);
@@ -235,7 +291,7 @@ test('chat-first operators keep real native conversations, drafts, settings and 
         document.querySelector("#settings-form").requestSubmit()`);
       await child.until('typeof window.releaseOldStatus === "function"');
       await child.run('document.querySelector("#conversation-select").value="__new__"; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))');
-      await child.until(`document.querySelector("#conversation-select").value !== ${JSON.stringify(original.conversationId)} && document.querySelector("#conversation-select").value !== "__new__" && !document.querySelector("#send").disabled`);
+      await child.until(`document.querySelector("#conversation-select").value !== ${JSON.stringify(original.conversationId)} && document.querySelector("#conversation-select").value !== "__new__" && !document.querySelector("#prompt").disabled`);
       const second = await child.run('operatorEmbed.api("/api/status")');
       await child.run('window.releaseOldStatus(); window.fetch = window.fixtureFetch');
       await pause(100);

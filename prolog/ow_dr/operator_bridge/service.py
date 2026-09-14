@@ -42,6 +42,8 @@ class OperatorService:
         self.control_lock = asyncio.Lock()
         self.changed = asyncio.Condition()
         self.active: str | None = None
+        self.interrupting: str | None = None
+        self.dispatching: str | None = None
         self.branching = False
         self.task: asyncio.Task | None = None
         self.connected = False
@@ -84,7 +86,7 @@ class OperatorService:
     def _gate_selection(self):
         pending = self.journal.db.execute(
             "SELECT 1 FROM commands WHERE state IN ('queued','running','awaiting_permission') LIMIT 1").fetchone()
-        if (self.active or self.waiters or not self.queue.empty() or pending
+        if (self.active or self.dispatching or self.interrupting or self.waiters or not self.queue.empty() or pending
                 or self.journal.get("unsettled_native")
                 or (getattr(self.adapter, "uncertain", False) and self.stop_outcome != "confirmed")):
             raise BridgeError("conversation_busy", "Finish/cancel work and resolve permissions or unknown outcomes before switching.", 409)
@@ -102,7 +104,7 @@ class OperatorService:
 
     def branch_capability(self):
         supported = self.provider == "codex" and hasattr(self.adapter, "fork") and self.adapter.available
-        unsettled = bool(self.active or self.waiters or not self.queue.empty() or self.branching
+        unsettled = bool(self.active or self.dispatching or self.interrupting or self.waiters or not self.queue.empty() or self.branching
                          or self.journal.get("unsettled_native") or self.stop_outcome == "unknown"
                          or (self.stopped and self.adapter_factory is None)
                          or (getattr(self.adapter, "uncertain", False) and self.stop_outcome != "confirmed"))
@@ -313,17 +315,19 @@ class OperatorService:
     async def _worker(self) -> None:
         while True:
             command_id, kind, text, principal, start_if_needed = await self.queue.get()
+            self.dispatching = command_id
             dispatched = False
             try:
-                if self.journal.command(command_id)["state"] != "queued":
-                    continue
-                if self.stopped:
-                    self.journal.state(command_id, "cancelled", "Operator was explicitly stopped.")
-                    continue
-                self.verify()
-                self.active = command_id
-                self.journal.state(command_id, "running")
-                await self.notify()
+                async with self.control_lock:
+                    if self.journal.command(command_id)["state"] != "queued":
+                        continue
+                    if self.stopped:
+                        self.journal.state(command_id, "cancelled", "Operator was explicitly stopped.")
+                        continue
+                    self.verify()
+                    self.active = command_id
+                    self.journal.state(command_id, "running")
+                    await self.notify()
                 self.human(principal)
                 if kind == "start_session" or (start_if_needed and not self.connected):
                     if self.connected:
@@ -350,6 +354,10 @@ class OperatorService:
                     self.journal.set("unsettled_native", False)
                     self.journal.event("session.connected", {"sessionId": session_id, "adapter": self.adapter.name})
                 if kind == "prompt":
+                    if (self.stopped or self.interrupting == command_id
+                            or self.journal.command(command_id)["state"] not in ("running", "awaiting_permission")):
+                        self.journal.state(command_id, "cancelled", "Interrupted before prompt dispatch.")
+                        continue
                     self.human(principal)
                     if not self.connected:
                         raise BridgeError("session_not_started", "Start or explicitly resume the operator session first.")
@@ -379,6 +387,7 @@ class OperatorService:
             finally:
                 self._expire_permissions()
                 self.active = None
+                self.dispatching = None
                 self.queue.task_done()
                 await self.notify()
 
@@ -450,6 +459,9 @@ class OperatorService:
         if command["state"] == "queued":
             self.journal.state(command_id, "cancelled", "Cancelled before dispatch.")
         elif command["state"] in ("running", "awaiting_permission"):
+            if self.active != command_id:
+                raise BridgeError("command_not_active", "That command is not the selected active work.", 409)
+            self.interrupting = command_id
             for request_id, future in list(self.waiters.items()):
                 if not future.done():
                     self.journal.decide(request_id, "deny")
@@ -458,9 +470,14 @@ class OperatorService:
                 confirmed = await self.adapter.cancel()
             except Exception:
                 confirmed = False
+            finally:
+                self.interrupting = None
             if self.journal.command(command_id)["state"] in ("running", "awaiting_permission"):
                 self.journal.state(command_id, "cancelled" if confirmed else "unknown",
                                    "Cancellation confirmed." if confirmed else "Cancellation outcome is unknown; do not resend.")
+                if not confirmed:
+                    self.connected = False
+                    self.journal.set("unsettled_native", True)
         await self.notify()
         return self.journal.command(command_id)
 
@@ -504,7 +521,8 @@ class OperatorService:
 
     def status(self) -> dict:
         adapter = self.adapter.status()
-        state = ("awaiting_permission" if self.waiters else "busy" if self.active or self.branching
+        work_pending = bool(self.active or self.dispatching or self.interrupting or not self.queue.empty())
+        state = ("awaiting_permission" if self.waiters else "busy" if work_pending or self.branching
                  else "idle" if self.connected and not self.stopped else "offline")
         if state == "idle" and adapter.get("connected") is False:
             state = "offline"
@@ -512,6 +530,7 @@ class OperatorService:
                 "name": provider_label(self.provider), "role": provider_label(self.provider),
                 "outputSource": self.provider,
                 "state": state, "stopped": self.stopped, "stopOutcome": self.stop_outcome,
+                "activeCommandId": self.active, "workPending": work_pending,
                 "canRestart": self.stopped and self.stop_outcome == "confirmed" and self.adapter_factory is not None,
                 "bridge": {"online": True, "pid": os.getpid(), "instanceId": self.instance_id},
                 "workspace": self.workspace.json(), "conversationId": self.journal.get("conversation_id"),

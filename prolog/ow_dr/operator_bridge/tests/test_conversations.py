@@ -370,3 +370,76 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
             await restarted.select_conversation("browser", source, identifier)
         self.assertEqual(error.exception.code, "branch_incomplete")
         self.assertEqual(self.rpcs, [])
+
+    async def test_native_interrupt_ack_cannot_retarget_the_next_fifo_command(self):
+        for provider in ("copilot", "codex"):
+            with self.subTest(provider=provider):
+                service = await self.make(provider)
+                original = await self.submit(service, "hang", "active")
+                await until(lambda: service.active and service.adapter.terminal is not None
+                            and (provider != "codex" or service.adapter.turn_id is not None))
+                await self.submit(service, "after interruption", "queued")
+                entered, release = asyncio.Event(), asyncio.Event()
+                cancel = service.adapter.cancel
+
+                async def delayed_cancel():
+                    result = await cancel()
+                    entered.set()
+                    await release.wait()
+                    return result
+
+                service.adapter.cancel = delayed_cancel
+                operation = asyncio.create_task(service.cancel("browser", original["id"],
+                    expected=service.journal.get("conversation_id")))
+                try:
+                    await entered.wait()
+                    self.assertEqual(service.journal.command("queued")["state"], "queued")
+                    self.assertTrue(service.status()["workPending"])
+                finally:
+                    release.set()
+                    await operation
+                await settle(service)
+                self.assertEqual(service.journal.command("active")["state"], "cancelled")
+                self.assertEqual(service.journal.command("queued")["state"], "complete")
+                self.assertFalse(service.status()["workPending"])
+                self.assertIsNone(service.status()["activeCommandId"])
+                sequence = service.journal.latest()
+                await service.cancel("browser", "active", expected=service.journal.get("conversation_id"))
+                self.assertEqual(service.journal.latest(), sequence, "repeated Interrupt never reruns/cancels later work")
+
+    async def test_interrupt_during_native_start_prevents_the_prompt_from_dispatching(self):
+        for provider in ("copilot", "codex"):
+            with self.subTest(provider=provider):
+                service = await self.make(provider)
+                entered, release = asyncio.Event(), asyncio.Event()
+
+                async def delayed_version(command, cwd):
+                    entered.set()
+                    await release.wait()
+                    return await fake_version(command, cwd)
+
+                service.adapter.version_probe = delayed_version
+                command = await self.submit(service, "must not dispatch")
+                await entered.wait()
+                try:
+                    await service.cancel("browser", command["id"], expected=service.journal.get("conversation_id"))
+                finally:
+                    release.set()
+                await settle(service)
+                self.assertEqual(service.journal.command(command["id"])["state"], "cancelled")
+                self.assertFalse(any(event["kind"] == "assistant.output" for event in service.journal.events(0)["events"]))
+
+    async def test_cancelled_fifo_entry_cannot_follow_a_conversation_switch(self):
+        service = await self.make("codex")
+        source = service.journal.get("conversation_id")
+        await self.submit(service, "cancelled before dispatch", "cancelled")
+        await service.cancel("browser", "cancelled", expected=source)
+        async with service.control_lock:
+            await until(lambda: service.dispatching == "cancelled")
+            with self.assertRaises(BridgeError) as error:
+                service._gate_selection()
+            self.assertEqual(error.exception.code, "conversation_busy")
+        await settle(service)
+        await service.select_conversation("browser", source, str(uuid.uuid4()), create=True)
+        self.assertEqual(service.journal.events(0)["events"], [])
+        self.assertEqual(self.rpcs, [])

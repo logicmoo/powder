@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import socket
 import uuid
@@ -125,6 +126,22 @@ class EmbedTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("Access-Control-Allow-Origin", response.headers)
         self.assertFalse(self.hub.get("copilot").adapter.starts)
         self.assertFalse(self.hub.get("codex").adapter.starts)
+
+    async def test_rapid_return_to_same_conversation_resets_embedded_cursor(self):
+        paired = await self.pair()
+        operator = self.hub.get("copilot")
+        operator.journal.event("assistant.output", {"text": "retained fixture"})
+        original = operator.journal.get("conversation_id")
+        stream = await self.stream("copilot", paired)
+        principal = next(iter(operator.connections))
+        other = str(uuid.uuid4())
+        await operator.select_conversation(principal, original, other, create=True)
+        await operator.select_conversation(principal, other, original)
+        async with asyncio.timeout(3):
+            frame = json.loads(await stream.content.readline())
+        self.assertEqual(frame["data"]["selectionRevision"], operator.catalog.revision())
+        self.assertEqual(frame["events"][0]["data"]["text"], "retained fixture")
+        self.assertFalse(operator.adapter.sent)
 
     async def test_cookie_and_embed_auth_are_not_interchangeable(self):
         paired = await self.pair()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import unittest
+import uuid
 
 from aiohttp import ClientSession, WSMsgType, web
 
@@ -112,6 +113,35 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.adapter.approved)
         repeated = await self.post("/api/permissions/" + permission["id"], {"decision": "deny"})
         self.assertEqual(repeated.status, 200)
+
+    async def test_rapid_conversation_roundtrip_replays_by_selection_revision(self):
+        self.journal.event("assistant.output", {"text": "durable fixture history"})
+        await self.connect()
+        first = await self.ws.receive_json()
+        self.assertEqual(first["type"], "events")
+        original = self.journal.get("conversation_id")
+        principal = next(iter(self.service.connections))
+        other = str(uuid.uuid4())
+        await self.service.select_conversation(principal, original, other, create=True)
+        await self.service.select_conversation(principal, other, original)
+        async with asyncio.timeout(3):
+            while True:
+                frame = await self.ws.receive_json()
+                if frame["type"] == "events":
+                    self.assertEqual(frame["selectionRevision"], self.service.catalog.revision())
+                    self.assertEqual(frame["events"], first["events"])
+                    break
+        self.assertEqual(self.adapter.sent, [])
+
+    async def test_reconnect_cursor_from_other_selection_is_reset(self):
+        self.journal.event("assistant.output", {"text": "current fixture history"})
+        self.ws = await self.client.ws_connect(
+            f"{self.base}/events?since=999&conversationId={uuid.uuid4()}&revision=0", headers=self.paired)
+        await self.ws.receive_json()
+        async with asyncio.timeout(3):
+            frame = await self.ws.receive_json()
+        self.assertEqual(frame["type"], "events")
+        self.assertEqual(frame["events"][0]["data"]["text"], "current fixture history")
 
     async def test_logout_closes_stream_and_revokes_input(self):
         await self.connect()
