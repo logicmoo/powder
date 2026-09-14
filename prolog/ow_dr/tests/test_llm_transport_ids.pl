@@ -12,6 +12,9 @@ fixture_request(Request) :-
       reply_json_dict(_{data:[_{id:"gpt-5.6-sol"}]})
     ;Path=='/v1/chat/completions'->
       http_read_json_dict(Request,Body),assertz(observed(chat,Body)),
+      findall(Name-Value,(member(Header,Request),compound(Header),
+        compound_name_arguments(Header,Name,[Value]),sub_atom(Name,0,1,_,x)),Headers),
+      assertz(observed(headers,Headers)),
       (Body.model=="openai/gpt-5.6-sol"->
         reply_json_dict(_{choices:[_{message:_{role:"assistant",content:"Synthetic accepted alias."}}]})
       ;reply_json_dict(_{error:_{code:"model_not_found",message:"Synthetic rejected model."}},[status(400)]))
@@ -54,4 +57,13 @@ test(knowledge_requests_use_the_same_exact_alias_transport,
       [_{role:"user",content:"Synthetic approved fixture context."}],Tools,_),
     observed(chat,Sent),assertion(Sent.model=="openai/gpt-5.6-sol"),
     assertion(Sent.tools\=[]),assertion(\+observed(models,_)).
+test(correlation_headers_do_not_change_model_or_add_preflight,
+     [setup(setup_fixture(State,Config)),cleanup(cleanup_fixture(State))]) :-
+    kb_llm_transport:chat_completion(Config.put(_{requestId:"fixture-request-1",conversation:"fixture-conversation-1"}),
+      [_{role:"user",content:"Synthetic correlation fixture."}],[],_),
+    observed(headers,Headers),
+    assertion(member(x_request_id-'fixture-request-1',Headers)),
+    assertion(member(x_emullm_client_id-'fixture-conversation-1',Headers)),
+    observed(chat,Sent),assertion(Sent.model=="openai/gpt-5.6-sol"),
+    assertion(\+observed(models,_)).
 :- end_tests(llm_explicit_transport).

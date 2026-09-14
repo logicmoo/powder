@@ -1,3 +1,5 @@
+import { timelineModel, renderRequestTimeline } from './agent-timeline.js';
+
 // Extend powder's operating workspace: text conversation left, inspectable controls right.
 // Keep the established palette and typography; explicit export consent precedes every Chat.
 let nextViewId = 0;
@@ -115,6 +117,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   const identity = el('p', { className: 'llm-identity' }, 'Loading registered settings…');
   const feedback = el('p', { role: 'status', 'aria-live': 'polite', className: 'llm-feedback' });
   const transcript = el('section', { className: 'llm-transcript', 'aria-label': 'LLM text conversation' });
+  const timeline = el('div', {});
   const text = el('textarea', { rows: 4, maxLength: 8192, name: 'llm-message',
     placeholder: 'Write a message. Send starts a new conversation if needed.',
     oninput: () => { invalidatePreview(); persistDraft(); updateControls(); } });
@@ -161,7 +164,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   const main = el('section', { className: 'llm-chat' }, identity,
     el('div', { className: 'llm-history' }, historyPicker,
       settingsToggle),
-    transcript, composer, feedback);
+    timeline, transcript, composer, feedback);
   const inspector = el('aside', { id: `${viewId}-inspector`, className: 'llm-inspector', hidden: true,
     'aria-label': 'LLM agent inspector' });
   const historyTools = el('div', { className: 'llm-history-tools' },
@@ -252,6 +255,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   const sequences = new Map();
   const historyEntries = new Map();
   let elapsedTimer, elapsedNodes = [];
+  let clientSteps = [];
   for (const input of [termKeys, readMts, writeMts]) input.addEventListener('input', () => {
     invalidatePreview();
     groundingPreview.replaceChildren(el('p', { className: 'muted' }, 'Selectors changed. Start a new conversation to apply a different scope.'));
@@ -436,6 +440,10 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     clearTimeout(elapsedTimer);
     if (disposed || !active || document.hidden) return;
     const now = Date.now() / 1000;
+    for (const step of clientSteps) {
+      if (step.status === 'running') step.elapsedMs = performance.now() - step.started;
+    }
+    timeline.replaceChildren(renderRequestTimeline(el, timelineModel(conversation, clientSteps, now)));
     for (const item of elapsedNodes) {
       const ended = Number.isFinite(item.outcome?.at);
       const age = elapsedText((ended ? item.outcome.at : now) - item.at);
@@ -445,10 +453,25 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
           : ended ? `Completed after ${age}` : `${age} since sent`;
       item.node.textContent = `Sent ${new Date(item.at * 1000).toLocaleTimeString()} · ${progress}`;
     }
-    if (elapsedNodes.some(item => !Number.isFinite(item.outcome?.at))) elapsedTimer = setTimeout(tickElapsed, 1000);
+    if (elapsedNodes.some(item => !Number.isFinite(item.outcome?.at))
+        || clientSteps.some(step => step.status === 'running') || conversation?.status === 'running')
+      elapsedTimer = setTimeout(tickElapsed, 1000);
   }
   async function request(path, body) {
-    return api(`llm/${path}`, {}, { method: 'POST', body, signal });
+    const names = { start: 'Create conversation snapshot', chat: 'Submit message to powder',
+      'queue/enqueue': 'Persist queued message', 'queue/resume': 'Resume queued work' };
+    const step = names[path] ? { label: names[path], started: performance.now(), elapsedMs: 0, status: 'running' } : null;
+    if (step) { clientSteps.push(step); clientSteps = clientSteps.slice(-8); tickElapsed(); }
+    try {
+      const result = await api(`llm/${path}`, {}, { method: 'POST', body, signal });
+      if (step) step.status = 'completed';
+      return result;
+    } catch (error) {
+      if (step) step.status = 'failed';
+      throw error;
+    } finally {
+      if (step) { step.elapsedMs = performance.now() - step.started; tickElapsed(); }
+    }
   }
   async function action(operation) {
     if (pending || disposed) return;
@@ -464,6 +487,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     finally { pending = false; if (!disposed) updateControls(); }
   }
   async function startConversation() {
+    clientSteps = [];
     await action(async () => {
       const selectedMode = chatMode.value;
       const scope = selectedMode === 'plain' ? emptyScope() : selectedScope();
@@ -587,6 +611,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     if (first ? firstReply.disabled : send.disabled) return;
     const sent = first ? preset : text.value, plain = chatMode.value === 'plain', authorized = grant;
     const enqueue = send.textContent === 'Enqueue';
+    if (!enqueue) clientSteps = [];
     grant = null;
     await action(async () => {
       if (!conversation) {
@@ -713,6 +738,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   async function openSelectedConversation() {
     const selected = historyPicker.value;
     if (!selected || pending) return;
+    clientSteps = [];
     if (selected === '__new__') { await startConversation(); return; }
     await action(async () => {
       persistDraft();

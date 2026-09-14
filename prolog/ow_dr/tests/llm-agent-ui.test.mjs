@@ -99,7 +99,7 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
         </script></html>`);
       return;
     }
-    if (['/style.css', '/agents.css', '/llm-knowledge-agent.css', '/llm-knowledge-agent.js'].includes(url.pathname)) {
+    if (['/style.css', '/agents.css', '/agent-timeline.js', '/llm-knowledge-agent.css', '/llm-knowledge-agent.js'].includes(url.pathname)) {
       res.setHeader('Content-Type', url.pathname.endsWith('.js') ? 'text/javascript' : 'text/css');
       res.end(await readFile(join(here, '..', 'web', url.pathname.slice(1)))); return;
     }
@@ -237,6 +237,7 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     assert.equal(requests.some(r => r.action === 'chat'), false);
     await browser.evaluate(`[...teacher.element.querySelectorAll('button')].find(b=>b.textContent.startsWith('Undo ')).click()`);
     await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Local changeset committed')`);
+    await browser.wait(`!teacher.getState().pending`);
     assert.equal(requests.find(r => r.action === 'todos/undo').body.id, 'c-fixture');
     assert.equal(requests.find(r => r.action === 'todos/undo').body.action, 'kee_undo');
     await click('Preview this turn locally');

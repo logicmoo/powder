@@ -8,6 +8,7 @@
 :- use_module(library(time)).
 :- use_module(library(utf8)).
 :- use_module(library(readutil)).
+:- use_module(library(uuid)).
 
 discover_models(Reply) :-
     agent_settings(Settings),
@@ -26,11 +27,27 @@ chat_completion(Config,Messages,Tools,Reply) :-
     Payload0=_{model:Config.model,messages:Messages,stream:false,
                max_tokens:Config.budgets.tokens},
     (Tools==[]->Payload=Payload0;Payload=Payload0.put(tools,Tools)),
+    completion_headers(Config,Headers),
     % Discovery is a suggestion catalog, not an acceptance gate for explicit aliases.
     call_with_time_limit(Config.budgets.seconds,
-      provider_json(post,Config.baseURL,"chat/completions",Payload,Reply)).
+      provider_request(post,Config.baseURL,"chat/completions",Payload,Headers,Reply)).
+
+completion_headers(Config,Headers) :-
+    (get_dict(requestId,Config,RequestId)->true;uuid(RequestId)),
+    header_value(RequestId,RequestText),
+    Base=[request_header('X-Request-ID'=RequestText)],
+    (get_dict(conversation,Config,Conversation)->
+      header_value(Conversation,Client),append(Base,[request_header('X-EmuLLM-Client-ID'=Client)],Headers);
+      Headers=Base).
+header_value(Value,Text) :-
+    (string(Value)->Text=Value;must_be(atom,Value),atom_string(Value,Text)),
+    string_length(Text,N),string_codes(Text,Codes),
+    (between(1,200,N),forall(member(C,Codes),between(33,126,C))->true;
+      domain_error(request_correlation_id,Value)).
 
 provider_json(Method,Base,Route,Payload,Reply) :-
+    provider_request(Method,Base,Route,Payload,[],Reply).
+provider_request(Method,Base,Route,Payload,Headers,Reply) :-
     host_provider(Approved),(Base==Approved->true;permission_error(connect,llm_route,unapproved)),
     (memberchk(Method-Route,[get-"models",post-"chat/completions"])->true;
      permission_error(connect,llm_route,unsupported)),
@@ -38,7 +55,7 @@ provider_json(Method,Base,Route,Payload,Reply) :-
     (Method==post->json_bytes(Payload,RequestBytes),Extra=[post(bytes('application/json',RequestBytes))];Extra=[]),
     append([method(Method),bypass_proxy(true),redirect(false),timeout(120),
             status_code(Status),request_header('Accept'='application/json'),
-            connection(close)],Extra,Options),
+            connection(close)|Headers],Extra,Options),
     catch(call_with_time_limit(120,
       setup_call_cleanup(http_open(URL,Stream,Options),
         (set_stream(Stream,encoding(octet)),
