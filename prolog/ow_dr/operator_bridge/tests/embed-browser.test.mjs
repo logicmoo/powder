@@ -83,9 +83,17 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
       url: fixture.bridgeURL, httpOnly: true, sameSite: 'Strict'});
     await send('Emulation.setDeviceMetricsOverride', {width: 1200, height: 900, deviceScaleFactor: 1, mobile: false});
     await send('Page.navigate', {url: fixture.parentURL});
-    await wait('window.states?.copilot?.state === "pairing" && window.states?.codex?.state === "pairing"');
+    await wait('window.states?.copilot?.status === "pairing" && window.framesByProvider?.codex');
+    assert.deepEqual(await evaluate('framesByProvider.codex.getState()'), {
+      provider:'codex', status:'not_loaded', conversationId:null, sequence:0, error:null, connected:false, unread:0,
+    });
+    assert.equal(await evaluate('document.querySelectorAll(".operator-agent-frame")[1].getAttribute("src")'), null,
+      'inactive controller does not navigate an iframe before chip selection');
+    await evaluate('document.getElementById("codex").click()');
+    await wait('window.states?.codex?.status === "pairing"');
     let copilot = await frame('copilot');
     const codex = await frame('codex');
+    await evaluate('document.getElementById("copilot").click()');
     assert.equal((await stats()).copilotStarts, 0);
     assert.equal((await stats()).codexStarts, 0);
     await pair(copilot);
@@ -99,6 +107,12 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
     assert.match(await copilot.run('document.getElementById("identity").textContent'), /fixture-copilot-model/);
     assert.match(await codex.run('document.getElementById("identity").textContent'), /fixture-codex-model/);
     assert.match(await copilot.run('document.getElementById("identity").textContent'), /native_cli_managed/);
+    const initialState = await evaluate('framesByProvider.copilot.getState()');
+    assert.match(initialState.conversationId, /^[a-f0-9-]{36}$/);
+    assert.equal(initialState.sequence, 0);
+    assert.equal(initialState.error, null);
+    await pause(1000);
+    assert.equal((await evaluate('framesByProvider.copilot.getState()')).sequence, 0, 'heartbeats are not conversation events');
     assert.equal(await evaluate(`(() => {try { return !!document.querySelector('iframe').contentWindow.document; } catch { return false; }})()`), false);
     assert.equal(await evaluate(`fetch('${fixture.bridgeURL}/embed/api/copilot/status', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
@@ -122,7 +136,7 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
     await pause(300);
     assert.equal((await stats()).copilotStarts, 0, 'postMessage cannot start commands');
     assert.equal((await stats()).copilotPrompts, 0);
-    assert.equal((await evaluate('framesByProvider.copilot.getState()')).state, before.state);
+    assert.equal((await evaluate('framesByProvider.copilot.getState()')).status, before.status);
 
     await copilot.run('document.getElementById("start").click()');
     await copilot.until('document.getElementById("copilot").textContent === "idle"');
@@ -154,9 +168,14 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
     await evaluate('document.getElementById("codex").click()');
     await copilot.run(`document.getElementById('prompt').value='synthetic unread'; document.getElementById('composer').requestSubmit()`);
     await wait('framesByProvider.copilot.getState().unread === 1');
+    const unseen = await evaluate('framesByProvider.copilot.getState()');
+    assert.ok(unseen.sequence > initialState.sequence);
+    assert.equal(unseen.conversationId, initialState.conversationId);
     assert.equal(await evaluate('framesByProvider.codex.getState().unread'), 0);
     await evaluate('document.getElementById("copilot").click()');
     await wait('framesByProvider.copilot.getState().unread === 0');
+    assert.equal((await evaluate('framesByProvider.copilot.getState()')).sequence, unseen.sequence,
+      'reactivation keeps the conversation event watermark');
     const counts = await stats();
     await copilot.run('document.getElementById("logout").click()');
     await copilot.until('document.getElementById("pair-retry").hidden === false');
@@ -176,7 +195,7 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
     const messages = await evaluate('window.messages');
     assert.ok(messages.every(message => message.channel === 'powder.operator.embed.v1'));
     assert.ok(messages.every(message => Object.keys(message).every(key =>
-      ['channel','type','provider','nonce','revision','state','connected','unread'].includes(key))));
+      ['channel','type','provider','nonce','revision','status','connected','unread','conversationId','sequence','error'].includes(key))));
     assert.ok(!JSON.stringify(messages).includes('fixture output'));
     assert.ok(!JSON.stringify(messages).includes('capability'));
     assert.ok(await copilot.run('document.documentElement.scrollWidth <= document.documentElement.clientWidth'));
@@ -200,8 +219,13 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
     await evaluate(`window.dispatchEvent(new MessageEvent('message', {origin:'${fixture.bridgeURL}',
       source:document.querySelector('.operator-agent-frame').contentWindow,
       data:${JSON.stringify({...latest, revision:99999, unread:999, command:'prompt'})}}))`);
+    await evaluate(`window.dispatchEvent(new MessageEvent('message', {origin:'${fixture.bridgeURL}',
+      source:document.querySelector('.operator-agent-frame').contentWindow,
+      data:${JSON.stringify({...latest, revision:99999, sequence:0})}}))`);
     assert.equal(await evaluate('JSON.stringify(framesByProvider.copilot.getState())'), original);
-    await evaluate('framesByProvider.copilot.destroy(); framesByProvider.codex.destroy()');
+    await evaluate('lifetimes.copilot.abort(); framesByProvider.codex.destroy()');
+    assert.equal(await evaluate('document.querySelectorAll(".operator-agent").length'), 0,
+      'app lifetime signal destroys only its controller');
     for (let i=0;i<50 && Object.values((await stats()).connections).some(Boolean);i++) await pause(100);
     assert.deepEqual((await stats()).connections, {copilot:0,codex:0});
 

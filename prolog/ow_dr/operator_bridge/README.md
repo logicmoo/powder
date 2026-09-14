@@ -137,14 +137,32 @@ Load `web/operator-agent.css` and import `createOperatorAgent` from
 ```javascript
 const view = createOperatorAgent(host, {
   provider: 'copilot', active: true, signal,
-  bridgeURL: 'http://operator.localhost:8063/embed',
-  onStateChange({provider, state, connected, unread}) { /* update that chip only */ },
+  bridgeURL: descriptor.bridgeURL, // e.g. http://operator.localhost:8063/embed
+  onStateChange({status, conversationId, sequence, error, unread}) { /* update that chip only */ },
 });
-view.activate();   // visibility lifecycle only
+view.activate();   // first activation loads the frame; then visibility lifecycle only
 view.deactivate(); // does not unmount, stop, send, cancel or decide permissions
-view.getState();   // defensive copy of the four safe fields above
+view.getState();   // fields above, plus provider and connected
 view.destroy();    // closes/removes only this view and revokes its pairing
 ```
+
+`bridgeURL` is required and owned by the host descriptor. A controller created
+with `active:false` reports `status:"not_loaded"` and does not navigate the iframe
+until its first explicit `activate()`. The `signal` is the application/controller
+lifetime, never a route lifetime. Switching chips or routes retains the frame.
+Bounded output streaming continues while inactive; reactivation clears that
+provider's unread count and receives the next current snapshot within the
+750 ms heartbeat. No models or operators start from lifecycle operations.
+
+The safe `conversationId` is the bridge journal's opaque UUID, **never a native
+session/thread identifier**. `sequence` is the durable journal event watermark,
+a nonnegative monotonic integer per conversation; it does not increase for
+ordinary polling, pairing or chip activation. The controller retains the last
+known identity/watermark while temporarily unpaired and rejects regressions
+within one conversation. `error` is null or a fixed transport/pairing error,
+never native output. Parent callbacks run only for changes in projected state.
+Operator drafts, transcripts, provider model settings and permission controls
+remain inside the privileged operator container/journal, not parent storage.
 
 Configure the bridge's `--parent-origin=http://localhost:3050` to the **exact**
 main-workspace origin (scheme, hostname, port; no path, wildcard or trailing
@@ -165,7 +183,7 @@ parent origin. The parent replies with those fields plus
 
 Both directions check the exact Origin **and** source WindowProxy. The child
 requires its direct parent, not a sibling or nested owner. Parent status frames
-add only `type:"state",revision,state,connected,unread`; revisions strictly
+add only `type:"state",revision,status,connected,unread,conversationId,sequence,error`; revisions strictly
 increase for that document challenge. Unknown fields/types, stale revisions,
 other providers, windows and origins are ignored. Status values are bounded to
 `pairing`, `disconnected`, `offline`, `idle`, `busy`, `awaiting_permission`;

@@ -9,6 +9,7 @@
   const prefix = `/embed/api/${provider}`;
   let bound = false, active = false, disposed = false, unread = 0, revision = 0;
   let connected = false, state = 'pairing', controller, lastSequence = null;
+  let conversationId = null, sequence = 0, error = null;
   let resolveReady;
   const ready = new Promise(resolve => { resolveReady = resolve; });
   const $ = id => document.getElementById(id);
@@ -18,7 +19,7 @@
   function publish() {
     if (!bound || disposed) return;
     window.parent.postMessage({channel, type: 'state', nonce, provider,
-      revision: ++revision, state, connected, unread}, parentOrigin);
+      revision: ++revision, status: state, connected, unread, conversationId, sequence, error}, parentOrigin);
   }
   function emitHello() {
     if (window.parent !== window && window.top === window.parent && !bound && !disposed)
@@ -71,7 +72,9 @@
     if (disposed) return;
     if (capability) request('/logout', {}, true).catch(() => {});
     capability = '';
-    connected = false; state = 'disconnected'; publish();
+    connected = false; state = 'disconnected';
+    error = 'Operator view disconnected. Pair again inside the isolated view.';
+    publish();
     disposed = true;
     clearInterval(helloTimer); clearTimeout(handshakeTimer);
     controller?.abort();
@@ -103,6 +106,11 @@
           if (value.provider !== provider || value.type !== 'snapshot') throw new Error('Operator output identity mismatch.');
           if (!opened) { opened = true; connected = true; handlers.open(); }
           state = value.data.state;
+          if (conversationId !== value.data.conversationId) {
+            conversationId = value.data.conversationId;
+            sequence = 0; lastSequence = null; unread = 0;
+          }
+          sequence = Math.max(sequence, value.latestSequence);
           if (lastSequence === null) lastSequence = value.latestSequence;
           for (const item of value.events) {
             if (!active && item.sequence > lastSequence && item.kind === 'assistant.output') unread = Math.min(999, unread + 1);

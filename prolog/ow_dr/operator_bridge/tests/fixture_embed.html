@@ -8,13 +8,16 @@
 import {createOperatorAgent} from '/web/operator-agent.js';
 window.framesByProvider = {};
 window.states = {};
+window.lifetimes = {};
 window.messages = [];
 window.addEventListener('message', event => {
   if (event.origin === '{{BRIDGE}}') window.messages.push(event.data);
 });
 for (const provider of ['copilot', 'codex']) {
+  lifetimes[provider] = new AbortController();
   framesByProvider[provider] = createOperatorAgent(document.querySelector('#host'), {
     provider, active: provider === 'copilot', bridgeURL: '{{BRIDGE}}/embed',
+    signal: lifetimes[provider].signal,
     onStateChange: state => { states[provider] = state; },
   });
 }
