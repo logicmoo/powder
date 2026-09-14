@@ -282,7 +282,8 @@ verify_provider_input(Scope,History) :-
      forall(member(Message,History),
       (is_dict(Message),get_dict(role,Message,Role),
        memberchk(Role,["system","user","assistant"]),
-       \+get_dict(name,Message,"approved_grounding")))
+       \+get_dict(name,Message,"approved_grounding"),
+       (get_dict(tool_calls,Message,Calls)->Calls==[];true)))
      ->true;throw(error(llm_grounding_not_approved,_))).
 grounding_material(Scope,Material) :-
     get_dict(grant,Scope,G),G\==null,!,

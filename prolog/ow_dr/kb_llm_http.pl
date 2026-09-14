@@ -26,6 +26,10 @@
 :- http_handler(openworld_dr(api/llm/conversations),llm_endpoint(conversations),[method(get)]).
 :- http_handler(openworld_dr(api/llm/todos/undo),llm_endpoint(todo_undo),[method(post)]).
 :- http_handler(openworld_dr(api/llm/chat),llm_endpoint(chat),[method(post)]).
+:- http_handler(openworld_dr(api/llm/queue/enqueue),llm_endpoint(queue_enqueue),[method(post)]).
+:- http_handler(openworld_dr(api/llm/queue/resume),llm_endpoint(queue_resume),[method(post)]).
+:- http_handler(openworld_dr(api/llm/queue/cancel),llm_endpoint(queue_cancel),[method(post)]).
+:- http_handler(openworld_dr(api/llm/fork),llm_endpoint(fork),[method(post)]).
 :- http_handler(openworld_dr(api/llm/interrupt),llm_endpoint(interrupt),[method(post)]).
 :- http_handler(openworld_dr(api/llm/stop),llm_endpoint(stop),[method(post)]).
 
@@ -72,6 +76,10 @@ action(conversations,R,Reply) :-
     list_conversations(Offset,Limit,Reply).
 action(todo_undo,R,Reply) :- body(R,B),undo_todo(B,Reply).
 action(chat,R,Reply) :- body(R,B),start_chat(B,Reply).
+action(queue_enqueue,R,Reply) :- body(R,B),enqueue_chat(B,Reply).
+action(queue_resume,R,Reply) :- body(R,B),resume_queue(B,Reply).
+action(queue_cancel,R,Reply) :- body(R,B),cancel_queued(B,Reply).
+action(fork,R,Reply) :- body(R,B),fork_conversation(B,Reply).
 action(interrupt,R,Reply) :- body(R,B),strict_keys(B,[id]),interrupt_chat(B.id,Reply).
 action(stop,R,Reply) :- body(R,B),strict_keys(B,[id]),stop_conversation(B.id,Reply).
 respond(Status,Reply) :-
@@ -84,6 +92,12 @@ llm_error(Error) :-
      Error=error(agent_settings_conflict,_)->Status=409;
      Error=error(agent_prompt_conflict,_)->Status=409;
      Error=error(agent_conversation_busy,_)->Status=409;
+     Error=error(llm_queue_call_conflict,_)->Status=409;
+     Error=error(llm_queue_requires_active_turn,_)->Status=409;
+     Error=error(llm_queue_resume_blocked,_)->Status=409;
+     Error=error(llm_queue_item_started,_)->Status=409;
+     Error=error(llm_queue_pending,_)->Status=409;
+     Error=error(llm_fork_parent_busy_or_unknown,_)->Status=409;
      Error=error(llm_http_status(_),_)->Status=502;
      Error=error(llm_route_failed,_)->Status=502;
      Status=400),
