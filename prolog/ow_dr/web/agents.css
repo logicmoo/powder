@@ -8,6 +8,11 @@
 .agent-chip-unread { color: var(--link); }
 .agents-feedback:empty { display: none; }
 .agents-feedback { overflow-wrap: anywhere; margin-bottom: 12px; }
+.agents-workspace button:disabled {
+  background: var(--surface); color: var(--muted); border-color: var(--line);
+  border-style: dashed; box-shadow: none; opacity: .5; cursor: not-allowed;
+  text-decoration: none; filter: grayscale(1);
+}
 .agent-panel[hidden] { display: none; }
 .operator-agent-host { min-width: 0; }
 .agent-panel .operator-agent-frame { min-height: 720px; height: 78vh; border: 1px solid var(--line); background: var(--surface); }

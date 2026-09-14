@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchChromium } from './chromium.mjs';
-import { modelOptions, selectedKeys, canChat, teacherDrafts } from '../web/llm-knowledge-agent.js';
+import { modelOptions, selectedKeys, canChat, teacherDrafts, plainChatEligible, elapsedText, sentMessageEvents, teacherFailure } from '../web/llm-knowledge-agent.js';
 const here = dirname(fileURLToPath(import.meta.url));
 test('model choice never falls back and scope keys are concrete', () => {
   assert.deepEqual(modelOptions(['other'], 'missing').map(x => x.id), ['missing', 'other']);
@@ -20,6 +20,33 @@ test('model choice never falls back and scope keys are concrete', () => {
     terms: [], readMts: ['x_UnapprovedMt'], writeMts: [], grant: null,
   } }, text: 'Hi', approved: false }), false);
   assert.equal(canChat({ conversation: { status: 'outcome_unknown' }, text: 'Hi', approved: true }), false);
+});
+test('plain chat cannot inherit KB selectors, tool calls, or grounding history', () => {
+  const plain = { scope: { terms: [], readMts: [], writeMts: [], grant: null }, messages: [], calls: [] };
+  assert.equal(plainChatEligible(plain), true);
+  assert.equal(plainChatEligible({}), false);
+  assert.equal(plainChatEligible({ ...plain, scope: { ...plain.scope, terms: ['x_Private'] } }), false);
+  assert.equal(plainChatEligible({ ...plain, scope: { ...plain.scope, readMts: ['x_PrivateMt'] } }), false);
+  assert.equal(plainChatEligible({ ...plain, messages: [{ role: 'user', name: 'approved_grounding' }] }), false);
+  assert.equal(plainChatEligible({ ...plain, messages: [{ role: 'tool', content: 'Do not export' }] }), false);
+  assert.equal(plainChatEligible({ ...plain, calls: [{ state: 'completed' }] }), false);
+});
+test('message timing uses sent events and ends at failure, excluding grounding messages', () => {
+  const messages = [{ role: 'user', content: 'Older' }, { role: 'user', name: 'approved_grounding' },
+    { role: 'user', content: 'Who are you?' }];
+  const times = sentMessageEvents(messages, [
+    { kind: 'turn_started', at: 100 },
+    { kind: 'turn_failed', at: 112.5, detail: { code: 'llm_model_unavailable' } },
+  ]);
+  assert.equal(times.has(0), false);
+  assert.equal(times.has(1), false);
+  assert.equal(times.get(2).outcome.at, 112.5);
+  assert.equal(elapsedText(12.5), '12s');
+  assert.equal(elapsedText(61), '1m 01s');
+  assert.equal(elapsedText(-1), '0s');
+  assert.equal(elapsedText(NaN), 'time unavailable');
+  assert.match(teacherFailure({ code: 'llm_model_unavailable' }, 'openai/gpt-5.6-sol'), /before generation/);
+  assert.match(teacherFailure({ code: 'provider_http', status: 429 }, 'explicit'), /HTTP 429/);
 });
 test('draft persistence isolates conversations and cannot restore consent or malformed data', () => {
   const store = new Map(), storage = { getItem: key => store.get(key), setItem: (key, value) => store.set(key, value) };
@@ -50,7 +77,7 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     if (url.pathname === '/') {
       res.setHeader('Content-Type', 'text/html');
       res.end(`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>LLM fixture</title>
-        <link rel="stylesheet" href="/style.css"><main></main><script type="module">
+        <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/agents.css"><main class="agents-workspace"></main><script type="module">
         import {createLLMKnowledgeAgent} from '/llm-knowledge-agent.js';
         function element(tag, props={}, ...children) {const n=document.createElement(tag);
           for(const [k,v] of Object.entries(props)) {if(k.startsWith('on'))n.addEventListener(k.slice(2),v);
@@ -72,7 +99,7 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
         </script></html>`);
       return;
     }
-    if (['/style.css', '/llm-knowledge-agent.css', '/llm-knowledge-agent.js'].includes(url.pathname)) {
+    if (['/style.css', '/agents.css', '/llm-knowledge-agent.css', '/llm-knowledge-agent.js'].includes(url.pathname)) {
       res.setHeader('Content-Type', url.pathname.endsWith('.js') ? 'text/javascript' : 'text/css');
       res.end(await readFile(join(here, '..', 'web', url.pathname.slice(1)))); return;
     }
@@ -105,16 +132,35 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     else if (action === 'start') {
       conversation = { id: `c-fixture${conversations.size ? `-${conversations.size}` : ''}`,
         createdAt: Date.now() / 1000, identity: 'llm', status: 'ready', revision: 0, sequence: 0, model: settings.model,
+        queue: { canEnqueue: true, canResume: false, state: 'idle', items: [] }, branchOf: null,
         promptHash: 'p1', messages: [], scope: body.scope, events: [], audit: [], calls: [],
         registry: { available: false, limitation: 'No fixture registry' }, todos: { available: false, reason: 'Unavailable' } };
       result = conversation;
       conversations.set(conversation.id, conversation);
     } else if (action === 'chat') {
       conversation = { ...conversation, status: 'running', revision: 1, sequence: 1,
-        calls: [{ id: 'synthetic-recorded-call', name: 'kee_todo_create', state: 'unknown', receiptInspectable: true }],
+        events: [{ kind: 'turn_started', at: Date.now() / 1000 - 2 }],
+        calls: body.grant ? [{ id: 'synthetic-recorded-call', name: 'kee_todo_create', state: 'unknown', receiptInspectable: true }] : [],
         messages: [{ role: 'user', content: body.text }, { role: 'assistant', content: '<img src=x onerror=alert(1)> fixture' }] };
       result = conversation;
-    } else if (action === 'interrupt') { conversation = { ...conversation, status: 'interrupted', sequence: conversation.sequence + 1 }; result = conversation; }
+    } else if (action === 'queue/enqueue') {
+      conversation = { ...conversation, revision: conversation.revision + 1,
+        queue: { ...conversation.queue, items: [...conversation.queue.items, { callId: body.callId, text: body.text, status: 'queued' }] } };
+      result = conversation;
+    } else if (['queue/resume', 'queue/cancel'].includes(action)) {
+      conversation = { ...conversation, revision: conversation.revision + 1,
+        queue: { ...conversation.queue, state: action === 'queue/resume' ? 'running' : 'paused',
+          items: action === 'queue/cancel' ? conversation.queue.items.filter(item => item.callId !== body.callId) : conversation.queue.items } };
+      result = conversation;
+    } else if (action === 'fork') {
+      const parent = conversation;
+      conversation = { ...structuredClone(parent), id: `c-fixture-${conversations.size}`, status: 'ready', revision: 0,
+        sequence: 0, calls: [], queue: { canEnqueue: true, canResume: false, state: 'idle', items: [] },
+        branchOf: { id: parent.id, revision: parent.revision } };
+      result = conversation;
+    } else if (action === 'interrupt') { conversation = { ...conversation, status: 'interrupted',
+      events: [...conversation.events, { kind: 'interrupted', at: Date.now() / 1000 }],
+      queue: { ...conversation.queue, state: 'paused', canResume: true }, sequence: conversation.sequence + 1 }; result = conversation; }
     else if (action === 'stop') { conversation = { ...conversation, status: 'closed', sequence: conversation.sequence + 1 }; result = conversation; }
     else if (action === 'conversation') {
       if (failReads) { res.statusCode = 503; result = { error: { message: 'Synthetic disconnected transport' } }; }
@@ -122,6 +168,7 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
         ? conversation : conversations.get(url.searchParams.get('id'));
     }
     else { res.statusCode = 400; result = { error: { message: 'Fixture action not implemented' } }; }
+    if (result?.id && result?.scope && result?.messages) conversations.set(result.id, result);
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(result));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -130,8 +177,12 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
   try {
     await browser.send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
     await browser.wait(`document.querySelector('[name="llm-model"]')?.value==='gpt-5.6-sol'`);
-    await browser.wait(`document.querySelector('.llm-history p').textContent.includes('0 of 0')`);
+    await browser.wait(`document.querySelector('.llm-history-tools p').textContent.includes('0 of 0')`);
     assert.deepEqual(requests.map(r => r.action).sort(), ['conversations', 'prompt', 'settings']);
+    assert.equal(await browser.evaluate('document.querySelector(".llm-inspector").hidden'), true);
+    assert.equal(await browser.evaluate('document.querySelectorAll(".llm-agent input[type=checkbox]").length'), 0);
+    assert.equal(await browser.evaluate(`getComputedStyle([...document.querySelectorAll('button')].find(b=>b.textContent==='Send')).borderStyle`), 'dashed');
+    await click('Settings');
     assert.equal(await browser.evaluate(`document.querySelector('[name="llm-model"]').tagName`), 'INPUT');
     await click('Refresh models');
     await browser.wait(`document.querySelector('[name="llm-model"]').list.options.length===2`);
@@ -154,9 +205,12 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     await browser.evaluate(`document.querySelector('[name="llm-model"]').value='Fixture/Typed-Model.1'`);
     assert.equal(requests.some(r => r.action === 'chat'), false);
     await browser.evaluate(`history.replaceState(null,'','/#/agent-chips?active=teacher')`);
+    await browser.evaluate(`document.querySelector('[name="llm-chat-mode"]').value='knowledge';
+      document.querySelector('[name="llm-chat-mode"]').dispatchEvent(new Event('change'))`);
     await browser.evaluate(`for(const [name,value] of [['llm-term-keys','x_Synthetic'],['llm-read-mts','x_FixtureMt']]) {
       const input=document.querySelector('[name="'+name+'"]');input.value=value;input.dispatchEvent(new Event('input'));}`);
-    await click('Start new conversation');
+    await browser.evaluate(`document.querySelector('[name="llm-history"]').value='__new__';
+      document.querySelector('[name="llm-history"]').dispatchEvent(new Event('change'))`);
     await browser.wait(`teacher.getState().conversationId==='c-fixture'`);
     assert.equal(await browser.evaluate('teacher.getState().model'), 'Fixture/Typed-Model.1');
     await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Conversation started')`);
@@ -172,8 +226,7 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     assert.equal(requests.some(r => r.action === 'chat'), false);
     assert.equal(requests.find(r => r.action === 'grounding/preview').body.requests.length, 2);
     assert.equal(requests.find(r => r.action === 'grounding/preview').body.conversation, 'c-fixture');
-    assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Approve exact preview').disabled`), true);
-    await click('Approve exact preview');
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Approve exact preview').disabled`), false);
     assert.equal(requests.some(r => r.action === 'grounding/approve'), false);
     await browser.evaluate('teacher.deactivate();teacher.activate()');
     assert.equal(await browser.evaluate(`document.querySelector('.llm-grounding-preview').textContent.includes('Synthetic approved evidence')`), true);
@@ -191,7 +244,6 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     assert.equal(await browser.evaluate('location.hash'), '#/agent-chips?active=teacher');
     assert.equal(await browser.evaluate('lastConversation.agent'), 'llm-knowledge');
     assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Chat').disabled`), true);
-    await browser.evaluate(`const c=document.querySelector('[name="llm-export-consent"]');c.checked=true;c.dispatchEvent(new Event('change'))`);
     await click('Approve exact preview');
     await browser.wait(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Chat').disabled===false`);
     await click('Chat');
@@ -233,7 +285,7 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     await browser.evaluate('otherTeacher.destroy()');
     assert.equal(await browser.evaluate('teacher.getState().disposed'), false);
     assert.equal(requests.filter(r => r.action === 'chat').length, 1);
-    await click('Interrupt turn');
+    await click('Interrupt');
     await browser.wait(`document.body.textContent.includes('interrupted')`);
     await browser.evaluate('teacher.deactivate()');
     const beforeIdleRefresh = requests.length;
@@ -267,22 +319,22 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
       route:{params:new URLSearchParams('conversation=c-fixture')},active:false});
       document.querySelector('main').append(restored.element)})()`);
     assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-message"]').value`), 'Unsent teacher draft');
-    assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-export-consent"]').checked`), false);
+    assert.equal(await browser.evaluate(`restored.element.querySelectorAll('input[type=checkbox]').length`), 0);
     assert.equal(await browser.evaluate(`[...restored.element.querySelectorAll('button')].find(b=>b.textContent==='Chat').disabled`), true);
     assert.equal(requests.filter(r => r.action === 'chat').length, 1);
     await click('Start new conversation');
     await browser.wait(`restored.getState().conversationId==='c-fixture-1'`);
-    await browser.wait(`document.querySelector('.llm-history p').textContent.includes('2 of 2')`);
+    await browser.wait(`document.querySelector('.llm-history-tools p').textContent.includes('2 of 2')`);
     assert.equal(await browser.evaluate('restored.getState().sequence'), 0, 'the new conversation has its own event count');
     assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-message"]').value`), '');
     await browser.evaluate(`const input=restored.element.querySelector('[name="llm-message"]');
       input.value='Second isolated draft';input.dispatchEvent(new Event('input'));
-      restored.element.querySelector('[name="llm-history"]').value='c-fixture'`);
-    await click('Open conversation');
+      restored.element.querySelector('[name="llm-history"]').value='c-fixture';
+      restored.element.querySelector('[name="llm-history"]').dispatchEvent(new Event('change'))`);
     await browser.wait(`restored.getState().conversationId==='c-fixture'`);
     assert.equal(await browser.evaluate('restored.getState().sequence'), 3, 'a stale history response cannot reduce the conversation event count');
     assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-message"]').value`), 'Unsent teacher draft');
-    assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-export-consent"]').checked`), false);
+    assert.equal(await browser.evaluate(`restored.element.querySelectorAll('input[type=checkbox]').length`), 0);
     failSettings = true;
     await browser.evaluate(`(async()=>{window.failedTeacher=await createTeacher({active:false});
       document.querySelector('main').append(failedTeacher.element)})()`);
@@ -292,7 +344,50 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     await browser.wait(`failedTeacher.getState().connection==='connected'`);
     assert.equal(requests.filter(r => r.action === 'chat').length, 1);
     await browser.evaluate('failedTeacher.destroy()');
+    await browser.evaluate(`(async()=>{restored.destroy();window.plainTeacher=await createTeacher();
+      document.querySelector('main').append(plainTeacher.element)})()`);
+    await browser.wait(`plainTeacher.getState().chatMode==='plain'`);
+    await browser.evaluate(`{const input=plainTeacher.element.querySelector('[name="llm-message"]');
+      input.value='Synthetic ordinary chat';input.dispatchEvent(new Event('input'))}`);
+    await click('Send');
+    await browser.wait(`plainTeacher.getState().status==='running'&&!plainTeacher.getState().pending`);
+    assert.match(await browser.evaluate(`plainTeacher.element.querySelector('.llm-message-time').textContent`), /since sent/);
+    const plainId = await browser.evaluate('plainTeacher.getState().conversationId');
+    const plainSend = requests.filter(r => r.action === 'chat').at(-1);
+    assert.equal(plainSend.body.grant, undefined);
+    assert.equal(plainSend.body.approvedNonsensitive, true);
+    assert.deepEqual(requests.filter(r => r.action === 'start').at(-1).body.scope,
+      { terms: [], readMts: [], writeMts: [], grant: null });
+    assert.equal(await browser.evaluate('plainTeacher.element.querySelector(".llm-knowledge-actions").hidden'), true);
+    await browser.evaluate(`{const input=plainTeacher.element.querySelector('[name="llm-message"]');
+      input.value='Synthetic queued follow-up';input.dispatchEvent(new Event('input'))}`);
+    await click('Enqueue');
+    await browser.wait(`plainTeacher.element.querySelector('.llm-queue').textContent.includes('Synthetic queued follow-up')`);
+    assert.equal(requests.filter(r => r.action === 'chat').length, 2, 'queue acceptance does not resubmit an active turn');
+    await click('Interrupt');
+    await browser.wait(`plainTeacher.getState().status==='interrupted'`);
+    assert.match(await browser.evaluate(`plainTeacher.element.querySelector('.llm-message-time').textContent`), /Interrupted after/);
+    await click('Clear queue');
+    await browser.wait(`plainTeacher.element.querySelector('.llm-queue').hidden`);
+    await browser.evaluate(`plainTeacher.element.querySelector('[name="llm-history"]').value='__branch__';
+      plainTeacher.element.querySelector('[name="llm-history"]').dispatchEvent(new Event('change'))`);
+    await browser.wait(`plainTeacher.getState().conversationId!==${JSON.stringify(plainId)}&&!plainTeacher.getState().pending`);
+    assert.equal(requests.filter(r => r.action === 'chat').length, 2, 'forking must not send a model request');
+    await browser.evaluate(`{const input=plainTeacher.element.querySelector('[name="llm-message"]');
+      input.value='Unsent branch draft';input.dispatchEvent(new Event('input'));
+      plainTeacher.element.querySelector('[name="llm-history"]').value=${JSON.stringify(plainId)};
+      plainTeacher.element.querySelector('[name="llm-history"]').dispatchEvent(new Event('change'))}`);
+    await browser.wait(`plainTeacher.getState().conversationId===${JSON.stringify(plainId)}&&!plainTeacher.getState().pending`);
+    assert.equal(await browser.evaluate(`plainTeacher.element.querySelector('[name="llm-message"]').value`), '');
+    assert.equal(requests.filter(r => r.action === 'chat').length, 2);
+    await browser.evaluate('plainTeacher.destroy()');
     assert.deepEqual(browser.exceptions, []);
-  } catch (error) { console.error(browser.exceptions); throw error; }
+  } catch (error) {
+    console.error(browser.exceptions, await browser.evaluate(`({
+      state:window.restored?.getState(),
+      feedback:[...document.querySelectorAll('.llm-feedback')].map(node=>node.textContent)
+    })`), requests.slice(-4));
+    throw error;
+  }
   finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
