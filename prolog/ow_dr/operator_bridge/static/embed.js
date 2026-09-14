@@ -44,7 +44,7 @@
       $('pair-submit').disabled = false;
       $('parent-status').textContent = `Isolated ${provider} view · paired only with ${parentOrigin}`;
       resolveReady();
-    } else if (!bound || message.type !== 'lifecycle') return;
+    } else if (!bound || !['bind', 'lifecycle'].includes(message.type)) return;
     parentProbe = message.probe;
     active = message.active;
     if (active) unread = 0;

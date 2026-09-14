@@ -326,3 +326,38 @@ test('failed native pairing navigation exposes host Retry and safely reconnects'
     await browser.close(); await fixture.close();
   }
 });
+
+test('queued hello retries acknowledge the newest bind without reinitializing the frame', {
+  timeout: 60000, skip: !existsSync(executable) || !existsSync(python),
+}, async () => {
+  const fixture = await startFixture();
+  const browser = await launchChromium(executable);
+  try {
+    await browser.send('Page.addScriptToEvaluateOnNewDocument', {source: `
+      if (window.top === window) {
+        window.delayedHellos = 0;
+        window.addEventListener('message', event => {
+          if (event.data?.channel !== 'powder.operator.embed.v1' || event.data.type !== 'hello') return;
+          if (window.delayedHellos++ === 0) {
+            // Keep the parent busy while the isolated child naturally retries hello.
+            const until = performance.now() + 2000;
+            while (performance.now() < until) {}
+          }
+        });
+      }
+    `});
+    await browser.send('Page.navigate', {url: fixture.parentURL});
+    await browser.wait('window.delayedHellos >= 2 && window.states?.copilot?.status === "pairing"');
+    const child = await attachFrame(browser, 'copilot');
+    await child.until('document.getElementById("pair-submit").disabled === false');
+    await pause(11000);
+    assert.equal(await browser.evaluate('document.querySelector(".operator-agent-retry").hidden'), true);
+    assert.equal(await browser.evaluate('framesByProvider.copilot.getState().status'), 'pairing');
+    await pairFrame(child);
+    const stats = await (await fetch(fixture.parentURL + '/fixture/stats')).json();
+    assert.equal(stats.connections.copilot, 1);
+    assert.equal(stats.copilotStarts + stats.codexStarts + stats.copilotPrompts + stats.codexPrompts, 0);
+  } finally {
+    await browser.close(); await fixture.close();
+  }
+});
