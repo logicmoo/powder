@@ -74,6 +74,65 @@ async function pairFrame(child) {
   await child.until('document.querySelector("#bridge")?.textContent === "Online"');
 }
 
+test('transcript clocks use durable send times and pause hidden updates without any requests', {
+  timeout: 90000, skip: !existsSync(executable) || !existsSync(python),
+}, async () => {
+  const fixture = await startFixture(), browser = await launchChromium(executable);
+  const {send, evaluate, wait} = browser;
+  const stats = async () => (await fetch(fixture.parentURL + '/fixture/stats')).json();
+  try {
+    await send('Page.navigate', {url:fixture.parentURL});
+    await wait('window.states?.copilot?.status === "pairing"');
+    const child = await attachFrame(browser, 'copilot');
+    await pairFrame(child);
+    await child.until('!document.querySelector("#prompt").disabled');
+    await child.run(`document.querySelector("#prompt").value="timestamp fixture";
+      document.querySelector("#prompt").dispatchEvent(new Event("input")); document.querySelector("#send").click()`);
+    await child.until('document.querySelector("#transcript").textContent.includes("fixture output")');
+    const recorded = await stats(), sent = recorded.acceptedAt.copilot[0] * 1000;
+    const original = await child.run(`(() => {
+      const clock=document.querySelector("[data-sent-at]");
+      return {anchor:Number(clock.dataset.sentAt),date:clock.parentNode.querySelector("time").dateTime,text:clock.textContent};
+    })()`);
+    assert.equal(original.anchor, sent);
+    assert.equal(original.date, new Date(sent).toISOString());
+    assert.match(original.text, /since sent$/);
+    await child.run(`window.clockOffset=0; window.realClockNow=Date.now; Date.now=()=>realClockNow()+clockOffset;
+      window.clockFetches=[]; window.clockFetch=fetch; window.fetch=(...args)=>{clockFetches.push(String(args[0])); return clockFetch(...args);};
+      window.addEventListener('message',event=>{if(event.data?.type==='lifecycle') window.fixtureActive=event.data.active;});`);
+    await evaluate('document.querySelector("#teacher").click()');
+    await child.until('window.fixtureActive === false');
+    const inactive = await child.run('document.querySelector("[data-sent-at]").textContent');
+    await child.run('window.clockOffset=120000');
+    await pause(1300);
+    assert.equal(await child.run('document.querySelector("[data-sent-at]").textContent'), inactive);
+    await evaluate('document.querySelector("#copilot").click()');
+    await child.until('document.querySelector("[data-sent-at]").textContent.startsWith("2m ")');
+    const parent = (await send('Target.getTargetInfo')).targetInfo.targetId;
+    const extra = (await send('Target.createTarget', {url:'about:blank'})).targetId;
+    await send('Target.activateTarget', {targetId:extra});
+    await child.until('document.hidden');
+    const hidden = await child.run('document.querySelector("[data-sent-at]").textContent');
+    await child.run('window.clockOffset=180000');
+    await pause(1300);
+    assert.equal(await child.run('document.querySelector("[data-sent-at]").textContent'), hidden);
+    await send('Target.activateTarget', {targetId:parent});
+    await child.until('!document.hidden && document.querySelector("[data-sent-at]").textContent.startsWith("3m ")');
+    await send('Target.closeTarget', {targetId:extra});
+    assert.deepEqual(await child.run('clockFetches'), [], 'clock changes have no HTTP or command side effects');
+    const after = await stats();
+    assert.equal(after.copilotPrompts, recorded.copilotPrompts);
+    assert.equal(after.codexPrompts, 0);
+    await child.run('window.fetch=clockFetch; document.querySelector("#logout").click(); document.querySelector("#pair-retry").click()');
+    await pairFrame(child);
+    await child.until('document.querySelector("[data-sent-at]")');
+    assert.equal(await child.run('document.querySelector("[data-sent-at]").parentNode.querySelector("time").dateTime'), original.date);
+    await child.run(`Date.now=()=>${sent - 60000}`);
+    await child.until('document.querySelector("[data-sent-at]").textContent.includes("clock mismatch")');
+    assert.equal((await stats()).copilotPrompts, recorded.copilotPrompts, 're-pair and clock correction cannot resend');
+  } finally { await browser.close(); await fixture.close(); }
+});
+
 test('Send becomes Enqueue; Interrupt targets active work and preserves each native provider FIFO', {
   timeout: 90000, skip: !existsSync(executable) || !existsSync(python),
 }, async () => {

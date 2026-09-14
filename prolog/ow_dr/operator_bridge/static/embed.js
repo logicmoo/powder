@@ -13,6 +13,7 @@
   let connected = false, state = 'pairing', controller, lastSequence = null;
   let conversationId = null, sequence = 0, error = null;
   let resolveReady;
+  let viewHandlers;
   const ready = new Promise(resolve => { resolveReady = resolve; });
   const $ = id => document.getElementById(id);
   const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
@@ -47,6 +48,7 @@
     } else if (!bound || !['bind', 'lifecycle'].includes(message.type)) return;
     parentProbe = message.probe;
     active = message.active;
+    viewHandlers?.visibility?.(active);
     if (active) unread = 0;
     publish();
   });
@@ -80,6 +82,7 @@
     error = 'Operator view disconnected. Pair again inside the isolated view.';
     publish();
     disposed = true;
+    viewHandlers?.visibility?.(false);
     clearInterval(helloTimer); clearTimeout(handshakeTimer);
     controller?.abort();
     $('paired-view').hidden = true; $('pairing-view').hidden = false;
@@ -87,8 +90,10 @@
     $('pair-error').textContent = message;
   }
   async function connect(handlers) {
+    viewHandlers = handlers;
     await ready;
     if (!capability || disposed) return;
+    handlers.visibility?.(active);
     controller = new AbortController();
     try {
       const response = await fetch(prefix + '/events', {

@@ -8,3 +8,4 @@
 #event-journal{max-height:45vh;overflow:auto;padding-left:24px}#event-journal li{margin-bottom:14px}#event-journal pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:.85rem}#inspector>details{margin:24px 0}#inspector>details>summary{cursor:pointer}
 button:disabled,button:disabled:hover,button:disabled:active{background:#dfe5ec!important;color:#243247!important;border-color:#9daabd!important;opacity:.8;cursor:not-allowed;box-shadow:none!important;transform:none!important}input:disabled,textarea:disabled,select:disabled{background:#e9edf3!important;color:#526277!important;cursor:not-allowed;opacity:.8}.chat-toolbar{flex-wrap:wrap}#branch-support{margin-top:12px}
 @media(max-width:500px){#branch-conversation{flex-basis:100%}}
+.message-time{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px;color:var(--muted);font-size:.8rem;overflow-wrap:anywhere}.message-age{font-variant-numeric:tabular-nums}

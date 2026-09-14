@@ -150,6 +150,21 @@ recorded events and Stop. Pending native permissions remain visible **outside**
 collapsed Settings. The main transcript shows human/assistant messages and
 failed/unknown/cancelled outcomes, not routine native bookkeeping.
 
+Transcript messages show their durable `events.created` timestamp in the
+browser's local time zone. Human messages also show **time since sent**, anchored
+to the recorded `command.accepted` event—not the click, page load or replay time.
+It includes queue/permission wait and completed-message age; it is **not** model
+execution time. Assistant/outcome timestamps identify when their events were
+recorded. Missing/invalid timestamps and a local clock earlier than the recorded
+send time are shown as unavailable, never invented or negative durations.
+
+Elapsed labels update locally while visible. Updates pause for a hidden browser
+tab, inactive parent chip, hidden paired view or page departure, then catch up
+from the same original timestamp. The timer makes no API calls, changes no
+commands/journal entries and adds nothing to the parent message contract.
+This display-only update needs refreshed frame assets when the owner permits;
+it neither requires nor performs a backend restart.
+
 Each provider's original SQLite journal remains at its original path, retaining
 its UUID, history, draft and native identity. An additive `conversation_catalog`
 table and selected-ID/revision metadata live in that journal. New conversation
@@ -285,11 +300,11 @@ existing 8063 bridge, or perform real native/model turns.
 
 Validation for this stage: native SDK/stdio fixture tests exercise distinct
 native IDs, New/Previous, restart/resume, draft/model persistence, idempotency,
-cancel/permission routing, native forks and cancelled detach. Eight real Chromium scenarios
+cancel/permission routing, native forks and cancelled detach. Nine real Chromium scenarios
 cover standalone and embedded chat, stale/delayed responses, Unicode replay,
 permissions outside Settings, origin/window isolation, liveness recovery,
 branch acknowledgement/provenance, FIFO Enqueue/Interrupt, and disabled styles
-including hover/active.
+including hover/active, and durable local clocks with visibility pause/resume.
 These are synthetic conversations, not evidence of a logged-in account or
 successful real model inference.
 

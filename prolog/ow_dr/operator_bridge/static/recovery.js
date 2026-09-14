@@ -11,6 +11,9 @@ let draftLoaded = false, draftWrites = Promise.resolve();
 let permissionsKey, commandsKey;
 let switching = false, draftConversation, catalogKey, manualNotice, pendingBranch, interruptPending;
 const localDrafts = new Map();
+let clockTimer, frameVisible = !embed, pageVisible = true;
+const recordedTime = new Intl.DateTimeFormat(undefined, {year:'numeric', month:'short', day:'numeric',
+  hour:'2-digit', minute:'2-digit', second:'2-digit', timeZoneName:'short'});
 $(`${provider}-chip`)?.setAttribute('aria-current', 'page');
 $('native-label').textContent = providerName;
 $('prompt-label').textContent = `Message to ${providerName}`;
@@ -19,6 +22,50 @@ function text(tag, value, className) {
   if (className) node.className = className;
   return node;
 }
+function clockVisible() {
+  return pageVisible && frameVisible && !document.hidden && (!embed || !$('paired-view').hidden);
+}
+function elapsedText(sent, now = Date.now()) {
+  if (!Number.isFinite(now) || now < sent) return 'Elapsed unavailable (clock mismatch)';
+  const seconds = Math.floor((now - sent) / 1000);
+  const age = seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+    : seconds < 86400 ? `${Math.floor(seconds / 3600)}h ${Math.floor(seconds / 60) % 60}m`
+    : `${Math.floor(seconds / 86400)}d ${Math.floor(seconds / 3600) % 24}h`;
+  return `${age} since sent`;
+}
+function stopClock() { clearTimeout(clockTimer); clockTimer = undefined; }
+function tickClock() {
+  clockTimer = undefined;
+  if (!clockVisible()) return;
+  const clocks = $('transcript').querySelectorAll('[data-sent-at]'), now = Date.now();
+  for (const clock of clocks) {
+    const value = elapsedText(Number(clock.dataset.sentAt), now);
+    if (clock.textContent !== value) clock.textContent = value;
+  }
+  if (clocks.length) clockTimer = setTimeout(tickClock, 1000);
+}
+function syncClock() { stopClock(); tickClock(); }
+function messageTime(created, sent) {
+  const row = text('div', '', 'message-time'), milliseconds = typeof created === 'number' ? created * 1000 : NaN;
+  if (typeof created !== 'number' || !Number.isFinite(milliseconds) || !Number.isFinite(new Date(milliseconds).getTime())) {
+    row.textContent = sent ? 'Sent time unavailable' : 'Recorded time unavailable';
+    return row;
+  }
+  const date = new Date(milliseconds), time = text('time', `${sent ? 'Sent' : 'Recorded'} ${recordedTime.format(date)}`);
+  time.dateTime = date.toISOString();
+  time.title = `${date.toISOString()} · durable journal timestamp${sent ? '; includes queue and permission wait, not model runtime' : ''}`;
+  row.append(time);
+  if (sent) {
+    const age = text('span', clockVisible() ? elapsedText(milliseconds) : 'Elapsed shown when visible', 'message-age');
+    age.dataset.sentAt = String(milliseconds); age.setAttribute('aria-live', 'off');
+    row.append(age);
+    if (clockVisible() && clockTimer === undefined) clockTimer = setTimeout(tickClock, 1000);
+  }
+  return row;
+}
+document.addEventListener('visibilitychange', syncClock);
+window.addEventListener('pagehide', () => { pageVisible = false; stopClock(); });
+window.addEventListener('pageshow', () => { pageVisible = true; syncClock(); });
 function notice(message, error = false) {
   manualNotice = {conversationId: state?.conversationId, message, error};
   $('notice').textContent = message; $('notice').classList.toggle('error', error);
@@ -62,6 +109,7 @@ function renderStatus(value) {
   if (state && value.selectionRevision < state.selectionRevision) return;
   const changed = !state || state.conversationId !== value.conversationId;
   if (changed) {
+    stopClock();
     manualNotice = null;
     clearTimeout(draftTimer); draftLoaded = false; draftConversation = value.conversationId;
     sequence = 0; $('transcript').replaceChildren(); $('empty').hidden = false;
@@ -193,6 +241,7 @@ function event(item, conversationId = state?.conversationId, revision = state?.s
   $('empty').hidden = true;
   const message = document.createElement('li');
   message.append(text('div', userMessage ? 'You' : assistantMessage ? providerName : 'Command outcome', 'event-label'));
+  message.append(messageTime(item.created, userMessage));
   message.append(text('pre', item.data.text || item.data.message || item.data.state));
   $('transcript').append(message);
   while ($('transcript').children.length > 1000) $('transcript').firstElementChild.remove();
@@ -200,6 +249,7 @@ function event(item, conversationId = state?.conversationId, revision = state?.s
 function connect() {
   if (embed) {
     embed.connect({
+      visibility(visible) { frameVisible = visible; syncClock(); },
       open() { connected = true; },
       status: renderStatus, event,
       close() { connected = false; if (state) renderStatus(state); },

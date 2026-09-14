@@ -130,6 +130,9 @@ async def main():
             "codexPrompts": rpc_calls.count("turn/start"),
             "embedCookiesReceived": any(cookies),
             "commands": {provider: len(service.journal.commands()) for provider, service in hub.operators.items()},
+            "acceptedAt": {provider: [row[0] for row in service.journal.db.execute(
+                "SELECT created FROM events WHERE kind='command.accepted' ORDER BY sequence LIMIT 100")]
+                for provider, service in hub.operators.items()},
             "connections": {provider: len(service.connections) for provider, service in hub.operators.items()},
         })
 
