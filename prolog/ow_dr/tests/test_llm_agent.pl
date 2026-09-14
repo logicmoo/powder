@@ -25,6 +25,10 @@ fixture_models(_Request) :-
      reply_json_dict(_{data:[_{id:"gpt-5.6-sol"},_{id:"fixture-other"}]})).
 fixture_chat(Request) :-
     fixture_chat_body(Request,Body),assertz(fixture_request(chat,Body)),
+    (Body.model=="missing-model"->
+       reply_json_dict(_{error:_{code:"model_not_found",message:"Synthetic provider model rejection"}},[status(404)]);
+     fixture_chat_reply(Body)).
+fixture_chat_reply(Body) :-
     (fixture_mode(slow)->sleep(8);true),
     (fixture_mode(unicode)->unicode_fixture(Text),Message=_{role:"assistant",content:Text};
      fixture_mode(selected),\+ (member(M,Body.messages),M.role=="tool")->
@@ -94,15 +98,21 @@ test(actual_model_picker_and_saved_choice) :-
     assertion(Saved.model=="fixture-other"),discover_models(Other),
     assertion(Other.selected=="fixture-other"),
     assertion(\+fixture_request(chat,_)).
-test(missing_model_preserved_no_fallback) :-
+test(catalog_absent_model_preserved_no_fallback) :-
     agent_settings(S),
     save_agent_settings(_{model:"missing-model",budgets:S.budgets},S.revision,_),
     discover_models(M),assertion(M.selected=="missing-model"),
     assertion(M.selectedAvailable==false).
-test(unavailable_model_never_posts,[throws(error(llm_model_unavailable,_))]) :-
-    agent_settings(S),
-    chat_completion(S.put(model,"missing-model"),
-      [_{role:"user",content:"Synthetic unavailable-model fixture"}],[],_).
+test(provider_rejected_model_posts_exact_id_once_without_catalog_gate_or_fallback) :-
+    agent_settings(S),findall(B,fixture_request(chat,B),Before),
+    findall(M,fixture_request(models,M),CatalogBefore),
+    catch(chat_completion(S.put(model,"missing-model"),
+      [_{role:"user",content:"Synthetic provider-rejected model fixture"}],[],_),
+      error(llm_http_status(404),_),Rejected=true),
+    assertion(Rejected==true),
+    findall(B,fixture_request(chat,B),After),length(Before,N),length(After,Count),
+    assertion(Count=:=N+1),last(After,Request),assertion(Request.model=="missing-model"),
+    findall(M,fixture_request(models,M),CatalogAfter),assertion(CatalogAfter==CatalogBefore).
 test(revision_conflict,[throws(error(agent_settings_conflict,_))]) :-
     agent_settings(S),save_agent_settings(_{model:"fixture-other",budgets:S.budgets},"old",_).
 test(browser_cannot_change_route,[throws(error(domain_error(agent_fields,_),_))]) :-
@@ -114,7 +124,7 @@ test(explicit_model_every_request) :-
     agent_settings(Before),
     save_agent_settings(_{model:"gpt-5.6-sol",budgets:Before.budgets},Before.revision,S),
     chat_completion(S,[_{role:"user",content:"Synthetic fixture hello."}],[],Reply),
-    assertion(Reply.choices\=[]),fixture_request(chat,Request),
+    assertion(Reply.choices\=[]),findall(B,fixture_request(chat,B),Requests),last(Requests,Request),
     assertion(Request.model==S.model),assertion(Request.stream==false).
 test(no_arbitrary_route,[throws(error(permission_error(connect,llm_route,unsupported),_))]) :-
     host_provider(Base),provider_json(get,Base,"../secret",none,_).
