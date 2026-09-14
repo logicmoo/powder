@@ -1,5 +1,5 @@
 :- module(kb_llm_timing,
-          [begin_run/2,with_run/2,phase/1,phase/2,instant/1,bind_turn/2,
+          [begin_run/2,with_run/2,phase/1,phase/2,instant/1,bind_turn/2,request_id/1,
            queue_entered/3,queue_link/3,queue_started/1,queue_cancelled/2,queue_elapsed/3,
            checkpoint/4,finish/1,fail_run/3,conversation_timing/2,latest_terminal/2,supported/1]).
 :- use_module(library(shlib)).
@@ -33,30 +33,36 @@ begin_run(Conversation,Run) :-
     observe((text(Conversation,Id),text(Run,Key),stamp(Mono,Wall),
       with_mutex(powder_llm_timing,
         (observation(Id,Key,_)->true;
-         State=timing_state{runId:Key,conversationId:Id,turn:null,queueCallId:null,
+         State=timing_state{runId:Key,conversationId:Id,turn:null,queueCallId:null,requestId:null,
            queueEnteredAt:null,queueWaitMs:null,startedAt:Wall,runStartedAt:Wall,
            startMono:Mono,runMono:Mono,finishedAt:null,endMono:null,observedAt:Wall,
            status:"running",terminalStatus:null,result:null,steps:[],nextIndex:1,truncated:false,
-           current:timing_step{index:0,operation:"admission",startedAt:Wall,startMono:Mono}},
+           current:timing_step{index:0,operation:"admission",startedAt:Wall,startMono:Mono,requestId:null}},
          assertz(observation(Id,Key,State)))))).
+request_id(Request) :-
+    (active_run(Run)->
+       observe((text(Run,Key),text(Request,RequestId),
+         with_mutex(powder_llm_timing,transaction(
+          (observation(Id,Key,S),S.status=="running",replace(Id,Key,S.put(requestId,RequestId)))))));true).
+request_id_value(S,RequestId) :- (get_dict(requestId,S,RequestId)->true;RequestId=null).
 phase(Operation) :- (active_run(Run)->phase(Run,Operation);true).
 phase(Run,Operation) :-
     observe((operation(Operation),text(Run,Key),stamp(Mono,Wall),
       with_mutex(powder_llm_timing,transaction(
         (observation(Id,Key,Before),Before.status=="running",
-         close_step(Before,Mono,Wall,Closed),text(Operation,Name),
+         close_step(Before,Mono,Wall,Closed),text(Operation,Name),request_id_value(Before,RequestId),
          Next is Closed.nextIndex+1,
          After=Closed.put(_{current:timing_step{index:Closed.nextIndex,operation:Name,
-           startedAt:Wall,startMono:Mono},nextIndex:Next,observedAt:Wall}),
+           startedAt:Wall,startMono:Mono,requestId:RequestId},nextIndex:Next,observedAt:Wall}),
          replace(Id,Key,After)))))).
 instant(Operation) :-
     (active_run(Run)->
       observe((operation(Operation),text(Run,Key),stamp(Mono,Wall),
         with_mutex(powder_llm_timing,transaction(
           (observation(Id,Key,Before),Before.status=="running",
-           close_step(Before,Mono,Wall,Closed),text(Operation,Name),
+           close_step(Before,Mono,Wall,Closed),text(Operation,Name),request_id_value(Before,RequestId),
            Point=timing_step{index:Closed.nextIndex,operation:Name,startedAt:Wall,
-                            finishedAt:Wall,durationMs:0,kind:"instant"},
+                            finishedAt:Wall,durationMs:0,kind:"instant",requestId:RequestId},
            add_step(Closed,Point,Added),Next is Closed.nextIndex+1,
            replace(Id,Key,Added.put(_{nextIndex:Next,current:null,observedAt:Wall})))))));true).
 operation(Name) :-
@@ -67,9 +73,9 @@ operation(Name) :-
       terminal_persistence,context_cleanup,cancellation]).
 close_step(S,Mono,Wall,After) :-
     (S.current==null->After=S;
-     Step=S.current,Duration is max(0,Mono-Step.startMono),
+     Step=S.current,Duration is max(0,Mono-Step.startMono),request_id_value(Step,RequestId),
      Closed=timing_step{index:Step.index,operation:Step.operation,startedAt:Step.startedAt,
-                       finishedAt:Wall,durationMs:Duration,kind:"interval"},
+                       finishedAt:Wall,durationMs:Duration,kind:"interval",requestId:RequestId},
      add_step(S,Closed,WithStep),After=WithStep.put(current,null)).
 add_step(S,Step,After) :-
     length(S.steps,N),
@@ -94,7 +100,7 @@ queue_link(Run,CallId,EnteredAt) :-
          (queued_clock(Id,Call,Mono,Wall)->
             Wait is max(0,S.runMono-Mono),
             Step=timing_step{index:0,operation:"queue_wait",startedAt:Wall,
-                            finishedAt:S.runStartedAt,durationMs:Wait,kind:"interval"},
+                            finishedAt:S.runStartedAt,durationMs:Wait,kind:"interval",requestId:null},
             maplist(shift_index,S.steps,Shifted),Steps=[Step|Shifted],
             (S.current==null->Current=null;shift_index(S.current,Current)),
             Index is S.nextIndex+1,
@@ -146,10 +152,11 @@ snapshot(S,Trace) :-
      Mono=S.endMono,Wall=S.observedAt,Live=false,Complete=true),
     Elapsed is max(0,Mono-S.startMono),RunElapsed is max(0,Mono-S.runMono),
     (S.current==null->Current=null;
-     Step=S.current,StepElapsed is max(0,Mono-Step.startMono),
+     Step=S.current,StepElapsed is max(0,Mono-Step.startMono),request_id_value(Step,StepRequestId),
      Current=timing_step{index:Step.index,operation:Step.operation,startedAt:Step.startedAt,
-                        elapsedMs:StepElapsed}),
-    Trace=timing{runId:S.runId,turn:S.turn,queueCallId:S.queueCallId,
+                        elapsedMs:StepElapsed,requestId:StepRequestId}),
+    request_id_value(S,RequestId),
+    Trace=timing{runId:S.runId,turn:S.turn,queueCallId:S.queueCallId,requestId:RequestId,
       queueEnteredAt:S.queueEnteredAt,queueWaitMs:S.queueWaitMs,
       status:S.status,result:S.result,startedAt:S.startedAt,runStartedAt:S.runStartedAt,
       finishedAt:S.finishedAt,observedAt:Wall,elapsedMs:Elapsed,runElapsedMs:RunElapsed,

@@ -21,6 +21,7 @@ timing: {
 
 Trace = {
   runId: string,
+  requestId: string | null,
   turn: integer | null,
   queueCallId: string | null,
   queueEnteredAt: unixSeconds | null,
@@ -34,8 +35,8 @@ Trace = {
   observedAt: unixSeconds,
   elapsedMs: number,
   runElapsedMs: number,
-  currentStep: {index, operation, startedAt, elapsedMs} | null,
-  steps: [{index, operation, startedAt, finishedAt, durationMs,
+  currentStep: {index, operation, startedAt, elapsedMs, requestId} | null,
+  steps: [{index, operation, startedAt, finishedAt, durationMs, requestId,
            kind: "interval" | "instant"}],
   truncated: boolean,
   complete: boolean,
@@ -51,6 +52,16 @@ identity. `turn` is null when admission failed before a turn was accepted.
 `queueCallId` links a dispatched queue entry, without merging its timeline with
 the preceding run. The conversation's normal revision/sequence do not advance
 for timing observations or polling.
+
+Each owned completion round receives a fresh UUIDv4 string in
+`Config.requestId`; `Config.conversation` remains its stable conversation UUID.
+`Trace.requestId` is the most recently prepared round's ID. Each step records
+its own round's ID, or `null` before any round; completed steps are never
+relabelled for later rounds. Older persisted traces may omit this added field.
+The agreed transport correlation headers are `X-Request-ID` and
+`X-EmuLLM-Client-ID`, respectively. An allocated ID does not prove the endpoint
+accepted or even received a POST, and is not a worker/model selector. Correlation
+does not initiate provider-status requests, preflights, retries or fallback.
 
 `elapsedMs` includes measured queue wait when available; `runElapsedMs` starts
 at run admission. `startedAt` is the earliest observed queue/run boundary;
@@ -103,8 +114,9 @@ provides their stable order.
 The HTTP library combines connection, sending and header waiting; those
 sub-durations are not separately observable here. Provider queueing, model
 loading, token generation and internal worker health are **unavailable**.
-Do not label `endpoint_wait` as “generating.” No provider correlation protocol
-or new headers are invented. Timings contain no prompt, payload, model output,
+Label `endpoint_wait` “Waiting for emullm,” not “generating.” Only the explicitly
+agreed correlation IDs are provided; no internal provider-stage protocol is
+inferred. Timings contain no prompt, payload, model output,
 PID, native handle, context token, credentials or source path.
 
 ## Persistence and overhead

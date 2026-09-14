@@ -155,13 +155,15 @@ run_turn(Id,Run) :-
         rounds(Id,Run,Config,Handle,Tools,D.history,0,0)),
       setup_call_cleanup(true,kb_llm_timing:phase(context_cleanup),close_turn(Handle))).
 rounds(Id,Run,Config,Handle,Tools,History,Rounds,Calls) :-
+    uuid(RequestAtom,[version(4)]),atom_string(RequestAtom,RequestId),
+    RoundConfig=Config.put(requestId,RequestId),kb_llm_timing:request_id(RequestId),
     kb_llm_timing:phase(outgoing_validation),
     ensure_current(Id,Run),
     (Rounds<Config.budgets.rounds->true;resource_error(llm_round_budget)),
     verify_outgoing(Handle),Handle=kee(_,_,Scope,_,_),
     verify_provider_input(Scope,History),ensure_current(Id,Run),
     bounded_json(History,Config.budgets.historyBytes),set_phase(Id,Run,http),
-    chat_completion(Config,History,Tools,Response),
+    chat_completion(RoundConfig,History,Tools,Response),
     set_phase(Id,Run,validating),ensure_current(Id,Run),
     bounded_json(Response,Config.budgets.outputBytes),response_message(Response,Message),
     append(History,[Message],WithAssistant),
