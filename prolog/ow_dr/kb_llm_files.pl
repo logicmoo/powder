@@ -11,9 +11,20 @@
 :- use_module(library(process)).
 :- use_module(library(readutil)).
 :- use_module(library(utf8)).
+:- use_module(library(shlib)).
 :- meta_predicate locked_file(+,0).
 :- dynamic json_cache/3.
 :- volatile json_cache/3.
+:- dynamic path_guard_library/1.
+:- prolog_load_context(directory,Here),
+   directory_file_path(Here,'kb_llm_paths_windows.dll',Guard),
+   retractall(path_guard_library(_)),assertz(path_guard_library(Guard)).
+:- initialization(load_path_guard).
+
+load_path_guard :-
+    (current_prolog_flag(windows,true),\+current_predicate(agent_native_no_reparse/1),
+     path_guard_library(Library),exists_file(Library)->
+       catch(load_foreign_library(Library),Error,print_message(warning,Error));true).
 
 agent_state_dir(Directory) :-
     agent_state_path(Directory),
@@ -44,9 +55,13 @@ no_symlink_ancestors(Path) :-
     file_directory_name(Path,Parent),
     (Parent==Path->true;no_symlink_ancestors(Parent)).
 windows_no_reparse(Path) :-
-    getenv('SystemRoot',Windows),
+    (current_predicate(agent_native_no_reparse/1)->
+       agent_native_no_reparse(Path);windows_no_reparse_fallback(Path)).
+windows_no_reparse_fallback(Path) :-
+    (getenv('SystemRoot',Windows),Windows\==''->true;
+     throw(error(existence_error(environment_variable,'SystemRoot'),_))),
     directory_file_path(Windows,'System32/WindowsPowerShell/v1.0/powershell.exe',Exe),
-    Script="$ErrorActionPreference='Stop'; [Console]::InputEncoding=[Text.Encoding]::UTF8; try { $p=[Console]::In.ReadToEnd(); while($p) { if([IO.File]::Exists($p) -or [IO.Directory]::Exists($p)) { if(([IO.File]::GetAttributes($p) -band [IO.FileAttributes]::ReparsePoint) -ne 0){exit 2} }; $p=[IO.Path]::GetDirectoryName($p) }; exit 0 } catch {exit 3}",
+    Script="$ErrorActionPreference='Stop'; [Console]::InputEncoding=[Text.Encoding]::UTF8; try { $p=[Console]::In.ReadToEnd(); if($p.Length -gt 32760 -or $p -notmatch '^[a-zA-Z]:[\\\\/]'){exit 3}; $p=$p.TrimEnd([char[]]'\\/'); foreach($part in ($p.Substring(3) -split '[\\\\/]')) { if(!$part -or $part.EndsWith('.') -or $part.EndsWith(' ') -or $part -match '[<>:\\x22|?*\\x00-\\x1f]' -or $part -match '^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\\.|$)'){exit 3} }; $leaf=$true; while($p) { try { $a=[IO.File]::GetAttributes($p); if(($a -band [IO.FileAttributes]::ReparsePoint) -ne 0){exit 2}; if(!$leaf -and (($a -band [IO.FileAttributes]::Directory) -eq 0)){exit 3} } catch { $e=$_.Exception; while($e.InnerException){$e=$e.InnerException}; if(($e.HResult -band 65535) -notin 2,3){exit 3} }; $leaf=$false; $p=[IO.Path]::GetDirectoryName($p) }; exit 0 } catch {exit 3}",
     setup_call_cleanup(
       process_create(Exe,['-NoProfile','-NonInteractive','-Command',Script],
                      [stdin(pipe(In)),stdout(null),stderr(null),process(PID)]),
@@ -68,7 +83,8 @@ bytes_hash(Bytes,Hash) :- crypto_data_hash(Bytes,Hash,[algorithm(sha256),encodin
 json_bytes(Value,Bytes) :-
     json_text(Value,Text),string_codes(Text,Codes),phrase(utf8_codes(Codes),Bytes).
 read_json(File,JSON) :-
-    owned_name(File,_),
+    safe_owned_path(File),
+    size_file(File,Size),(Size=<1048576->true;resource_error(agent_file_limit)),
     crypto_file_hash(File,Current,[algorithm(sha256)]),
     (json_cache(File,Current,JSON)->true;
      read_bytes(File,1048576,Bytes),bytes_text(Bytes,Text),atom_json_dict(Text,JSON,[]),
