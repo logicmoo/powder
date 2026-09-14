@@ -2078,25 +2078,34 @@ async function taskPage(route, signal) {
   return renderTaskDetail({ api, element, button, link, heading, sourceLink, propertyList, pagination, reload: renderRoute }, route, signal);
 }
 
+function applicationReloadFeedback(report, failed = false) {
+  showNotice(report(), failed);
+  for (const feedback of document.querySelectorAll('.application-reload .reload-feedback')) {
+    feedback.setAttribute('role', failed ? 'alert' : 'status');
+    feedback.replaceChildren(report());
+  }
+}
+
+async function reloadChangedApplication() {
+  if (state.mutation) return;
+  setMutation(true);
+  applicationReloadFeedback(() => element('p', {}, 'Reloading changed Prolog application code…'));
+  try {
+    const result = await api('app/reload', {}, { method: 'POST', body: {} });
+    applicationReloadFeedback(() => element('div', {},
+      element('p', {}, result.message),
+      result.reloaded?.length ? element('ul', {}, result.reloaded.map(file => element('li', {}, file))) : null,
+      result.warnings?.length ? element('ul', {}, result.warnings.map(warning => element('li', {}, `${warning.source}: ${warning.message}`))) : null));
+  } catch (error) {
+    applicationReloadFeedback(() => requestErrorDetails(error), true);
+  } finally {
+    setMutation(false);
+  }
+}
+
 function applicationReloadControls() {
   const feedback = element('div', { className: 'reload-feedback', 'aria-live': 'polite' });
-  const reload = button('Reload changed files', async () => {
-    if (state.mutation) return;
-    setMutation(true);
-    feedback.setAttribute('role', 'status');
-    feedback.replaceChildren(element('p', {}, 'Reloading changed Prolog application code…'));
-    try {
-      const result = await api('app/reload', {}, { method: 'POST', body: {} });
-      feedback.replaceChildren(element('p', {}, result.message),
-        result.reloaded?.length ? element('ul', {}, result.reloaded.map(file => element('li', {}, file))) : null,
-        result.warnings?.length ? element('ul', {}, result.warnings.map(warning => element('li', {}, `${warning.source}: ${warning.message}`))) : null);
-    } catch (error) {
-      feedback.setAttribute('role', 'alert');
-      feedback.replaceChildren(requestErrorDetails(error));
-    } finally {
-      setMutation(false);
-    }
-  });
+  const reload = button('Reload changed files', reloadChangedApplication);
   reload.dataset.mutation = '';
   reload.disabled = state.mutation;
   return element('section', { className: 'application-reload' }, element('h2', {}, 'Prolog application code'),
@@ -2280,7 +2289,7 @@ function startLiveReload() {
         }
       }
       if (!pendingInterfaceReload) target.textContent = 'Interface live refresh enabled';
-      target.title = 'Web assets and mappings refresh automatically. Use Settings to reload changed Prolog application code.';
+      target.title = 'Web assets and mappings refresh automatically. Use Reload Changed Files in the top menu to reload changed Prolog application code.';
     } catch (error) {
       if (!document.hidden) target.textContent = 'Live refresh reconnecting…';
     } finally {
@@ -2303,6 +2312,8 @@ window.addEventListener('hashchange', renderRoute);
 window.addEventListener('scroll', scheduleFileInformation, { passive: true, capture: true });
 window.addEventListener('resize', scheduleFileInformation, { passive: true });
 $('.skip-link').addEventListener('click', event => { event.preventDefault(); content.focus(); });
+$('#reload-changed-files').addEventListener('click', reloadChangedApplication);
+$('#reload-changed-files').disabled = state.mutation;
 try {
   state.settings = loadSettings(localStorage);
   state.query.limit = state.settings.queryLimit;
