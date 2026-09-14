@@ -1,8 +1,11 @@
-# Text knowledge agents: implementation status and design contract
+# Text knowledge agents: runtime index and design contract
 
-This document specifies the next agent layer for **powder**. It does not install
-an agent, configure a model, or grant tool permissions. See the verified
-[current route inventory and proposed KEE contract](kee-tools.md), the
+The four-role runtime is connected through **Agents** in powder's navigation.
+Use the [four-agent guide](four-agents.md), [Teacher contract](teacher-integration.md),
+[symbolic host](symbolic-agent.md), and [operator bridge](../operator_bridge/README.md)
+for implemented controls, authentication and genuine limits. These documents
+do not grant permissions or establish that a provider is running. See the
+[route inventory and KEE contract](kee-tools.md), the
 [LLM prompt](../prompts/llm-knowledge-agent.md), and the
 [powder-kee skill](../../../.github/skills/powder-kee/SKILL.md).
 The [source-verified KB asset appendix](agent-kb-inventory.md) lists candidate
@@ -18,10 +21,16 @@ data/templates, not ready agent execution.
 | Native annotation inspection and revision-checked editing | Implemented, independently of general KB assertion editing and measured rule utility. |
 | Operational task pools, source editor and debug console | Implemented application facilities, not an agent permission grant. Debug is **never a KEE tool**. |
 | Checkpoints | Isolated backend validated; full host/UI publication pending. Do not claim a complete published checkpoint workflow. |
-| emullm Chat, GenerateComment, prompt snapshot loader, symbolic agent runner | **PLANNED; not implemented by these documents.** |
-| Copilot/Codex Operator chips, shared pluggable Python bridge and independent recovery view | **PLANNED until the actual bridge is implemented and verified.** Neither operator is a KEE capability or an installed recovery service by virtue of these docs. |
-| Central typed KEE registry, automatic general KB CRUD with durable undo, teaching-case todos | **PLANNED.** Existing operational task jobs are not durable teaching cases. |
-| Declarative workflow applications and held-out symbolic learning pipeline | **PLANNED.** |
+| emullm Chat, exact disclosure, prompt snapshots and Generate Comment | Implemented. Comment output is an **unsaved proposal**; only inspected nonsensitive material is exported. |
+| Knowledge-defined symbolic host | Implemented bounded lifecycle, loaded-knowledge snapshots and explicit app-owned starter with real TODO creation. No LLM. Trusted approval receipts remain unavailable. |
+| Copilot/Codex chips, isolated embedded chats and independent recovery | Implemented through the authenticated Python bridge. Native operators start only on explicit human Start. Neither is KEE. |
+| Central typed KEE registry and persistent TODO/agent-run changesets | Implemented. TODO mutations have audit/undo. **General managed KB CRUD and native annotation mutation are still unavailable.** |
+| General workflow applications and held-out symbolic learning pipeline | **PLANNED.** The finite symbolic interpreter is not general language understanding. |
+
+The dated material below retains the original requirements and research
+provenance. Its future-tense sections are a design contract, **not the current
+runtime inventory**. The matrix and linked implementation guides above take
+precedence for availability; inspect actual routes and grants before acting.
 
 The coordinator's read-only probe and emullm owner verified 61 models, including
 `emullm/default` as a previous catalog example, and supplied the verified transport/tool

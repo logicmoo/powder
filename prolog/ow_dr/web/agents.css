@@ -9,6 +9,8 @@
 .agents-feedback:empty { display: none; }
 .agents-feedback { overflow-wrap: anywhere; margin-bottom: 12px; }
 .agent-panel[hidden] { display: none; }
+.operator-agent-host { min-width: 0; }
+.agent-panel .operator-agent-frame { min-height: 720px; height: 78vh; border: 1px solid var(--line); background: var(--surface); }
 @media (max-width: 700px) {
   .agent-chips { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

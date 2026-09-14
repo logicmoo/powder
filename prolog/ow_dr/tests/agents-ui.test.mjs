@@ -17,6 +17,7 @@ test('four roles and unread cursors are independent of polls and conversation re
   assert.equal(unreadState(seen, { conversationId: 'b', sequence: 2 }).unread, 2);
   assert.equal(unreadState(seen, { conversationId: 'a', sequence: 9 }).unread, 0);
   assert.equal(unreadState(seen, { conversationId: 'a', sequence: 12 }, true).unread, 0);
+  assert.deepEqual(unreadState(seen, { status: 'disconnected' }), seen);
 });
 
 test('four-chip workspace keeps separate live controllers, drafts, errors and keyboard selection', {
@@ -50,10 +51,13 @@ test('four-chip workspace keeps separate live controllers, drafts, errors and ke
           callbacks[id]=value=>{states[id]={...states[id],...value};options.onStateChange(states[id]);};
           const input=element('textarea',{'aria-label':id+' draft'});
           const element_=element('section',{},input);
-          return {element:element_,getState:()=>states[id],activate(){element_.hidden=false},
+          return {element:element_,getState:()=>states[id],activate(){
+              if(id==='copilot'&&!window.retryCopilot)throw Error('Synthetic activation interrupted');
+              element_.hidden=false},
             deactivate(){element_.hidden=true},destroy(){destroyed.push(id)}};
         }]));
         window.workspace=createAgentWorkspace(host,{loaders});
+        window.createWorkspace=()=>createAgentWorkspace(host,{loaders});
         document.querySelector('main').append(workspace.element);
         workspace.activate();
         </script></html>`);
@@ -91,14 +95,24 @@ test('four-chip workspace keeps separate live controllers, drafts, errors and ke
       new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))`);
     await browser.wait('window.starts?.includes("copilot")');
     assert.equal(await browser.evaluate('document.activeElement.id'), 'agent-chip-copilot');
+    await browser.wait('document.body.textContent.includes("Synthetic activation interrupted")');
+    await browser.evaluate(`window.retryCopilot=true;document.querySelector('#agent-panel-copilot button').click()`);
+    await browser.wait('document.querySelector(\'[aria-label="copilot draft"]\')!==null');
+    assert.equal((await browser.evaluate('starts')).filter(id => id === 'copilot').length, 2);
     await browser.evaluate('document.querySelector("#agent-chip-codex").click()');
     await browser.wait('document.body.textContent.includes("403: operator pairing required")');
     assert.match(await browser.evaluate('document.querySelector("#agent-panel-codex").textContent'), /No conversation/);
     await browser.evaluate(`window.retryCodex=true;document.querySelector('#agent-panel-codex button').click()`);
     await browser.wait('window.states.codex?.status==="ready"');
-    assert.deepEqual(await browser.evaluate('destroyed'), []);
+    assert.deepEqual(await browser.evaluate('destroyed'), ['copilot']);
     await browser.evaluate('workspace.destroy()');
-    assert.deepEqual((await browser.evaluate('destroyed')).sort(), ['codex', 'copilot', 'cyc', 'teacher']);
+    assert.deepEqual((await browser.evaluate('destroyed')).sort(), ['codex', 'copilot', 'copilot', 'cyc', 'teacher']);
+    await browser.evaluate(`Object.defineProperty(window,'localStorage',{configurable:true,
+      get(){throw new DOMException('Storage denied','SecurityError')}});
+      window.workspace=createWorkspace();document.querySelector('main').append(workspace.element);workspace.activate()`);
+    await browser.wait('document.querySelector(\'[aria-label="teacher draft"]\')!==null');
+    assert.match(await browser.evaluate('document.querySelector(".agents-feedback").textContent'), /will not persist/u);
+    await browser.evaluate('workspace.destroy()');
     assert.deepEqual(browser.exceptions, []);
   } finally {
     await browser.close();

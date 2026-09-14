@@ -7,6 +7,7 @@
 :- use_module(kb_debug_admin,[]).
 :- use_module(kb_checkpoint_http,[]).
 :- use_module(kb_agents_http,[]).
+:- use_module(kb_symbolic_agent_http,[]).
 :- use_module(kb_statistics).
 :- use_module(kb_source_packs, []).
 :- use_module(kb_mt_graph, []).

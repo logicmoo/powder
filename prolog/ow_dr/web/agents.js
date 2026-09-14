@@ -10,9 +10,10 @@ export function agentKey(value) {
 }
 
 export function unreadState(before = {}, next = {}, visible = false) {
-  const conversationId = next.conversationId ?? null;
-  const sequence = Number.isSafeInteger(next.sequence) && next.sequence >= 0 ? next.sequence : 0;
+  const conversationId = Object.hasOwn(next, 'conversationId') ? next.conversationId : before.conversationId ?? null;
   const same = before.conversationId === conversationId;
+  const previous = same && Number.isSafeInteger(before.sequence) ? before.sequence : 0;
+  const sequence = Number.isSafeInteger(next.sequence) && next.sequence >= 0 ? Math.max(previous, next.sequence) : previous;
   const seen = same ? before.seen ?? 0 : 0;
   return { conversationId, sequence, seen: visible ? Math.max(seen, sequence) : seen,
     unread: visible ? 0 : Math.max(0, sequence - seen) };
@@ -32,12 +33,15 @@ const factories = {
 };
 async function operatorFactory(host, options) {
   const { createOperatorAgent } = await import('./operator-agent.js');
-  return createOperatorAgent(host, options);
+  const mount = host.element('div', { className: 'operator-agent-host' });
+  const controller = createOperatorAgent(mount, options);
+  return { ...controller, element: mount,
+    destroy() { controller.destroy(); mount.remove(); } };
 }
 
 // Route changes detach this element, not its controllers or in-flight requests.
 export function createAgentWorkspace(host, {
-  storage = globalThis.localStorage, loaders = factories,
+  storage, loaders = factories,
   storageKey = `powder.agents.v1:${new URL('.', location.href).pathname}`,
 } = {}) {
   const { element: el, heading, button, api } = host;
@@ -45,6 +49,13 @@ export function createAgentWorkspace(host, {
   const controllers = new Map(), creating = new Map(), slots = new Map(), chips = new Map();
   const observations = new Map();
   const feedback = el('p', { className: 'agents-feedback', role: 'status', 'aria-live': 'polite' });
+  if (storage === undefined) {
+    try { storage = globalThis.localStorage; }
+    catch (error) {
+      storage = null;
+      feedback.textContent = `Browser storage is unavailable; local preferences will not persist: ${error.message}`;
+    }
+  }
   let active = false, disposed = false, selected = 'teacher', descriptor;
   const panel = el('section', { className: 'agents-workspace', 'aria-label': 'Four text agents' },
     heading('Agents', 'Separate conversations and permissions. Switching agents never submits work.'),
@@ -117,6 +128,7 @@ export function createAgentWorkspace(host, {
     const slot = slots.get(id);
     slot.replaceChildren(el('p', { role: 'status' }, 'Connecting this agent...'));
     const promise = (async () => {
+      let candidate;
       try {
         const config = await configuration();
         if (disposed) return;
@@ -129,19 +141,25 @@ export function createAgentWorkspace(host, {
             ...controllers.get(id)?.getState(), conversationId: value.id,
           }),
         });
+        candidate = controller;
         if (disposed) { controller.destroy(); return; }
-        controllers.set(id, controller);
         slot.replaceChildren(controller.element);
         if (active && selected === id) controller.activate();
         else controller.deactivate();
         report(id, controller.getState());
+        controllers.set(id, controller);
         return controller;
       } catch (error) {
         if (disposed) return;
-        report(id, { status: 'connection error', error: error.message });
+        let message = error.message;
+        if (candidate) {
+          try { candidate.destroy(); }
+          catch (cleanupError) { message += ` Controller cleanup failed: ${cleanupError.message}`; }
+        }
+        report(id, { status: 'connection error', error: message });
         slot.replaceChildren(el('div', { className: 'error-panel', role: 'alert' },
           el('h2', {}, `${AGENT_ROLES.find(role => role.id === id).label} could not connect`),
-          el('p', {}, error.message),
+          el('p', {}, message),
           el('p', {}, 'No conversation, command or model request was started. Reconnect only reads state.'),
           button('Reconnect', () => ensureController(id))));
       } finally { creating.delete(id); }

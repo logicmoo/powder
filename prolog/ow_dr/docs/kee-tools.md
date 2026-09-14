@@ -1,9 +1,18 @@
-# KEE tools: verified routes and planned semantic registry
+# KEE tools: current registry and route/design reference
 
-**Status:** the application has REST endpoints and trusted Prolog components.
-It does **not yet** have the central versioned KEE tool registry, LLM tool adapter,
-symbolic agent runner or general automatic KB-edit/undo contract described below.
-This document is not a tool manifest or permission grant.
+**Current status:** `kb_kee_registry.pl` is the authoritative typed registry;
+`kb_kee.pl` supplies permissioned invocation. TODOs and agent runs use the
+durable KEE ledger. Teacher exposes only exact approved projections and
+permitted owned-TODO changes; Cyc has a bounded LLM-free host. General managed
+KB CRUD and native annotation writes are **not** audited KEE capabilities.
+Neither CLI operator is a KEE tool.
+
+See [four-agent controls](four-agents.md), [exact Teacher disclosure](teacher-integration.md),
+[symbolic lifecycle](symbolic-agent.md), and the
+[isolated operator bridge](../operator_bridge/README.md). The historical
+provider/route inventory and future-tense design sections below are retained
+as research and requirements, not a current availability manifest or permission
+grant. Consult the actual runtime registry rather than inventing `/api/kee`.
 
 The inventory was checked against repository route declarations and handlers on
 2026-09-12. No live requests, LLM calls or mutations were needed. Read current
