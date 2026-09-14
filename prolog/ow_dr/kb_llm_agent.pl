@@ -8,6 +8,7 @@
 :- use_module(kb_llm_transport).
 :- use_module(kb_llm_schema).
 :- use_module(kb_llm_kee).
+:- use_module(kb_llm_timing,[with_run/2]).
 :- use_module(kb_kee_schema,[json_text/2]).
 :- use_module(kb_activity,[]).
 :- use_module(library(error)).
@@ -52,6 +53,7 @@ conversation(Input,Reply) :-
     (plain_text_eligible(D)->Plain=true;Plain=false),
     (get_dict(branchOf,D,Branch)->true;Branch=null),
     (get_dict(lastAction,D,Action)->true;Action="chat"),
+    kb_llm_timing:conversation_timing(D,Timing),
     Reply=_{id:D.id,agent:D.agent,identity:D.identity,status:Status,revision:D.revision,
       activeTurn:D.activeTurn,sequence:Sequence,model:D.config.model,baseURL:D.config.baseURL,
       promptHash:D.prompt.rawHash,settingsRevision:D.config.revision,
@@ -60,7 +62,7 @@ conversation(Input,Reply) :-
       rawResponse:D.lastResponse,
       registry:Registry,todos:_{available:Registry.available,reason:"Use Refresh local TODOs. This inspector never exports task text."},
       notice:D.config.notice,disclosureRequired:true,action:Action,
-      plainTextEligible:Plain,queue:Queue,branchOf:Branch,forkSupported:true}.
+      plainTextEligible:Plain,queue:Queue,branchOf:Branch,forkSupported:true,timing:Timing}.
 observed_status(D,Status) :-
     id_atom(D.id,Id),
     (D.status=="running",\+owned_run(Id,_,_,_)->Status="outcome_unknown";Status=D.status).
@@ -79,7 +81,8 @@ id_atom(_,_) :- domain_error(agent_conversation_id,invalid).
 load_document(Id,Doc) :- conversation_file(Id,File),read_json(File,Doc).
 update_document(Id,Goal) :-
     conversation_file(Id,File),
-    locked_file(File,(read_json(File,Before),call(Goal,Before,After),
+    locked_file(File,(read_json(File,Before),call(Goal,Before,Changed),
+                      attach_latest_timing(Id,Changed,WithTiming),trim_timing_metadata(WithTiming,After),
                       bounded_json(After,1048576),atomic_json(File,After))).
 next_revision(D,Next) :- N is D.revision+1,Next=D.put(revision,N).
 
@@ -91,23 +94,29 @@ start_chat(Request,Reply) :-
     must_be(integer,Request.revision),
     (between(1,8192,N)->true;resource_error(llm_input_limit)),
     uuid(Run,[version(4)]),id_atom(Request.id,Id),
-    kb_activity:acquire_application(Run),
+    kb_llm_timing:begin_run(Id,Run),
     catch(
-      (with_mutex(powder_llm_runs,
+      (kb_activity:acquire_application(Run),
+       with_run(Run,
+        (with_mutex(powder_llm_runs,
          ((owned_run(Id,_,_,_)->throw(error(agent_conversation_busy,_));true),
           findall(R,owned_run(_,R,_,_),Active),length(Active,Count),
           (Count<4->true;resource_error(llm_active_turns)),
           update_document(Id,accept_chat(Request,Run)),
+          kb_llm_timing:phase(worker_wait),
           thread_create(run_wait(Id,Run),Thread,[detached(true)]),
           assertz(owned_run(Id,Run,Thread,starting)))),
-       thread_send_message(Thread,start)),
-      Error,(finish_error(Id,Run,Error),kb_activity:release_application(Run),throw(Error))),
+        thread_send_message(Thread,start)))),
+      Error,(finish_error(Id,Run,Error),safe_error(Error,Safe),
+            kb_llm_timing:fail_run(Run,"failed",Safe.code),
+            kb_activity:release_application(Run),throw(Error))),
     conversation(Id,Reply).
 accept_chat(Request,Run,D,After) :-
     queue_data(D,Q),pending_items(Q.items,Pending),
     (Pending==[]->true;throw(error(llm_queue_pending,_))),
     prepare_chat(Request,Run,D,After).
 prepare_chat(Request,Run,D,After) :-
+    kb_llm_timing:phase(Run,disclosure_validation),
     kb_llm_kee:policy(D.config,_),
     (member(Call,D.calls),memberchk(Call.state,["reserved","unknown"])->
        throw(error(llm_call_outcome_unknown,_));true),
@@ -120,28 +129,33 @@ prepare_chat(Request,Run,D,After) :-
       History=GD.messages,TurnGrant=Grant,Action=GD.binding.mode;
       verify_provider_input(D.scope,D.history),
       append(D.history,[_{role:"user",content:Request.text}],History),TurnGrant=null,Action="chat"),
+    kb_llm_timing:phase(Run,request_preparation),
     bounded_json(History,D.config.budgets.historyBytes),
     Turns is D.turns+1,(Turns=<100->true;resource_error(llm_conversation_turns)),
+    kb_llm_timing:bind_turn(Run,Turns),
     completed_history(D,Completed),event(D,"turn_started",_{run:Run},E),
     next_revision(E.put(_{status:"running",activeTurn:Run,history:History,
-      completedHistory:Completed,turnGrant:TurnGrant,lastAction:Action,turns:Turns,lastError:null}),After).
+      completedHistory:Completed,turnGrant:TurnGrant,lastAction:Action,turns:Turns,lastError:null}),After),
+    kb_llm_timing:phase(Run,admission_persistence).
 run_wait(Id,Run) :-
     thread_get_message(start),run_chain(Id,Run).
 run_chain(Id,Run) :-
-    setup_call_cleanup(true,
+    with_run(Run,setup_call_cleanup(true,
       catch((once(run_turn(Id,Run))->true;throw(error(llm_turn_failed,_))),
             Error,finish_error(Id,Run,Error)),
-      finish_owned_run(Id,Run,Next)),
+      setup_call_cleanup(true,kb_llm_timing:finish(Run),finish_owned_run(Id,Run,Next)))),
     (Next=next(NextRun)->run_chain(Id,NextRun);true).
 run_turn(Id,Run) :-
+    kb_llm_timing:phase(context_preparation),
     load_document(Id,D),ensure_current(Id,Run),
     Config=D.config.put(_{conversation:D.id,run:Run}),
     (get_dict(turnGrant,D,G),G\==null->Scope=D.scope.put(grant,G);Scope=D.scope),
     setup_call_cleanup(open_turn(Config,D.prompt,Scope,Handle,Tools),
       call_with_time_limit(Config.budgets.seconds,
         rounds(Id,Run,Config,Handle,Tools,D.history,0,0)),
-      close_turn(Handle)).
+      setup_call_cleanup(true,kb_llm_timing:phase(context_cleanup),close_turn(Handle))).
 rounds(Id,Run,Config,Handle,Tools,History,Rounds,Calls) :-
+    kb_llm_timing:phase(outgoing_validation),
     ensure_current(Id,Run),
     (Rounds<Config.budgets.rounds->true;resource_error(llm_round_budget)),
     verify_outgoing(Handle),Handle=kee(_,_,Scope,_,_),
@@ -151,6 +165,7 @@ rounds(Id,Run,Config,Handle,Tools,History,Rounds,Calls) :-
     set_phase(Id,Run,validating),ensure_current(Id,Run),
     bounded_json(Response,Config.budgets.outputBytes),response_message(Response,Message),
     append(History,[Message],WithAssistant),
+    kb_llm_timing:phase(reply_persistence),
     update_document(Id,record_assistant(Run,Message,Response,WithAssistant)),
     (get_dict(tool_calls,Message,ToolCalls),ToolCalls\=[]->
       length(ToolCalls,Count),NextCalls is Calls+Count,
@@ -159,9 +174,10 @@ rounds(Id,Run,Config,Handle,Tools,History,Rounds,Calls) :-
       (same_length(Ids,Unique)->true;throw(error(llm_duplicate_call_ids,_))),
       execute_calls(ToolCalls,Id,Run,Handle,Config,WithAssistant,NextHistory),
       (member(C,ToolCalls),kb_llm_kee:mutation_name(C.function.name)->
+        kb_llm_timing:phase(terminal_persistence),
         update_document(Id,finish_local_mutations(Run));
         NextRound is Rounds+1,rounds(Id,Run,Config,Handle,Tools,NextHistory,NextRound,NextCalls))
-    ;update_document(Id,finish_success(Run))).
+    ;kb_llm_timing:phase(terminal_persistence),update_document(Id,finish_success(Run))).
 response_message(Response,Message) :-
     (is_dict(Response),get_dict(choices,Response,[Choice|_]),get_dict(message,Choice,Message),
      is_dict(Message),Message.role=="assistant"->true;throw(error(llm_invalid_response,_))),
@@ -182,21 +198,25 @@ finish_success(Run,D,After) :-
     check_document_run(D,Run),event(D,"turn_completed",_{run:Run},E),
     finish_queue_item(E,Run,"completed",null,Q),
     next_revision(E.put(_{status:"ready",activeTurn:null,queue:Q,
-                         completedHistory:D.history,lastCompletedRun:Run}),After).
+                         completedHistory:D.history,lastCompletedRun:Run}),Changed),
+    attach_terminal_timing(Run,"completed","reply",Changed,After).
 finish_local_mutations(Run,D,After) :-
     check_document_run(D,Run),
     event(D,"local_mutation_boundary",
       _{notice:"Model continuation stopped. Inspect actual TODO outcomes and receipts locally. No future result export was approved."},E),
     paused_queue(E,"knowledge_turn",Q),
-    next_revision(E.put(_{status:"ready",activeTurn:null,completedHistory:D.history,queue:Q}),After).
+    next_revision(E.put(_{status:"ready",activeTurn:null,completedHistory:D.history,queue:Q}),Changed),
+    attach_terminal_timing(Run,"completed","local_mutation_boundary",Changed,After).
 
 execute_calls([],_,_,_,_,History,History).
 execute_calls([Call|Rest],Id,Run,Handle,Config,Before,After) :-
     ensure_current(Id,Run),set_phase(Id,Run,tool),
     json_bytes(Call,Bytes),bytes_hash(Bytes,HashAtom),atom_string(HashAtom,Hash),
+    kb_llm_timing:phase(tool_reservation),
     reserve_call(Id,Run,Call,Hash,Previous),
     (Previous=completed(Result)->true;
-     catch(((once(run_call(Handle,Call,Safe,Audit))->true;throw(error(llm_tool_failed,_))),
+     catch((kb_llm_timing:phase(tool_execution),
+            (once(run_call(Handle,Call,Safe,Audit))->true;throw(error(llm_tool_failed,_))),
             bounded_json(Safe,Config.budgets.outputBytes),
             Result=_{ok:true,result:Safe},store_call(Id,Run,Call,Hash,Result,Audit)),
            Error,call_error(Id,Run,Call,Hash,Error,Result))),
@@ -204,6 +224,7 @@ execute_calls([Call|Rest],Id,Run,Handle,Config,Before,After) :-
     json_text(Result,Text),
     ToolMessage=_{role:"tool",tool_call_id:Call.id,content:Text},
     append(Before,[ToolMessage],Next),
+    kb_llm_timing:phase(tool_history_persistence),
     update_document(Id,record_tool(Run,Next)),
     execute_calls(Rest,Id,Run,Handle,Config,Next,After).
 call_error(Id,Run,Call,Hash,Error,Result) :-
@@ -228,10 +249,12 @@ reserve_call(Id,Run,Call,Hash,Previous) :-
           throw(error(llm_call_id_conflict,_)))
        ;Previous=new,
         Record=_{id:Call.id,hash:Hash,name:Call.function.name,call:Call,state:"reserved",result:null},
-        append(D.calls,[Record],Records),next_revision(D.put(calls,Records),After),
+        append(D.calls,[Record],Records),next_revision(D.put(calls,Records),Changed),
+        trim_timing_metadata(Changed,After),
         bounded_json(After,1048576),atomic_json(File,After)))).
 store_call(Id,_Run,Call,Hash,Result,Audit) :-
     % Commit outcome recording survives interruption; new calls still require current admission.
+    kb_llm_timing:phase(tool_receipt_persistence),
     update_document(Id,complete_call(Call.id,Hash,Result,Audit)).
 complete_call(CallId,Hash,Result,Audit,D,After) :-
     select(Old,D.calls,Rest),Old.id==CallId,Old.hash==Hash,
@@ -248,7 +271,8 @@ cancel_chat(Input,Status,Reply) :-
     id_atom(Input,Id),
     with_mutex(powder_llm_runs,
       (findall(Run-Thread-Phase,owned_run(Id,Run,Thread,Phase),Owned),
-       forall(member(Run-_-_,Owned),(cancelled(Run)->true;assertz(cancelled(Run)))),
+       forall(member(Run-_-_,Owned),
+         ((cancelled(Run)->true;assertz(cancelled(Run))),kb_llm_timing:phase(Run,cancellation))),
        atom_string(Id,Conversation),revoke_turn(Conversation),
        update_document(Id,record_cancel(Status)))),
     forall(member(_-Thread-http,Owned),catch(thread_signal(Thread,throw(llm_cancelled)),_,true)),
@@ -257,7 +281,8 @@ record_cancel(Status,D,After) :-
     event(D,Status,_{providerCancellation:"best effort; no provider cancellation endpoint"},E),
     finish_queue_item(E,D.activeTurn,"interrupted",null,Q0),
     Q=Q0.put(_{paused:true,pauseReason:Status}),
-    next_revision(E.put(_{status:Status,activeTurn:null,queue:Q}),After).
+    next_revision(E.put(_{status:Status,activeTurn:null,queue:Q}),Changed),
+    attach_terminal_timing(D.activeTurn,Status,Status,Changed,After).
 ensure_current(Id,Run) :-
     (cancelled(Run)->throw(llm_cancelled);true),load_document(Id,D),check_document_run(D,Run).
 check_document_run(D,Run) :-
@@ -266,15 +291,21 @@ check_document_run(D,Run) :-
 set_phase(Id,Run,Phase) :-
     with_mutex(powder_llm_runs,
       ((cancelled(Run)->throw(llm_cancelled);true),
-       (retract(owned_run(Id,Run,T,_))->assertz(owned_run(Id,Run,T,Phase));throw(llm_cancelled)))).
+       (retract(owned_run(Id,Run,T,_))->assertz(owned_run(Id,Run,T,Phase));throw(llm_cancelled)))),
+    (phase_operation(Phase,Operation)->kb_llm_timing:phase(Run,Operation);true).
+phase_operation(http,request_preparation).
+phase_operation(validating,reply_validation).
+phase_operation(tool,tool_validation).
 finish_error(Id,Run,Error) :-
     safe_error(Error,Safe),
+    kb_llm_timing:phase(Run,terminal_persistence),
     catch(update_document(Id,record_error(Run,Safe)),_,true).
 record_error(Run,Error,D,After) :-
     check_document_run(D,Run),event(D,"turn_failed",Error,E),
     finish_queue_item(E,Run,"failed",Error,Q0),
     Q=Q0.put(_{paused:true,pauseReason:"failed"}),
-    next_revision(E.put(_{status:"failed",activeTurn:null,lastError:Error,queue:Q}),After).
+    next_revision(E.put(_{status:"failed",activeTurn:null,lastError:Error,queue:Q}),Changed),
+    attach_terminal_timing(Run,"failed",Error.code,Changed,After).
 safe_error(llm_cancelled,_{code:"interrupted",message:"The turn was interrupted; late calls are discarded."}) :- !.
 safe_error(time_limit_exceeded,_{code:"timeout",message:"The host deadline expired. No automatic retry was performed."}) :- !.
 safe_error(error(llm_http_status(Status),_),_{code:"provider_http",status:Status,
@@ -308,6 +339,20 @@ event_sequence(D,Sequence) :-
 bounded_json(Value,Limit) :-
     json_bytes(Value,Bytes),length(Bytes,N),
     (N=<Limit->true;resource_error(llm_payload_budget)).
+attach_terminal_timing(Run,Status,Result,D,After) :-
+    kb_llm_timing:checkpoint(Run,Status,Result,Trace),attach_timing(Trace,D,After).
+attach_latest_timing(Id,D,After) :-
+    (kb_llm_timing:latest_terminal(Id,Trace),
+     (get_dict(lastTiming,D,Previous)->
+        get_dict(runId,Previous,PreviousRun),get_dict(runId,Trace,PreviousRun);true)->
+       attach_timing(Trace,D,After);After=D).
+attach_timing(Trace,D,After) :-
+    (Trace==null->After=D;
+     Candidate=D.put(lastTiming,Trace),json_bytes(Candidate,Bytes),length(Bytes,N),
+     (N=<1048576->After=Candidate;After=D)).
+trim_timing_metadata(D,After) :-
+    (get_dict(lastTiming,D,_),json_bytes(D,Bytes),length(Bytes,N),N>1048576->
+       del_dict(lastTiming,D,_,After);After=D).
 
 empty_queue(_{items:[],paused:false,pauseReason:null,epoch:Epoch}) :- queue_epoch(Epoch).
 queue_data(D,Q) :- (get_dict(queue,D,Q)->true;empty_queue(Q)).
@@ -358,12 +403,15 @@ queue_state(D,Q,N,State,Reason) :-
 enqueue_chat(R,Reply) :-
     strict_keys(R,[approvedNonsensitive,callId,id,revision,text]),queue_text(R),
     queue_call_id(R.callId),must_be(integer,R.revision),id_atom(R.id,Id),
-    with_mutex(powder_llm_runs,update_document(Id,enqueue_update(R))),
+    with_mutex(powder_llm_runs,
+      (update_document(Id,enqueue_update(R,Accepted)),
+       (Accepted=queued(At)->kb_llm_timing:queue_entered(Id,R.callId,At);true))),
     conversation(Id,Reply).
-enqueue_update(R,D,After) :-
+enqueue_update(R,D,After) :- enqueue_update(R,_,D,After).
+enqueue_update(R,Accepted,D,After) :-
     queue_data(D,Q),
     (member(Item,Q.items),Item.callId==R.callId->
-       (Item.text==R.text->After=D;throw(error(llm_queue_call_conflict,_)));
+       (Item.text==R.text->After=D,Accepted=existing;throw(error(llm_queue_call_conflict,_)));
      expected_revision(R,D),require_plain_text(D),
      (owned_current(D)->true;throw(error(llm_queue_requires_active_turn,_))),
      pending_items(Q.items,Pending),length(Pending,N),length(Q.items,Total),
@@ -376,10 +424,11 @@ enqueue_update(R,D,After) :-
      append(D.history,Messages,Projected),bounded_json(Projected,D.config.budgets.historyBytes),
      event(D,"message_enqueued",_{callId:R.callId},E),
      NewQ=Q.put(_{items:Items,paused:false,pauseReason:null,epoch:Epoch}),
-     next_revision(E.put(queue,NewQ),After)).
+     next_revision(E.put(queue,NewQ),After),Accepted=queued(Now)).
 cancel_queued(R,Reply) :-
     strict_keys(R,[callId,id,revision]),queue_call_id(R.callId),must_be(integer,R.revision),
     id_atom(R.id,Id),with_mutex(powder_llm_runs,update_document(Id,cancel_queued_update(R))),
+    kb_llm_timing:queue_cancelled(Id,R.callId),
     conversation(Id,Reply).
 cancel_queued_update(R,D,After) :-
     queue_data(D,Q),
@@ -406,19 +455,25 @@ resume_queue(R,Reply) :-
        catch((thread_create(run_wait(Id,Run),Thread,[detached(true)]),
               assertz(owned_run(Id,Run,Thread,starting)),thread_send_message(Thread,start)),
          Error,(retractall(owned_run(Id,Run,_,_)),finish_error(Id,Run,Error),
+                safe_error(Error,Safe),kb_llm_timing:fail_run(Run,"failed",Safe.code),
                 kb_activity:release_application(Run),throw(Error))))),
     conversation(Id,Reply).
 reserve_queued_run(Id,Mode,Run) :-
-    uuid(Run),kb_activity:acquire_application(Run),
-    catch((once(update_document(Id,accept_queued(Mode,Run)))->true;
-           throw(error(llm_queue_dispatch_failed,_))),Error,
-      (kb_activity:release_application(Run),throw(Error))).
+    uuid(Run),kb_llm_timing:begin_run(Id,Run),
+    catch((kb_activity:acquire_application(Run),
+           with_run(Run,
+            (once(update_document(Id,accept_queued(Mode,Run)))->true;
+             throw(error(llm_queue_dispatch_failed,_)))),
+           kb_llm_timing:queue_started(Run),kb_llm_timing:phase(Run,worker_wait)),Error,
+      (safe_error(Error,Safe),kb_llm_timing:fail_run(Run,"failed",Safe.code),
+       kb_activity:release_application(Run),throw(Error))).
 accept_queued(Mode,Run,D,After) :-
     (Mode=resume(R)->expected_revision(R,D);Mode=automatic(Previous),automatic_queue_ready(D,Previous)),
     require_plain_text(D),
     (memberchk(D.status,["running","closed"])->throw(error(llm_queue_resume_blocked,_));true),
     queue_data(D,Q),pending_items(Q.items,Pending),
     (Pending=[Item|_]->true;throw(error(llm_queue_empty,_))),
+    kb_llm_timing:queue_link(Run,Item.callId,Item.createdAt),
     Request=_{id:D.id,revision:D.revision,text:Item.text,approvedNonsensitive:true},
     prepare_chat(Request,Run,D,Prepared),get_time(Now),queue_epoch(Epoch),
     Started=Item.put(_{status:"running",run:Run,startedAt:Now}),

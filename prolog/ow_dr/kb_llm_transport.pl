@@ -1,6 +1,7 @@
 :- module(kb_llm_transport,[discover_models/1,chat_completion/4,provider_json/5]).
 :- use_module(kb_agent_settings).
 :- use_module(kb_llm_files,[json_bytes/2]).
+:- use_module(kb_llm_timing,[]).
 :- use_module(library(http/http_open)).
 :- use_module(library(http/http_json)).
 :- use_module(library(http/json)).
@@ -23,6 +24,7 @@ discover_models(Reply) :-
             baseURL:Settings.baseURL,notice:Settings.notice,source:"GET /v1/models"}.
 
 chat_completion(Config,Messages,Tools,Reply) :-
+    kb_llm_timing:phase(request_preparation),
     validate_model(Config.model),must_be(list,Messages),must_be(list,Tools),
     Payload0=_{model:Config.model,messages:Messages,stream:false,
                max_tokens:Config.budgets.tokens},
@@ -52,16 +54,21 @@ provider_request(Method,Base,Route,Payload,Headers,Reply) :-
     (memberchk(Method-Route,[get-"models",post-"chat/completions"])->true;
      permission_error(connect,llm_route,unsupported)),
     atomic_list_concat([Base,'/',Route],URL),
-    (Method==post->json_bytes(Payload,RequestBytes),Extra=[post(bytes('application/json',RequestBytes))];Extra=[]),
+    (Method==post->kb_llm_timing:phase(request_encoding),
+       json_bytes(Payload,RequestBytes),Extra=[post(bytes('application/json',RequestBytes))];Extra=[]),
     append([method(Method),bypass_proxy(true),redirect(false),timeout(120),
             status_code(Status),request_header('Accept'='application/json'),
             connection(close)|Headers],Extra,Options),
     catch(call_with_time_limit(120,
-      setup_call_cleanup(http_open(URL,Stream,Options),
-        (set_stream(Stream,encoding(octet)),
+      setup_call_cleanup(
+        ((Method==post->kb_llm_timing:instant(http_dispatch),kb_llm_timing:phase(endpoint_wait);true),
+         http_open(URL,Stream,Options)),
+        ((Method==post->kb_llm_timing:phase(response_read);true),
+         set_stream(Stream,encoding(octet)),
          read_string(Stream,1048577,Raw),string_length(Raw,Size),
          (Size=<1048576->true;resource_error(llm_response_limit)),
          (Status>=200,Status<300->true;throw(error(llm_http_status(Status),_))),
+         (Method==post->kb_llm_timing:phase(response_decode);true),
          string_codes(Raw,Bytes),
          (phrase(utf8_codes(Codes),Bytes)->string_codes(Text,Codes);
           throw(error(llm_invalid_utf8,_))),
