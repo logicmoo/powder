@@ -32,7 +32,19 @@
 .cyc-requests { padding: 18px; background: var(--accent-soft); border-top: 1px solid var(--line); }
 .cyc-requests form { display: grid; gap: 12px; }
 .symbolic-agent :focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
-.symbolic-agent button:disabled { opacity: .6; cursor: not-allowed; }
+.symbolic-agent button:disabled {
+  background: var(--soft-line);
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  opacity: 1;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+  transition: none;
+}
+@media (forced-colors: active) {
+  .symbolic-agent button:disabled { color: GrayText; border-color: GrayText; }
+}
 @media (max-width: 850px) {
   .cyc-workspace, .cyc-workspace[data-settings-open="true"] { grid-template-columns: minmax(0, 1fr); }
   .cyc-inspector { border-left: 0; border-top: 1px solid var(--line); }

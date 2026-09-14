@@ -221,6 +221,7 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
   const click = label => browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
   const fill = (name, value) => browser.evaluate(`{const n=document.querySelector('[name="${name}"]');n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('input',{bubbles:true}))}`);
   const choose = id => browser.evaluate(`{const p=document.querySelector('[aria-label="Cyc conversations"]');p.value=${JSON.stringify(id)};p.dispatchEvent(new Event('change'))}`);
+  const appearance = label => browser.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(label)}),s=getComputedStyle(b);return {disabled:b.disabled,background:s.backgroundColor,color:s.color,border:s.borderTopStyle,opacity:s.opacity,cursor:s.cursor,shadow:s.boxShadow,transform:s.transform}})()`);
   try {
     await browser.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
     await browser.send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
@@ -231,7 +232,29 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
       { sequence: 0, error: null, conversationId: null });
     assert.equal(await browser.evaluate(`cyc.getState().settingsOpen`), false);
     assert.equal(await browser.evaluate(`document.querySelector('.cyc-chat').getBoundingClientRect().width/document.querySelector('.cyc-workspace').getBoundingClientRect().width>0.98`), true);
+    await browser.wait(`(()=>{const bs=[...document.querySelectorAll('button')],s=bs.find(b=>b.textContent==='Send'),g=bs.find(b=>b.textContent==='Say something');return !g.disabled&&getComputedStyle(g).backgroundColor!==getComputedStyle(s).backgroundColor})()`);
+    const disabledSend = await appearance('Send'), enabledGreeting = await appearance('Say something');
+    assert.equal(disabledSend.disabled, true);
+    assert.equal(disabledSend.border, 'dashed', 'disabled controls have a non-color visual cue');
+    assert.equal(disabledSend.opacity, '1', 'disabled labels stay readable');
+    assert.equal(disabledSend.cursor, 'not-allowed');
+    assert.notEqual(disabledSend.background, enabledGreeting.background);
+    assert.notEqual(disabledSend.color, enabledGreeting.color);
+    const sendCenter = await browser.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent==='Send');b.scrollIntoView({block:'center'});const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    await browser.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...sendCenter });
+    assert.deepEqual(await appearance('Send'), disabledSend, 'hover must not restore an active appearance');
+    await click('Send');
+    assert.deepEqual(requests.map(r => r.action), ['status'], 'disabled Send cannot create a conversation');
+    assert.equal(await browser.evaluate(`document.querySelectorAll('.cyc-chat input[type="checkbox"]').length`), 0);
+    await fill('cyc-message', 'Visual state check');
+    await browser.wait(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Send').disabled===false`);
+    assert.equal((await appearance('Send')).border, 'solid', 'enabled Send regains the normal button treatment');
+    await fill('cyc-message', '');
+    await browser.send('Emulation.setEmulatedMedia', { features: [{ name: 'forced-colors', value: 'active' }] });
+    assert.equal((await appearance('Send')).border, 'dashed', 'high contrast preserves the disabled-state cue');
+    await browser.send('Emulation.setEmulatedMedia', { features: [] });
     await click('Settings'); assert.equal(await browser.evaluate(`cyc.getState().settingsOpen`), true);
+    assert.equal((await appearance('Refresh state')).border, 'dashed', 'disabled secondary controls use the same treatment');
     assert.equal(await browser.evaluate(`getComputedStyle(document.querySelector('.cyc-workspace')).gridTemplateColumns.split(' ').length`), 2);
     await browser.evaluate(`document.querySelector('.cyc-inspector').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
     assert.equal(await browser.evaluate(`document.activeElement.textContent`), 'Settings');
@@ -361,6 +384,7 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     assert.equal(requests.filter(r => r.action === 'send').length, beforeLostStartSends + 1);
     await browser.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     assert.equal(await browser.evaluate(`document.documentElement.scrollWidth<=innerWidth`), true);
+    assert.equal((await appearance('Send')).border, 'dashed', 'mobile retains the visible disabled state');
     await click('Settings');
     assert.equal(await browser.evaluate(`document.documentElement.scrollWidth<=innerWidth`), true);
     await choose(''); await fill('cyc-message', 'Persisted New conversation draft');

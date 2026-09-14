@@ -429,6 +429,9 @@ inspector with `aria-expanded`/`aria-controls`; Escape closes it. Settings start
 collapsed on controller creation and never navigates the main route. Pending
 typed forms, unavailable approval notices and applicable Continue/Interrupt/
 Resume/Stop controls remain in the chat view, not behind Settings.
+Disabled buttons have a muted filled surface, dashed border and unavailable
+cursor, not just reduced opacity. Labels remain readable; hover does not restore
+an active appearance, and the border cue survives forced-color modes.
 
 New is a local draft, not a durable run. Its first explicit Send creates the
 selected profile run and, only after a verified creation response, sends that
@@ -527,6 +530,34 @@ String declarations expose `minLength`/`maxLength` to the UI; the starter title
 is 1–256 characters. Client validation explains the bound and retains the draft.
 Server form rejection returns HTTP 422 `symbolic_form_invalid`, preserves the
 editable form and its revision, and never creates a dispatch claim.
+
+### Conversation branching: design boundary, not an available operation
+
+New creates a fresh initial run; it does not fork or replay a previous run.
+There is currently no symbolic fork route or durable fork event. The current
+`create_prepared` always constructs the initial engine state, while action IDs,
+audit ownership and receipts are bound to the original run/conversation.
+Copying browser history or calling Start cannot truthfully clone that state.
+No Git branching or basic-page approval checkbox is implied.
+
+A safe extension needs a versioned, atomic host operation bound to the parent's
+exact run, conversation, resource revision and event sequence. Initially it
+should accept only a verified quiescent checkpoint, with no pending form,
+approval, planned/dispatched action, unresolved outcome, runnable continuation
+or compensation. It must:
+
+- Allocate a fresh run/conversation and independent event/action identity.
+- Copy the validated immutable program/source manifest and inert semantic
+  cursor without invoking the interpreter or dispatching anything.
+- Preserve parent history/proof/receipt references as read-only lineage, not
+  copied mutation ownership or newly completed actions. Counters must distinguish
+  inherited diagnostic/budget use from new branch activity without resetting
+  cumulative limits to bypass the host ceiling.
+- Leave the parent unchanged, invalidate on revision races, and provide a
+  durable idempotent creation receipt with unknown-outcome inspection.
+
+Until that contract and isolated race/restart/zero-dispatch tests exist, the UI
+offers New/Previous rather than an unsafe or misleading Branch button.
 
 ## Explicit app-owned starter
 
