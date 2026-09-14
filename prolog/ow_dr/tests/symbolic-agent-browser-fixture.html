@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<meta name="viewport" content="width=device-width">
+<title>Cyc isolated fixture</title>
+<link rel="stylesheet" href="/style.css">
+<main></main>
+<script src="/symbolic-fixture-config.js"></script>
+<script type="module">
+import {createSymbolicAgent} from '/symbolic-agent.js';
+function element(tag,props={},...children){
+  const n=document.createElement(tag);
+  for(const[k,v]of Object.entries(props)){
+    if(v===undefined)continue;
+    if(k.startsWith('on'))n.addEventListener(k.slice(2),v);
+    else if(k in n)n[k]=v;else n.setAttribute(k,v);
+  }
+  for(const c of children.flat(Infinity))
+    if(c!==null&&c!==undefined&&c!==false)n.append(c instanceof Node?c:document.createTextNode(String(c)));
+  return n;
+}
+window.fixtureRequests=[];
+const api=async(path,params={},options={})=>{
+  const u=new URL(window.symbolicFixtureApiBase+path,location.href);
+  for(const[k,v]of Object.entries(params))u.searchParams.set(k,v);
+  window.fixtureRequests.push({path,body:options.body});
+  const r=await fetch(u,{...options,headers:{'Content-Type':'application/json'},body:options.body?JSON.stringify(options.body):undefined});
+  const b=await r.json();window.fixtureLatest=b;
+  if(!r.ok)throw Object.assign(Error(b.error.message),b.error,{status:r.status});return b;
+};
+const host={api,element,button:(text,click,className='button')=>element('button',{type:'button',className,onclick:click},text),
+  heading:(title,body)=>element('header',{className:'page-heading'},element('div',{},element('h1',{},title),element('p',{},body)))};
+window.make=options=>createSymbolicAgent(host,options);
+window.states=[];window.cyc=make({onStateChange:value=>{window.lastState=value;states.push(value)}});
+document.querySelector('main').append(cyc.element);
+</script>
+</html>

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,9 @@ test('explicit MT selection, cumulative state and unresolved actions', () => {
   assert.equal(controlAvailability({ phase: 'running' }, true).continue, false);
   assert.equal(controlAvailability({ phase: 'awaiting_action', pending: { stage: 'dispatched' } }).continue, false);
   assert.equal(controlAvailability({ phase: 'interrupted', pending: { kind: 'action' } }).resume, false);
+  assert.equal(controlAvailability({ phase: 'interrupted', pending: { kind: 'action', stage: 'planned' } }).resume, true);
+  for (const stage of ['unknown', 'dispatched'])
+    assert.equal(controlAvailability({ phase: 'interrupted', pending: { kind: 'action', stage } }).resume, false);
   assert.equal(controlAvailability({ phase: 'awaiting_input' }, false, true).send, false);
   assert.equal(controlAvailability({ phase: 'awaiting_input' }, false, true).stop, true);
   assert.equal(controlAvailability({ phase: 'stopped' }).resume, false);
@@ -28,6 +32,82 @@ test('wire rendering never evaluates markup and preserves structured variables',
   assert.deepEqual(mergeEvents([{ sequence: 2 }, { sequence: 1 }], [{ sequence: 2, updated: true }]),
     [{ sequence: 1 }, { sequence: 2, updated: true }]);
 });
+test('real isolated host: constrained form and undispatched read/write resume', {
+  skip: !process.env.LOGOS_CHROME, timeout: 90000,
+}, async () => {
+  const child = spawn('swipl', ['-q', '-s', join(here, 'symbolic-agent-browser-fixture.pl'),
+    '-g', 'symbolic_agent_browser_fixture:main', '-t', 'halt'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let diagnostics = '', browser;
+  child.stderr.on('data', data => { diagnostics = (diagnostics + data).slice(-8000); });
+  const exited = new Promise(resolve => { child.once('exit', resolve); child.once('error', () => resolve(-1)); });
+  try {
+    const port = await new Promise((resolve, reject) => {
+      let output = '';
+      const timer = setTimeout(() => reject(Error(`Isolated SWI host did not start: ${diagnostics}`)), 15000);
+      child.once('error', error => { clearTimeout(timer); reject(error); });
+      child.once('exit', code => { clearTimeout(timer); reject(Error(`Isolated SWI host exited ${code}: ${diagnostics}`)); });
+      child.stdout.on('data', data => {
+        output += data;
+        const match = output.match(/\{"port":(\d+)\}/u);
+        if (match) { clearTimeout(timer); resolve(Number(match[1])); }
+      });
+    });
+    browser = await launchChromium(process.env.LOGOS_CHROME);
+    const click = label => browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
+    const fill = (name, value) => browser.evaluate(`{const n=document.querySelector('[name="${name}"]');n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('input',{bubbles:true}))}`);
+    const phase = expected => browser.wait(`cyc.getState().status===${JSON.stringify(expected)}&&!cyc.getState().pending`);
+    await browser.send('Page.navigate', { url: `http://127.0.0.1:${port}/` });
+    await browser.wait(`!!window.cyc&&document.querySelector('[name="cyc-profile"]').options.length===3`);
+    assert.deepEqual(await browser.evaluate(`fixtureRequests.map(r=>r.path)`), ['symbolic/status']);
+    await browser.evaluate(`{const p=document.querySelector('[name="cyc-profile"]');p.value='cyc-starter-v1';p.dispatchEvent(new Event('change'))}`);
+    await click('Start'); await phase('awaiting_input');
+    await fill('cyc-message', 'new todo'); await click('Send'); await phase('awaiting_form');
+    assert.equal(await browser.evaluate(`document.querySelector('[name="title"]').maxLength`), 256);
+    await fill('title', 'A'.repeat(257));
+    await browser.evaluate(`document.querySelector('.cyc-requests form').requestSubmit()`);
+    assert.equal(await browser.evaluate(`fixtureRequests.filter(r=>r.path==='symbolic/form').length`), 0);
+    assert.match(await browser.evaluate(`cyc.getState().error.message`), /256/u);
+    await browser.evaluate(`cyc.deactivate();cyc.activate()`); await phase('awaiting_form');
+    assert.equal(await browser.evaluate(`document.querySelector('[name="title"]').value.length`), 257);
+    const rejection = await browser.evaluate(`(async()=>{
+      const s=fixtureLatest.run;
+      const response=await fetch(symbolicFixtureApiBase+'symbolic/form',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({id:s.id,conversation:s.conversation,
+          revision:s.revision,callId:'oversized-direct-fixture',values:{title:'A'.repeat(257),description:''}})});
+      return {status:response.status,body:await response.json()};
+    })()`);
+    assert.equal(rejection.status, 422); assert.equal(rejection.body.error.code, 'symbolic_form_invalid');
+    await click('Refresh state'); await phase('awaiting_form');
+    assert.equal(await browser.evaluate(`document.querySelector('[name="title"]').value.length`), 257);
+    await fill('title', 'A'.repeat(256));
+    await browser.evaluate(`document.querySelector('.cyc-requests form').requestSubmit()`); await phase('running');
+    await click('Continue'); await phase('awaiting_action');
+    const planned = await browser.evaluate(`fixtureLatest.run.pending.callId`);
+    await click('Interrupt'); await phase('interrupted');
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Resume').disabled`), false);
+    await click('Resume'); await phase('awaiting_action');
+    assert.equal(await browser.evaluate(`fixtureLatest.run.pending.callId`), planned);
+    assert.equal(await browser.evaluate(`fixtureLatest.run.pending.stage`), 'planned');
+    await click('Continue'); await phase('running');
+    await click('Continue'); await phase('awaiting_action');
+    await click('Interrupt'); await phase('interrupted');
+    await click('Resume'); await phase('awaiting_action');
+    await click('Continue'); await phase('running');
+    await click('Continue'); await phase('awaiting_input');
+    await click('TODOs'); await click('Refresh TODOs'); await browser.wait(`!cyc.getState().pending`);
+    assert.equal(await browser.evaluate(`fixtureLatest.result.total`), 1);
+    assert.equal(await browser.evaluate(`fixtureLatest.result.items[0].data.title`), 'A'.repeat(256));
+    assert.equal(await browser.evaluate(`fixtureLatest.result.items[0].data.status`), 'open');
+    assert.equal(await browser.evaluate(`cyc.getState().unknownOutcome`), false);
+    assert.deepEqual(browser.exceptions, []);
+  } finally {
+    if (browser) await browser.close();
+    child.stdin.end('\n');
+    const timer = setTimeout(() => child.kill(), 5000);
+    const code = await exited; clearTimeout(timer);
+    assert.equal(code, 0, diagnostics);
+  }
+});
 test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain recovery', {
   skip: !process.env.LOGOS_CHROME, timeout: 90000,
 }, async () => {
@@ -37,23 +117,11 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     const url = new URL(req.url, 'http://127.0.0.1');
     if (url.pathname === '/') {
       res.setHeader('Content-Type', 'text/html');
-      res.end(`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>Cyc isolated fixture</title>
-        <link rel="stylesheet" href="/style.css"><main></main><script type="module">
-        import {createSymbolicAgent} from '/symbolic-agent.js';
-        function element(tag,props={},...children){const n=document.createElement(tag);
-          for(const[k,v]of Object.entries(props)){if(v===undefined)continue;
-            if(k.startsWith('on'))n.addEventListener(k.slice(2),v);else if(k in n)n[k]=v;else n.setAttribute(k,v)}
-          for(const c of children.flat(Infinity))if(c!==null&&c!==undefined&&c!==false)n.append(c instanceof Node?c:document.createTextNode(String(c)));return n;}
-        const api=async(path,params={},options={})=>{const u=new URL('/api/'+path,location.href);
-          for(const[k,v]of Object.entries(params))u.searchParams.set(k,v);
-          const r=await fetch(u,{...options,headers:{'Content-Type':'application/json'},body:options.body?JSON.stringify(options.body):undefined});
-          const b=await r.json();if(!r.ok)throw Object.assign(Error(b.error.message),{status:r.status});return b;};
-        const host={api,element,button:(text,click,className='button')=>element('button',{type:'button',className,onclick:click},text),
-          heading:(title,body)=>element('header',{className:'page-heading'},element('div',{},element('h1',{},title),element('p',{},body)))};
-        window.make=options=>createSymbolicAgent(host,options);
-        window.states=[];window.cyc=make({onStateChange:value=>{window.lastState=value;states.push(value)}});document.querySelector('main').append(cyc.element);
-        </script></html>`);
+      res.end(await readFile(join(here, 'symbolic-agent-browser-fixture.html')));
       return;
+    }
+    if (url.pathname === '/symbolic-fixture-config.js') {
+      res.setHeader('Content-Type', 'text/javascript'); res.end("window.symbolicFixtureApiBase='/api/';"); return;
     }
     if (['/style.css', '/symbolic-agent.css', '/symbolic-agent.js'].includes(url.pathname)) {
       res.setHeader('Content-Type', url.pathname.endsWith('.js') ? 'text/javascript' : 'text/css');

@@ -1,4 +1,4 @@
-:- module(kb_symbolic_agent_engine,[step/5]).
+:- module(kb_symbolic_agent_engine,[step/5,form_field/4,form_values/3]).
 :- use_module(kb_symbolic_agent_program,[]).
 :- use_module(kb_symbolic_agent_language,[]).
 :- use_module(kb_symbolic_agent_wire,[]).
@@ -212,22 +212,39 @@ valid_fields(Fields) :-
     maplist(valid_field,Fields,Names),sort(Names,Unique),
     (same_length(Names,Unique)->true;domain_error(duplicate_symbolic_form_fields,Names)).
 valid_field(Field,_) :- var(Field),!,instantiation_error(Field).
-valid_field(x_symbolicFormField(Name,Type),Name) :- !,
+valid_field(Field,Name) :- form_field(Field,Name,_,_).
+form_field(Field,_,_,_) :- var(Field),!,instantiation_error(Field).
+form_field(x_symbolicFormField(Name,Type),Name,Type,Limits) :- !,
+    field_definition(Name,Type),default_field_limits(Type,Limits).
+form_field(x_symbolicFormField(Name,Type,Constraint),Name,Type,Limits) :- !,
+    field_definition(Name,Type),
+    (ground(Constraint),Type==x_String,Constraint=x_symbolicStringLength(Min,Max),
+     integer(Min),integer(Max),between(0,4096,Min),between(Min,4096,Max)->
+       Limits=json{minLength:Min,maxLength:Max};
+       domain_error(symbolic_form_constraint,Constraint)).
+form_field(Field,_,_,_) :- domain_error(symbolic_form_field,Field).
+field_definition(Name,Type) :-
     must_be(string,Name),string_length(Name,N),bounded(N,1,128,field_name),
     must_be(nonvar,Type),
     (memberchk(Type,[x_String,x_Number,x_Boolean,x_Term])->true;
       domain_error(symbolic_form_type,Type)).
-valid_field(Field,_) :- domain_error(symbolic_form_field,Field).
+default_field_limits(x_String,json{minLength:0,maxLength:4096}) :- !.
+default_field_limits(_,json{}).
 form_values(Fields,Values,Bound) :-
     (is_dict(Values),ground(Values)->true;throw(error(symbolic_form_invalid(object_required),_))),
     dict_pairs(Values,_,Pairs),findall(Key,member(Key-_,Pairs),Keys),
-    findall(Key,(member(x_symbolicFormField(Name,_),Fields),atom_string(Key,Name)),Expected0),
+    findall(Key,(member(Field,Fields),form_field(Field,Name,_,_),atom_string(Key,Name)),Expected0),
     sort(Expected0,Expected),
     (Keys==Expected->true;throw(error(symbolic_form_invalid(fields),_))),
     maplist(form_value(Values),Fields,Items),Bound=..[x_TheList|Items].
-form_value(Values,x_symbolicFormField(Name,Type),x_symbolicFieldValue(Name,Value)) :-
+form_value(Values,Field,x_symbolicFieldValue(Name,Value)) :-
+    form_field(Field,Name,Type,Limits),
     atom_string(Key,Name),get_dict(Key,Values,Value),
-    (field_type(Type,Value)->true;throw(error(symbolic_form_invalid(type(Name,Type)),_))).
+    (field_type(Type,Value)->true;throw(error(symbolic_form_invalid(type(Name,Type)),_))),
+    (Type==x_String->string_length(Value,N),
+      (between(Limits.minLength,Limits.maxLength,N)->true;
+        throw(error(symbolic_form_invalid(length(Name,Limits.minLength,Limits.maxLength)),_)));
+      true).
 field_type(x_String,Value) :- string(Value),string_length(Value,N),N=<4096.
 field_type(x_Number,Value) :-
     (integer(Value);float(Value),float_class(Value,C),memberchk(C,[zero,subnormal,normal])).

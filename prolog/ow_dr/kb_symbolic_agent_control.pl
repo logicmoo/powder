@@ -83,6 +83,12 @@ advance_checked(Control,Program,Id,Input,CallId,Request,Reply,Effects) :-
 advance_bounded(Control,Program,Before,Input,Options,CallId,Request,Reply,Effects) :-
     (Input==resume,Before.resource.data.status=="created"->
       Engine=Before.frame.engine,Step=step_result{state:Engine,effects:[],events:[control(started)]}
+    ;Input==resume,Before.frame.engine.phase==interrupted,
+     is_dict(Before.frame.pending),Before.frame.pending.stage=="planned"->
+      % Only the durable host marker proves no dispatch was claimed. The pure
+      % engine cannot make this distinction and still refuses unresolved calls.
+      Engine=Before.frame.engine.put(phase,awaiting_action),
+      Step=step_result{state:Engine,effects:[],events:[control(resumed_planned_action)]}
     ;kb_symbolic_agent_engine:step(Program,Before.frame.engine,Input,Options,Step)),
     Turns is Before.frame.turns+1,
     pending_frame(Control,Before,Step,Pending,Kind,Action),
@@ -180,7 +186,8 @@ validate_frame(Frame) :-
        domain_error(symbolic_cursor_counters,Engine)),
     (Frame.pending==null->
       (Engine.pending=call(_,_)->throw(error(symbolic_missing_pending_request,_));true)
-    ;is_dict(Frame.pending),ground(Frame.pending),Engine.pending=call(Id,_),
+    ;is_dict(Frame.pending),ground(Frame.pending),
+       memberchk(Frame.pending.stage,["planned","dispatched","unknown"]),Engine.pending=call(Id,_),
       Frame.pending.intent.id==Id->true;
       throw(error(symbolic_invalid_pending_request,_))).
 limits_options(L,[steps(L.steps),actions(L.actions),seconds(L.seconds)]).

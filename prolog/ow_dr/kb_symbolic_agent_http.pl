@@ -48,9 +48,23 @@ respond(Status,Raw) :-
     kb_symbolic_agent_kee:canonical_json(Raw,Reply),kb_kee_schema:json_text(Reply,Text),
     format('Status: ~d~nCache-Control: no-store~nContent-Type: application/json; charset=UTF-8~n~n~s',
       [Status,Text]).
+report_error(error(symbolic_form_invalid(length(Field,Min,Max)),_)) :- !,
+    format(string(Message),'~s must contain ~d–~d characters. The form remains editable; nothing was dispatched by this request.',
+      [Field,Min,Max]),
+    respond(422,json{error:json{code:"symbolic_form_invalid",message:Message,
+      field:Field,minLength:Min,maxLength:Max}}).
+report_error(error(symbolic_action_not_dispatched(Cause),_)) :- !,
+    message_to_string(Cause,Detail),
+    string_concat("Action was not dispatched. ",Detail,Message),
+    (Cause=error(kee(Code,Details),_)->Underlying=json{code:Code,details:Details};
+      Underlying=json{message:Detail}),
+    respond(422,json{error:json{code:"symbolic_action_not_dispatched",message:Message,
+      cause:Underlying,dispatched:false}}).
 report_error(Error) :-
     error_status(Error,Status,Code),message_to_string(Error,Message),
     respond(Status,json{error:json{code:Code,message:Message}}).
+error_status(error(symbolic_form_invalid(_),_),422,"symbolic_form_invalid") :- !.
+error_status(error(symbolic_action_not_dispatched(_),_),422,"symbolic_action_not_dispatched") :- !.
 error_status(error(llm_forbidden,_),403,"symbolic_forbidden") :- !.
 error_status(error(symbolic_conflict(_),_),409,"symbolic_conflict") :- !.
 error_status(error(symbolic_outcome_unknown_inspect_receipt,_),409,"symbolic_outcome_unknown") :- !.

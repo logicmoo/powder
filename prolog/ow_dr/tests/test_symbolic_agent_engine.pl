@@ -164,6 +164,25 @@ test(invalid_form_input_preserves_waiting_state) :-
     step(P,Waiting.state,form(x_SubjectForm,json{who:x_Ada,note:42}),[],Rejected),
     assertion(Rejected.state.phase==awaiting_form),
     assertion(member(form_error(type("note",x_String)),Rejected.events)).
+test(declarative_form_length_limits_survive_wire_and_preserve_rejected_input_state) :-
+    fixture_program([],P),initial_state(P,S0),
+    Field=x_symbolicFormField("title",x_String,x_symbolicStringLength(1,256)),
+    S=S0.put(_{phase:running,queue:[x_symbolicAwaitForm(x_Test,x_TheList(Field),_)]}),
+    step(P,S,continue,[],Waiting),encode_term(Waiting.state,Wire),decode_term(Wire,Restored),
+    length(Codes,257),maplist(=(0'a),Codes),string_codes(Long,Codes),
+    step(P,Restored,form(x_Test,json{title:Long}),[],Rejected),
+    assertion(Rejected.state==Restored),assertion(Rejected.effects==[]),
+    assertion(Rejected.events==[form_error(length("title",1,256))]),
+    step(P,Restored,form(x_Test,json{title:""}),[],Empty),
+    assertion(Empty.state==Restored),
+    sub_string(Long,0,256,_,Valid),step(P,Restored,form(x_Test,json{title:Valid}),[],Filled),
+    assertion(Filled.state.phase==running).
+test(invalid_declarative_form_bounds_are_not_guessed,
+    [throws(error(domain_error(symbolic_form_constraint,_),_))]) :-
+    fixture_program([],P),initial_state(P,S0),
+    S=S0.put(_{phase:running,queue:[x_symbolicAwaitForm(x_Test,
+      x_TheList(x_symbolicFormField("title",x_String,x_symbolicStringLength(257,256))),_)]}),
+    step(P,S,continue,[],_).
 
 test(approval_requires_host_receipt_not_language_or_knowledge,
      [throws(error(symbolic_not_awaiting_input,_))]) :-

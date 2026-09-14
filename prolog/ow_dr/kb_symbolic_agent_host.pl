@@ -2,6 +2,7 @@
 :- use_module(kb_symbolic_agent_control,[]).
 :- use_module(kb_symbolic_agent_knowledge,[]).
 :- use_module(kb_symbolic_agent_program,[]).
+:- use_module(kb_symbolic_agent_engine,[]).
 :- use_module(kb_symbolic_agent_profiles,[]).
 :- use_module(kb_symbolic_agent_state,[]).
 :- use_module(kb_symbolic_agent_wire,[]).
@@ -179,6 +180,10 @@ advance_owned(continue,A,C,P,R,Hash,CallId,Reply) :-
     R.frame.engine.phase==awaiting_action,!,
     (R.frame.pending.stage=="planned"->true;
       throw(error(symbolic_outcome_unknown_inspect_receipt,_))),
+    C=control(Token,_,_),
+    catch(kb_symbolic_agent_kee:preflight(Token,P.allowedCapabilities,
+      R.frame.pending.intent,R.frame.pending.callId),
+      Error,throw(error(symbolic_action_not_dispatched(Error),_))),
     % The intent is already durable. Claim its dispatch with this request's
     % idempotence marker before invoking the fixed gateway.
     kb_symbolic_agent_control:mark_dispatched(C,R.id,CallId,json{requestHash:Hash},Dispatched),
@@ -202,10 +207,12 @@ input(form,A,R,form(Form,Values)) :-
      R.frame.engine.pending=form(Form,Fields,_)->true;
        throw(error(symbolic_form_unavailable,_))),
     dict_pairs(A.values,_,Pairs),maplist(form_pair(Fields),Pairs,Converted),
-    dict_pairs(Values,json,Converted).
+    dict_pairs(Values,json,Converted),
+    kb_symbolic_agent_engine:form_values(Fields,Values,_).
 form_pair(Fields,Key-Value,Key-Decoded) :-
     atom_string(Key,Name),
-    (member(x_symbolicFormField(Name,x_Term),Fields)->
+    (member(Field,Fields),kb_symbolic_agent_engine:form_field(Field,FieldName,Type,_),
+     FieldName==Name,Type==x_Term->
        kb_symbolic_agent_wire:decode_term(Value,Decoded),
        (ground(Decoded)->true;throw(error(symbolic_form_ground_term_required,_)))
     ;Decoded=Value).
@@ -286,8 +293,10 @@ pending_view(R,Pending) :-
       Pending=json{kind:"approval",supported:false,value:Wire,
         message:"A trusted human approval receipt adapter is not installed. Interrupt or Stop; no browser approval flag is accepted."}
     ;Pending=null).
-public_field(x_symbolicFormField(Name,Type),json{name:Name,type:Text}) :-
-    atom_concat(x_,Kind,Type),atom_string(Kind,Text).
+public_field(Field,Public) :-
+    kb_symbolic_agent_engine:form_field(Field,Name,Type,Limits),
+    atom_concat(x_,Kind,Type),atom_string(Kind,Text),
+    Public=Limits.put(_{name:Name,type:Text}).
 public_event(Item,Public) :-
     atom_json_dict(Item.event.json,Data,[]),
     (get_dict(cursor,Data,JSON)->

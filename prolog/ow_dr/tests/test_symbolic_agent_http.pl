@@ -133,7 +133,27 @@ test(dispatched_without_outcome_is_not_replayed,
     assertion(Unknown.run.pending.stage=="dispatched"),
     catch(advance(continue,Unknown,"retry",json{},_),Rejected,true),
     assertion(Rejected=error(symbolic_outcome_unknown_inspect_receipt,_)),
-    advance(stop,Unknown,"stop",json{},Stopped),assertion(Stopped.run.phase==stopped).
+    advance(interrupt,Unknown,"pause",json{},Paused),
+    catch(advance(resume,Paused,"resume",json{},_),ResumeError,true),
+    assertion(ResumeError=error(symbolic_resume_requires_resolved_action,_)),
+    advance(stop,Paused,"stop",json{},Stopped),assertion(Stopped.run.phase==stopped).
+test(committed_but_unknown_action_cannot_resume_or_replay,
+    [setup(todo_fixture(F)),cleanup(cleanup(F))]) :-
+    start(R),advance(send,R,"text",json{text:"review phrase dog"},Planned),
+    advance(continue,Planned,"read",json{},Read),advance(continue,Read,"write",json{},Write),
+    setup_call_cleanup(
+      wrap_predicate(kb_symbolic_agent_kee:execute_request(_,Request,_),symbolic_http_unknown,Wrapped,
+        (call(Wrapped),(Request.tool=="kee_todo_create"->throw(error(test_lost_reply,_));true))),
+      advance(continue,Write,"dispatch-write",json{},Unknown),
+      unwrap_predicate(kb_symbolic_agent_kee:execute_request(_,_,_),symbolic_http_unknown)),
+    assertion(Unknown.run.pending.stage=="unknown"),
+    advance(interrupt,Unknown,"pause",json{},Paused),
+    catch(advance(resume,Paused,"resume",json{},_),Error,true),
+    assertion(Error=error(symbolic_resume_requires_resolved_action,_)),
+    kb_symbolic_agent_host:request(receipt,json{id:Paused.run.id,conversation:Paused.run.conversation,
+      actionCallId:Paused.run.pending.callId},Receipt),assertion(Receipt.receipt.status=="committed"),
+    kb_symbolic_agent_host:request(todos,json{id:Paused.run.id,conversation:Paused.run.conversation},Todos),
+    assertion(Todos.result.total==1).
 
 form_fixture(fixture(Native,Ledger)) :-
     fixture_records(Base),maplist(form_record,Base,Records),
@@ -193,6 +213,84 @@ app_fixture(Ledger) :- plunit_symbolic_agent_todos:fixture(json{},Ledger,_).
 app_start(R) :-
     kb_symbolic_agent_host:request(start,json{profile:"cyc-starter-v1",
       conversation:"app-profile-isolated",callId:"app-start"},R).
+app_form(Form) :- app_start(R),advance(send,R,"todo",json{text:"new todo"},Form).
+app_planned(Planned) :-
+    app_form(Form),
+    advance(form,Form,"form",json{values:json{title:"A bounded task",description:""}},Filled),
+    advance(continue,Filled,"plan-read",json{},Planned).
+test(planned_action_interrupt_resumes_without_dispatch_or_duplicate_effect,
+    [setup(app_fixture(F)),cleanup(plunit_symbolic_agent_todos:cleanup(F))]) :-
+    app_planned(Planned),
+    setup_call_cleanup(plunit_symbolic_agent_todos:trap_transports,
+      (advance(interrupt,Planned,"pause",json{},Paused),
+       advance(resume,Paused,"resume-planned",json{},Resumed),
+       assertion(Resumed.run.phase==awaiting_action),
+       assertion(Resumed.run.pending==Planned.run.pending),
+       assertion(Resumed.run.actions==Planned.run.actions),
+       assertion(Resumed.run.steps==Planned.run.steps),
+       kb_symbolic_agent_host:request(receipt,json{id:Resumed.run.id,
+         conversation:Resumed.run.conversation,actionCallId:Resumed.run.pending.callId},Receipt),
+       assertion(Receipt.receipt.status=="unknown"),
+       advance(continue,Resumed,"dispatch-read",json{},Read),
+       advance(continue,Resumed,"dispatch-read",json{},Replay),assertion(Replay.replayed==true),
+       advance(continue,Read,"plan-write",json{},Write),
+       advance(interrupt,Write,"pause-write",json{},PausedWrite),
+       advance(resume,PausedWrite,"resume-write",json{},ResumedWrite),
+       assertion(ResumedWrite.run.pending==Write.run.pending),
+       finish_steps(ResumedWrite,4,Done),
+       kb_symbolic_agent_host:request(todos,json{id:Done.run.id,conversation:Done.run.conversation},Todos),
+       assertion(Todos.result.total==1),
+       flag(symbolic_todo_external_calls,Calls,Calls),assertion(Calls==0)),
+      plunit_symbolic_agent_todos:untrap_transports).
+test(oversize_form_title_is_rejected_while_form_remains_editable,
+    [setup(app_fixture(F)),cleanup(plunit_symbolic_agent_todos:cleanup(F))]) :-
+    app_form(Form),length(Codes,257),maplist(=(0'a),Codes),string_codes(Long,Codes),
+    catch(advance(form,Form,"too-long",json{values:json{title:Long,description:""}},_),Error,true),
+    assertion(nonvar(Error)),
+    assertion(Error=error(symbolic_form_invalid(length("title",1,256)),_)),
+    kb_symbolic_agent_host:request(conversation,
+      json{id:Form.run.id,conversation:Form.run.conversation},Still),
+    assertion(Still.run.revision==Form.run.revision),
+    assertion(Still.run.phase==awaiting_form),assertion(Still.run.actions==0),
+    sub_string(Long,0,256,_,Valid),
+    advance(form,Still,"corrected",json{values:json{title:Valid,description:""}},Filled),
+    finish_steps(Filled,8,Done),
+    kb_symbolic_agent_host:request(todos,json{id:Done.run.id,conversation:Done.run.conversation},Todos),
+    Todos.result.items=[Todo],assertion(Todo.data.title==Valid).
+
+invalid_action_fixture(fixture(Native,Ledger)) :-
+    todo_program(P),maplist(domain_record,P.records,Domain),
+    length(Codes,257),maplist(=(0'a),Codes),string_codes(Long,Codes),
+    maplist(invalid_action_record(Long),Domain,Records),
+    plunit_symbolic_agent_kee:native_fixture_records(Records,Native),
+    plunit_symbolic_agent_todos:fixture(json{},Ledger,_).
+invalid_action_record(Long,kb(Id,Mt,Term),kb(Id,Mt,Out)) :- invalid_action_term(Long,Term,Out).
+invalid_action_term(Long,Term,Out) :-
+    (var(Term)->Out=Term;
+      Term=x_symbolicField("title",_)->Out=x_symbolicField("title",Long);
+      compound(Term)->compound_name_arguments(Term,Name,Args),
+        maplist(invalid_action_term(Long),Args,Converted),compound_name_arguments(Out,Name,Converted);
+      Out=Term).
+test(invalid_registry_arguments_never_cross_dispatch_boundary,
+    [setup(invalid_action_fixture(F)),cleanup(cleanup(F))]) :-
+    start(R),advance(send,R,"text",json{text:"review phrase dog"},Planned),
+    advance(continue,Planned,"read",json{},Read),advance(continue,Read,"write",json{},Write),
+    flag(symbolic_invalid_dispatches,_,0),
+    setup_call_cleanup(
+      wrap_predicate(kb_symbolic_agent_kee:execute_request(_,Request,_),symbolic_invalid_dispatch,Wrapped,
+        ((Request.tool=="kee_todo_create"->flag(symbolic_invalid_dispatches,N,N+1);true),call(Wrapped))),
+      catch(advance(continue,Write,"invalid-dispatch",json{},_),Error,true),
+      unwrap_predicate(kb_symbolic_agent_kee:execute_request(_,_,_),symbolic_invalid_dispatch)),
+    flag(symbolic_invalid_dispatches,Count,Count),assertion(Count==0),
+    assertion(nonvar(Error)),
+    Error=error(symbolic_action_not_dispatched(error(kee(invalid_arguments,Details),_)),_),
+    assertion(Details.path=="$.data.title"),
+    kb_symbolic_agent_host:request(conversation,json{id:Write.run.id,conversation:Write.run.conversation},Still),
+    assertion(Still.run.revision==Write.run.revision),assertion(Still.run.pending.stage=="planned"),
+    kb_symbolic_agent_host:request(receipt,json{id:Still.run.id,conversation:Still.run.conversation,
+      actionCallId:Still.run.pending.callId},Receipt),assertion(Receipt.receipt.status=="unknown"),
+    kb_symbolic_agent_host:request(todos,json{id:Still.run.id,conversation:Still.run.conversation},Todos),
+    assertion(Todos.result.total==0).
 finish_steps(R,N,Done) :-
     (R.run.phase==awaiting_input->Done=R;
       N>0,format(string(Call),'app-continue-~d',[N]),
@@ -304,5 +402,17 @@ test(real_http_starter_without_any_loaded_profile,
     assertion(Form.run.pending.kind=="form"),
     input_args(Form,"http-stop",Stop),post(Port,stop,Stop,Stopped,200),
     assertion(Stopped.run.phase=="stopped").
+test(http_predispatch_error_preserves_registry_reason,
+    [setup((invalid_action_fixture(F),http_server(http_dispatch,[port(Port),workers(2)]),
+      assertz(kb_server:server_port(Port)))),cleanup(http_cleanup(F,Port))]) :-
+    start_args(A),post(Port,start,A,R,200),
+    input_args(R,"input",Input),post(Port,send,Input.put(text,"review phrase dog"),Planned,200),
+    input_args(Planned,"read",ReadArgs),post(Port,continue,ReadArgs,Read,200),
+    input_args(Read,"write",WriteArgs),post(Port,continue,WriteArgs,Write,200),
+    input_args(Write,"reject",RejectArgs),post(Port,continue,RejectArgs,Rejected,422),
+    assertion(Rejected.error.code=="symbolic_action_not_dispatched"),
+    assertion(Rejected.error.dispatched==false),
+    assertion(Rejected.error.cause.code=="invalid_arguments"),
+    assertion(Rejected.error.cause.details.path=="$.data.title").
 
 :- end_tests(symbolic_agent_http).

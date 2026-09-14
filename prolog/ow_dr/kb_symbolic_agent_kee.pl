@@ -1,7 +1,8 @@
-:- module(kb_symbolic_agent_kee,[capabilities/2,authorize/4,invoke/5,action_outcome/2,host_ceiling/1]).
+:- module(kb_symbolic_agent_kee,[capabilities/2,authorize/4,preflight/4,invoke/5,action_outcome/2,host_ceiling/1]).
 :- use_module(kb_kee,[]).
 :- use_module(kb_kee_auth,[]).
 :- use_module(kb_kee_registry,[]).
+:- use_module(kb_kee_schema,[]).
 :- use_module(library(error)).
 :- use_module(library(lists)).
 
@@ -74,10 +75,19 @@ inspect_capability(Name,Seen,Capability) :-
         throw(error(symbolic_forbidden_capability(Name),_)))),
     forall(member(Dependency,Capability.dependencies),inspect_capability(Dependency,[Name|Seen],_)).
 
-invoke(Token,KnowledgePolicy,Intent,CallId,Reply) :-
+preflight(Token,KnowledgePolicy,Intent,CallId) :-
+    prepare_request(Token,KnowledgePolicy,Intent,CallId,_,_).
+prepare_request(Token,KnowledgePolicy,Intent,CallId,Capability,Request) :-
     must_be(dict,Intent),must_be(string,CallId),must_be(dict,Intent.arguments),
     authorize(Token,KnowledgePolicy,Intent.capability,Capability),
-    Request=json{tool:Intent.capability,schemaVersion:1,callId:CallId,arguments:Intent.arguments},
+    kb_kee_schema:validate(str(1,128),CallId,_),
+    kb_kee_schema:validate(Capability.inputSpec,Intent.arguments,Arguments),
+    symbolic_principal(Token,Principal),
+    (Capability.scope==read_mt->kb_kee_auth:authorize_mt(Principal,read,Arguments.mt);
+      Capability.scope==write_mt->kb_kee_auth:authorize_mt(Principal,write,Arguments.mt);true),
+    Request=json{tool:Intent.capability,schemaVersion:1,callId:CallId,arguments:Intent.arguments}.
+invoke(Token,KnowledgePolicy,Intent,CallId,Reply) :-
+    prepare_request(Token,KnowledgePolicy,Intent,CallId,Capability,Request),
     dispatch(Capability.mutation,Token,Request,Reply).
 
 dispatch(false,Token,Request,Reply) :-

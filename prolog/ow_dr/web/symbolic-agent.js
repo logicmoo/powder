@@ -19,7 +19,7 @@ export function controlAvailability(run, pending = false, unknown = false) {
       || phase === 'awaiting_action' && run.pending?.stage === 'planned'),
     interrupt: !!run && !pending && !terminal && run.status !== 'created' && phase !== 'interrupted',
     resume: !!run && !pending && !unknown && (run.status === 'created'
-      || phase === 'interrupted' && run.pending?.kind !== 'action'),
+      || phase === 'interrupted' && (run.pending?.kind !== 'action' || run.pending.stage === 'planned')),
     stop: !!run && !pending && !terminal,
     form: !!run && !pending && !unknown && phase === 'awaiting_form',
   };
@@ -276,6 +276,20 @@ export function createSymbolicAgent(host, {
     return el('article', { className: 'cyc-message' }, el('h3', {}, label), el('pre', {}, content));
   }
   function data(value) { return el('pre', { className: 'cyc-data' }, typeof value === 'string' ? value : JSON.stringify(value, null, 2)); }
+  function validateFormField(field, input) {
+    let message = '';
+    if (field.type === 'String') {
+      const size = [...input.value].length, min = field.minLength ?? 0, max = field.maxLength ?? 4096;
+      if (size < min || size > max) message = `${field.name} must contain ${min}–${max} characters.`;
+    }
+    input.setCustomValidity(message); input.setAttribute('aria-invalid', String(!!message));
+    return message;
+  }
+  function formFailure(input, message) {
+    feedback.textContent = `${message} Nothing submitted; your draft is retained.`;
+    recordError({ code: 'symbolic_form_invalid', message: feedback.textContent }); update();
+    input?.focus();
+  }
   function drawRequest() {
     saveFormDraft();
     if (run && formDraftKey?.startsWith(`${run.id}:`) && run.pending?.kind !== 'form') clearFormDraft();
@@ -291,6 +305,8 @@ export function createSymbolicAgent(host, {
           const values = Object.create(null);
           for (const field of pending.fields) {
             const input = fields.get(field.name);
+            const problem = validateFormField(field, input);
+            if (problem) { formFailure(input, problem); return; }
             values[field.name] = field.type === 'Boolean' ? input.checked
               : field.type === 'Number' ? Number(input.value)
                 : field.type === 'Term' ? JSON.parse(input.value) : input.value;
@@ -307,13 +323,19 @@ export function createSymbolicAgent(host, {
       for (const field of pending.fields) {
         const input = el(field.type === 'Term' ? 'textarea' : 'input', {
           type: field.type === 'Boolean' ? 'checkbox' : field.type === 'Number' ? 'number' : 'text',
-          name: field.name, required: field.type !== 'Boolean', maxLength: 4096,
+          name: field.name, required: field.type === 'String' ? (field.minLength ?? 0) > 0 : field.type !== 'Boolean',
+          minLength: field.type === 'String' ? field.minLength ?? 0 : undefined,
+          maxLength: field.type === 'String' ? field.maxLength ?? 4096 : 4096,
           step: field.type === 'Number' ? 'any' : undefined, disabled: busy || !!unknown,
           value: field.type !== 'Boolean' ? saved[field.name] ?? '' : undefined,
           checked: field.type === 'Boolean' ? saved[field.name] === true : undefined,
-          oninput: saveFormDraft,
+          oninput: () => { saveFormDraft(); validateFormField(field, input); },
+          oninvalid: () => formFailure(input, input.validationMessage),
         });
-        fields.set(field.name, input); form.append(el('label', { className: 'field' }, `${field.name} (${field.type})`, input));
+        fields.set(field.name, input); validateFormField(field, input);
+        form.append(el('label', { className: 'field' }, `${field.name} (${field.type})`, input,
+          field.type === 'String' ? el('small', { className: 'muted' },
+            `${field.minLength ?? 0}–${field.maxLength ?? 4096} characters`) : null));
       }
       form.append(el('button', { type: 'submit', className: 'button secondary', disabled: busy || !!unknown }, 'Submit form'));
       requests.append(form);
@@ -354,10 +376,12 @@ export function createSymbolicAgent(host, {
       if (disposed) return;
       unknown = null; write(SYMBOLIC_STORAGE.pending, null);
       if (action === 'start') { events = []; text.value = ''; }
-      if (action === 'form') clearFormDraft();
+      if (action === 'form' && reply.run.phase !== 'awaiting_form') clearFormDraft();
       absorb(reply);
       if (action === 'send') { text.value = ''; saveDraft(); }
       feedback.textContent = `Recorded ${run.phase}. ${run.pending?.kind === 'action' ? 'Inspect the planned action, then Continue.' : ''}`;
+      if (action === 'form' && run.phase === 'awaiting_form')
+        formFailure(null, 'The form was not accepted. Inspect its field values and proof events.');
     } catch (error) {
       if (disposed) return;
       recordError(error);
@@ -378,7 +402,7 @@ export function createSymbolicAgent(host, {
       const reply = await api('symbolic/conversation', { id: currentId, conversation: currentConversation, limit: 100 }, { signal: lifecycle.signal });
       if (disposed) return;
       if (unknown && reply.events?.some(e => e.callId === `symbolic-http/${unknown.body.callId}`)) {
-        if (unknown.action === 'form') clearFormDraft();
+        if (unknown.action === 'form' && reply.run.phase !== 'awaiting_form') clearFormDraft();
         unknown = null; write(SYMBOLIC_STORAGE.pending, null);
       }
       absorb(reply);
@@ -399,7 +423,7 @@ export function createSymbolicAgent(host, {
           id: reply.receipt.commit.result.id, conversation: unknown.body.conversation, limit: 100,
         }, { signal: lifecycle.signal });
         if (disposed) return;
-        if (unknown.action === 'form') clearFormDraft();
+        if (unknown.action === 'form' && restored.run.phase !== 'awaiting_form') clearFormDraft();
         events = []; unknown = null; write(SYMBOLIC_STORAGE.pending, null); absorb(restored);
         feedback.textContent = 'Committed request found. Restored state without replaying its action.';
       } else feedback.textContent = 'No committed receipt found. Outcome remains unknown; no request was replayed.';

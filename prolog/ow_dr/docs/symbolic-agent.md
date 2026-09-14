@@ -120,6 +120,12 @@ Templates are `(symbolicTemplate CALL (TheList PART ...))`; parts are
 templates/realizations are errors/gaps, not fallback text. Forms use
 `(symbolicFormField "name" String|Number|Boolean|Term)`. Unexpected fields, missing
 fields and wrong types do not advance the form.
+Strings may declare inclusive bounds with
+`(symbolicFormField "title" String (symbolicStringLength 1 256))`.
+Bounds must be integers within the host's 0–4096-character ceiling; unsupported
+constraint forms are rejected, not guessed. Two-argument String fields retain
+the default 0–4096 bound. The pure interpreter preserves waiting state on invalid
+values; HTTP validates the same declarations before recording a form transition.
 
 Inputs are `text(Text)`, `event(GroundTerm)`, `continue`, `stop`, `interrupt`,
 `resume`, `form(Form,GroundDict)` and the **trusted-host-only**
@@ -151,6 +157,10 @@ does not resume work.
 
 Compensation remains failed/compensated rather than claiming successful rollback.
 Stop/Interrupt preserve semantic state; an unresolved action cannot simply resume.
+The durable control layer can resume an interrupted **planned, undispatched**
+action to `awaiting_action` without executing it or changing its identity/counters.
+The pure engine alone cannot prove this boundary; dispatched/unknown actions
+remain blocked, including when a committed receipt exists but its outcome was lost.
 
 Default budgets are **cumulative per state**: 128 instructions and 16 actions,
 plus 2 seconds per step. Hard ceilings are 1,024 instructions, 64 actions and
@@ -172,6 +182,7 @@ arguments are errors. Only explicit `True`, `False` and `Null` produce JSON valu
 ```prolog
 kb_symbolic_agent_kee:capabilities(ContextToken,Reply).
 kb_symbolic_agent_kee:authorize(ContextToken,Policy,Capability,Checked).
+kb_symbolic_agent_kee:preflight(ContextToken,Policy,Intent,GlobalCallId).
 kb_symbolic_agent_kee:invoke(ContextToken,Policy,Intent,GlobalCallId,Reply).
 kb_symbolic_agent_kee:action_outcome(Reply,Outcome).
 ```
@@ -450,6 +461,14 @@ coverage, program version, source generation and snapshot hash. Continuations
 re-read and verify the complete snapshot; changes conflict rather than substituting
 knowledge. Stop/Interrupt remain available even if source knowledge has changed.
 
+Before recording a dispatch claim, the host validates the planned action against
+the actual registry input specification, immutable capability ceiling, policy,
+permissions and MT scope. Rejections return HTTP 422
+`symbolic_action_not_dispatched` with the original registry cause and
+`dispatched:false`; the cursor/revision remains planned, not unknown. This check
+does not execute a tool, consume an action receipt, rebase revisions or guarantee
+that later execution will succeed. The real KEE invocation rechecks authority.
+
 Each request performs **one bounded synchronous step**, not a daemon or background
 worker. A yielded intent is durable and inspectable; the next explicit Continue
 records a dispatch claim *before* the fixed KEE gateway runs it. Another Continue
@@ -459,7 +478,7 @@ Counters persist across requests (128 instructions, 16 actions, 1,000 user turns
 2 seconds per interpreter/query step). Different browsers use resource CAS;
 the KEE ledger supplies cross-process locking, durable commits and idempotence.
 
-A crash after dispatch, denied capability or lost action response remains
+A crash after a dispatch claim or lost action response remains
 `dispatched`/`unknown`: no automatic action retry, compensation or Resume is
 allowed. Receipt inspection never executes the tool. This release intentionally
 does not reconcile unresolved action state automatically, even when a receipt
@@ -475,6 +494,10 @@ TODOs with actual revisions. No source knowledge or production sidecar is mutate
 Unsubmitted form drafts persist locally across state reads, chip changes and
 controller recreation (at most 20 forms). Acknowledged submission clears that
 form's draft instead of pre-filling the next task with the previous submission.
+String declarations expose `minLength`/`maxLength` to the UI; the starter title
+is 1–256 characters. Client validation explains the bound and retains the draft.
+Server form rejection returns HTTP 422 `symbolic_form_invalid`, preserves the
+editable form and its revision, and never creates a dispatch claim.
 
 ## Explicit app-owned starter
 
@@ -541,4 +564,9 @@ transport is configured. These commands do not run any checkpoint/qsave tests.
 Starter tests run the actual shipped KRF, actual HTTP host and actual durable
 TODO gateway under an isolated ledger, assert zero external calls and unchanged
 live source modules/generation, and exercise immutability and explicit selection.
+The Node suite also opens the actual Cyc controller against an ephemeral isolated
+SWI HTTP host: oversized title rejection/draft retention, corrected submission,
+Interrupt/Resume at both read and write boundaries, and one real audited TODO.
+That fixture uses a separate project-local ledger, traps external transports,
+checks unchanged native generation and cleans up its owned server/state.
 These tests do not claim general NLU or an already-persisted teaching transaction.

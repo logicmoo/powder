@@ -47,7 +47,8 @@
   (symbolicSequence
     (TheList
       (symbolicAwaitForm StarterTodoForm
-        (TheList (symbolicFormField "title" String) (symbolicFormField "description" String))
+        (TheList (symbolicFormField "title" String (symbolicStringLength 1 256))
+          (symbolicFormField "description" String))
         (TheList (symbolicFieldValue "title" ?Title) (symbolicFieldValue "description" ?Description)))
       (symbolicInvoke "kee_ledger_status" (symbolicObject (TheList))
         (symbolicResultFields
