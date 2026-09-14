@@ -80,6 +80,7 @@ test('real app serves four-role workspace without loading KBs or contacting a mo
     assert.ok(symbolic.profiles.some(profile => profile.id === 'cyc-starter-v1'));
     await browser.route('#/agents?agent=cyc');
     await browser.wait('document.querySelector(\'[name="cyc-profile"] option[value="cyc-starter-v1"]\')!==null');
+    assert.equal(await browser.evaluate('document.querySelectorAll(".classic-context-index a[href*=\'agents?agent=\']").length'), 4);
     await browser.evaluate(`document.querySelector('[name="cyc-profile"]').value='cyc-starter-v1';
       document.querySelector('[name="cyc-profile"]').dispatchEvent(new Event('change'));
       [...document.querySelectorAll('.symbolic-agent button')].find(button=>button.textContent==='Knowledge').click();

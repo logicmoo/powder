@@ -14,7 +14,7 @@ import { createAnnotationHost } from './annotation-host.js';
 import { renderTVASettings, renderAssertionAnnotationEditor } from './native-tva.js';
 import { loadedMTTree } from './mt-inheritance.js';
 import { createTermFileContext } from './term-file-context.js';
-import { createAgentWorkspace } from './agents.js';
+import { AGENT_ROLES, createAgentWorkspace } from './agents.js';
 
 const $ = selector => document.querySelector(selector);
 const content = $('#content');
@@ -101,7 +101,15 @@ function annotationContextControl(route, signal, onContext) {
 
 function updateClassicContext(panel, route) {
   const context = panel.contextualData;
-  if (panel.catalogContext) {
+  if (panel.classList.contains('agents-workspace')) {
+    classicLayout.setContext({
+      title: 'Agents', coverage: 'page',
+      description: 'Independent conversations and permissions. Selecting a role submits no work.',
+      sections: [{ title: 'Four text roles', items: AGENT_ROLES.map(role => ({
+        label: `${role.label} - ${role.type}`, href: routeHref('agents', { agent: role.id }),
+      })) }],
+    });
+  } else if (panel.catalogContext) {
     classicLayout.setContext(panel.catalogContext);
   } else if (context?.term) {
     const model = termContextModel(route, context.data, context.term);
