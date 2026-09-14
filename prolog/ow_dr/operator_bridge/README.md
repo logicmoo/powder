@@ -383,6 +383,20 @@ not just npm package metadata, and rejects unvalidated versions. Authentication
 stays native-CLI-managed; neither discovery nor protocol health proves account
 or model access.
 
+New Copilot sessions are checked through the pinned SDK's read-only
+`session.rpc.metadata.snapshot()` before accepting input. Empty sessions may
+not yet appear in `get_session_metadata()`'s persisted history. The live
+snapshot must match the requested ID and primary working directory, be local,
+and not already be in use by another process. Resume still requires verified
+persisted context before attaching, and pending work is never continued
+automatically. Missing or conflicting identity fails closed; no test prompt is
+sent to make history appear.
+
+An explicitly authorized local Start has now completed against Copilot CLI
+1.0.82 / SDK 1.0.13 with the primary checkout confirmed and the operator idle.
+This verifies a real native connection, not model access: no prompt, tool
+approval or repository action was submitted.
+
 Both native process startup and each new/resumed session/thread must use
 `C:\snet\PeTTa\repos\openworld_dr`, the trusted installed primary checkout.
 Browser `cwd`, workspace, executable and provider override fields are rejected.

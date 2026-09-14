@@ -124,8 +124,16 @@ class CopilotAdapter:
         else:
             self.session = await asyncio.wait_for(self.client.create_session(
                 session_id=session_id, **options), 30)
-        if self.session.session_id != session_id or await self._metadata(session_id) is None:
-            raise BridgeError("invalid_native_session", "Native session identity or working directory was not confirmed.")
+        if self.session.session_id != session_id:
+            raise BridgeError("invalid_native_session", "Native session identity was not confirmed.")
+        # A newly created, empty session may not yet appear in persisted history.
+        # Verify the live session, not the history catalog, before admitting input.
+        identity = await asyncio.wait_for(self.session.rpc.metadata.snapshot(), 15)
+        if identity.session_id != session_id or identity.is_remote:
+            raise BridgeError("invalid_native_session", "Native session identity or locality was not confirmed.")
+        if identity.already_in_use:
+            raise BridgeError("native_session_in_use", "Another process already owns this native session.")
+        trusted_cwd(identity.working_directory, cwd)
         self.journal.set("native_creation", {"id": session_id, "state": "confirmed"})
         return {"sessionId": session_id, "cwd": cwd, "processCwd": self.cwd}
 

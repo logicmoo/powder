@@ -52,6 +52,12 @@ class FakeSession:
         self.sent = []
         self.disconnects = 0
         self.aborts = 0
+        self.identity = SimpleNamespace(session_id=identifier, is_remote=False,
+            already_in_use=False, working_directory=options["working_directory"])
+        self.rpc = SimpleNamespace(metadata=SimpleNamespace(snapshot=self.metadata_snapshot))
+
+    async def metadata_snapshot(self):
+        return self.identity
 
     def event(self, kind, **data):
         self.options["on_event"](SimpleNamespace(type=SimpleNamespace(value=kind), data=SimpleNamespace(**data)))
@@ -144,6 +150,31 @@ class CopilotNativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.clients[0].resumes, 1)
         self.assertIs(self.clients[0].resume_options["continue_pending_work"], False)
         self.assertEqual(self.clients[0].resume_options["working_directory"], self.cwd)
+
+    async def test_new_empty_session_uses_live_identity_before_history_is_persisted(self):
+        with patch.object(FakeClient, "get_session_metadata", return_value=None):
+            result = await self.adapter.start(None, cwd=self.cwd)
+        self.assertEqual(result["cwd"], self.cwd)
+        self.assertEqual(self.clients[0].creates, 1)
+        self.assertEqual(self.clients[0].session.sent, [])
+        self.assertEqual(self.journal.get("native_creation")["state"], "confirmed")
+
+    async def test_live_session_identity_rejects_wrong_directory_remote_or_shared_session(self):
+        original = FakeSession.metadata_snapshot
+        for change in (
+            {"working_directory": str(self.directory / "foreign")},
+            {"session_id": "different"},
+            {"is_remote": True},
+            {"already_in_use": True},
+        ):
+            async def changed(session):
+                identity = await original(session)
+                return SimpleNamespace(**{**vars(identity), **change})
+            with patch.object(FakeSession, "metadata_snapshot", changed):
+                with self.assertRaises(BridgeError):
+                    await self.adapter.start(None, cwd=self.cwd)
+            self.assertEqual(self.clients[0].session.sent, [])
+            self.assertEqual(self.journal.get("native_creation")["state"], "requested")
 
     async def test_foreign_cwd_or_branch_is_rejected_before_resume(self):
         self.store["foreign"] = SimpleNamespace(is_remote=False, context=SimpleNamespace(
