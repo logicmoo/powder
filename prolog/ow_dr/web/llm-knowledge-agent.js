@@ -257,6 +257,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   const historyEntries = new Map();
   let elapsedTimer, elapsedNodes = [];
   let clientSteps = [];
+  let timingReceivedAt = performance.now();
   for (const input of [termKeys, readMts, writeMts]) input.addEventListener('input', () => {
     invalidatePreview();
     groundingPreview.replaceChildren(el('p', { className: 'muted' }, 'Selectors changed. Start a new conversation to apply a different scope.'));
@@ -318,6 +319,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     else if (!text.value.trim()) reason = 'Write a message first.';
     else if (plain && conversation && !plainChatEligible(conversation)) reason = 'This history includes knowledge or tools. Choose New conversation for text-only chat.';
     else if (plain && !conversation && !settings) reason = 'Agent settings are still loading.';
+    else if (conversation?.status !== 'running' && hasLiveTiming()) reason = 'Finishing backend cleanup; status will refresh.';
     else if (conversation && ['closed', 'outcome_unknown'].includes(conversation.status)) reason = 'This conversation is stopped or has an unresolved outcome. Inspect it or start a new conversation.';
     else if (enqueuing && queue?.canEnqueue !== true) reason = 'Enqueue is unavailable for this turn or the queue is full. Wait or Interrupt.';
     else if (plain && !enqueuing && queued.length) reason = 'Resume or clear the paused queue before sending another message.';
@@ -331,6 +333,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       ? 'Send transmits only this text conversation under the provider notice. No KB context or tools are attached.'
       : 'Only the approved knowledge preview and permitted tools will be sent.');
     const canRequestFirstReply = plain && !pending && connection === 'connected' && !!settings
+      && (conversation?.status === 'running' || !hasLiveTiming())
       && !text.value.trim() && (!conversation || plainChatEligible(conversation)
         && (enqueuing ? queue?.canEnqueue === true
           : !queued.length && canChat({ conversation, text: firstReplyText, approved: true, pending })));
@@ -383,6 +386,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       ? data.sequence : (data.events?.length || 0) + (data.messages?.length || 0);
     sequences.set(data.id, Math.max(sequences.get(data.id) || 0, sequence));
     conversation = data;
+    timingReceivedAt = performance.now();
     historyEntries.set(data.id, { ...historyEntries.get(data.id), ...data });
     drawHistoryPicker();
     connection = 'connected'; clientError = null;
@@ -436,9 +440,10 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       localTodoContent);
     if (data.error) feedback.textContent = `${data.error.code}: ${data.error.message}`;
     updateControls();
-    if (active && data.status === 'running' && !timer) timer = setTimeout(poll, 1500);
+    if (active && (data.status === 'running' || hasLiveTiming()) && !timer) timer = setTimeout(poll, 1500);
   }
   function json(value) { return el('pre', { className: 'llm-json' }, JSON.stringify(value, null, 2)); }
+  function hasLiveTiming() { return conversation?.timing?.current?.live === true; }
   function tickElapsed() {
     clearTimeout(elapsedTimer);
     if (disposed || !active || document.hidden) return;
@@ -446,7 +451,13 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     for (const step of clientSteps) {
       if (step.status === 'running') step.elapsedMs = performance.now() - step.started;
     }
-    timeline.replaceChildren(renderRequestTimeline(el, timelineModel(conversation, clientSteps, now)));
+    const priorList = timeline.querySelector('ol');
+    const scroll = priorList?.scrollTop ?? 0;
+    const follow = !priorList || scroll + priorList.clientHeight >= priorList.scrollHeight - 4;
+    timeline.replaceChildren(renderRequestTimeline(el, timelineModel(conversation, clientSteps, now,
+      Math.max(0, performance.now() - timingReceivedAt))));
+    const list = timeline.querySelector('ol');
+    if (list) list.scrollTop = follow ? list.scrollHeight : scroll;
     for (const item of elapsedNodes) {
       const ended = Number.isFinite(item.outcome?.at);
       const age = elapsedText((ended ? item.outcome.at : now) - item.at);
@@ -457,7 +468,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       item.node.textContent = `Sent ${new Date(item.at * 1000).toLocaleTimeString()} · ${progress}`;
     }
     if (elapsedNodes.some(item => !Number.isFinite(item.outcome?.at))
-        || clientSteps.some(step => step.status === 'running') || conversation?.status === 'running')
+        || clientSteps.some(step => step.status === 'running') || conversation?.status === 'running' || hasLiveTiming())
       elapsedTimer = setTimeout(tickElapsed, 1000);
   }
   async function request(path, body) {
@@ -666,7 +677,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   }
   async function poll() {
     timer = null;
-    if (disposed || !active || !conversation || (!refreshRequested && conversation.status !== 'running')) return;
+    if (disposed || !active || !conversation || (!refreshRequested && conversation.status !== 'running' && !hasLiveTiming())) return;
     if (document.hidden || polling) { timer = setTimeout(poll, 2000); return; }
     polling = true; refreshRequested = false;
     const id = conversation.id;
@@ -680,7 +691,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     } }
     finally {
       polling = false;
-      if (!disposed && active && (refreshRequested || conversation?.status === 'running') && !timer)
+      if (!disposed && active && (refreshRequested || conversation?.status === 'running' || hasLiveTiming()) && !timer)
         timer = setTimeout(poll, 2000);
     }
   }

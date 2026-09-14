@@ -14,7 +14,7 @@
 .llm-request-error p { margin-top: 8px; }
 .llm-request-timeline { margin: 0 18px 14px; padding: 12px; border: 1px solid var(--line); }
 .llm-request-timeline[hidden] { display: none; }
-.llm-request-timeline ol { margin: 8px 0; padding-left: 20px; }
+.llm-request-timeline ol { margin: 8px 0; padding-left: 20px; max-height: 240px; overflow: auto; }
 .llm-request-timeline li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 5px 0; }
 .llm-request-timeline li .muted { grid-column: 1 / -1; font-size: .8rem; }
 .llm-request-timeline strong, .llm-timeline-summary { font-variant-numeric: tabular-nums; }
