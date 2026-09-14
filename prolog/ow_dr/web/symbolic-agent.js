@@ -122,9 +122,11 @@ export function createSymbolicAgent(host, {
   })) controls[action] = button(label, () => perform(action), action === 'send' ? 'button' : 'button secondary');
   const refresh = button('Refresh state', refreshState, 'button secondary');
   const recover = button('Inspect uncertain request', recoverRequest, 'button secondary');
+  const saySomething = button('Say something', () => perform('send', { text: 'hello' }), 'button secondary');
   const controlReason = el('p', { id: `${viewId}-control-reason`, className: 'muted cyc-control-reason',
     role: 'status', 'aria-live': 'polite' });
   for (const control of Object.values(controls)) control.setAttribute('aria-describedby', controlReason.id);
+  saySomething.setAttribute('aria-describedby', controlReason.id);
   const settingsToggle = button('Settings', () => showSettings(!settingsOpen), 'button secondary');
   settingsToggle.setAttribute('aria-controls', `${viewId}-settings`);
   settingsToggle.setAttribute('aria-expanded', 'false');
@@ -137,7 +139,7 @@ export function createSymbolicAgent(host, {
     identity, transcript, requests,
     el('form', { className: 'cyc-composer', onsubmit: event => { event.preventDefault(); perform('send'); } },
       el('label', { className: 'field' }, 'Message to Cyc', text),
-      el('div', { className: 'cyc-actions' }, controls.send, controls.continue, controls.interrupt, controls.resume, controls.stop),
+      el('div', { className: 'cyc-actions' }, controls.send, saySomething, controls.continue, controls.interrupt, controls.resume, controls.stop),
       controlReason, elapsedStatus, profileSummary),
     feedback);
   const inspector = el('aside', { className: 'cyc-inspector', id: `${viewId}-settings`, hidden: true,
@@ -280,7 +282,7 @@ export function createSymbolicAgent(host, {
       return 'Continue advances one bounded step. Send is unavailable until the workflow returns to input; nothing runs between requests.';
     if (currentId && !run) return 'Saved state is unavailable. Use Refresh state in Settings before requesting execution.';
     if (!currentId && !profileReady) return 'Choose an available knowledge profile in Settings before sending.';
-    return text.value.trim() ? '' : 'Write a message to enable Send.';
+    return text.value.trim() ? '' : 'Write a message to enable Send, or ask Cyc to open with Say something.';
   }
   function pendingMessage() {
     let depth = 0;
@@ -338,6 +340,7 @@ export function createSymbolicAgent(host, {
     const newReady = !currentId && profileReady && !busy && !unknown;
     controls.start.disabled = !newReady;
     controls.send.disabled = !(allowed.send || newReady) || !text.value.trim();
+    saySomething.disabled = !(allowed.send || newReady);
     const visible = controlAvailability(run, false, !!unknown);
     for (const name of ['continue', 'interrupt', 'resume', 'stop']) controls[name].hidden = !visible[name];
     if (currentId && operation?.kind === 'write') controls.interrupt.hidden = false;
@@ -345,6 +348,8 @@ export function createSymbolicAgent(host, {
     const explanation = controlExplanation(profileReady);
     controlReason.textContent = explanation; controlReason.hidden = !explanation;
     for (const control of Object.values(controls)) control.title = control.disabled ? explanation : '';
+    saySomething.title = saySomething.disabled ? explanation
+      : 'Ask the selected Cyc program for an opening through its real “hello” interpretation. Your unsent draft is preserved.';
     if (!controls.interrupt.disabled) controls.interrupt.title = 'Pause at a completed request boundary; an in-flight step cannot be cancelled.';
     if (!controls.continue.disabled) controls.continue.title = run.pending?.kind === 'action'
       ? 'Dispatch the inspected planned action once.' : 'Advance the saved continuation by one bounded step.';

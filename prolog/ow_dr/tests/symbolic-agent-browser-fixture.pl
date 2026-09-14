@@ -20,10 +20,14 @@ asset(Name,Scope,Mime,Request) :-
 configuration(_) :-
     kb_urls:api_base(Base),atom_string(Base,Text),
     kb_kee_schema:json_text(Text,JSON),
-    format('Content-type: text/javascript~n~nwindow.symbolicFixtureApiBase=~s;',[JSON]).
+    plunit_symbolic_agent_http:start_args(Args),
+    Profile=json{agent:Args.agent,definitionMt:Args.definitionMt,linkedMts:Args.linkedMts},
+    kb_kee_schema:json_text(Profile,ProfileJSON),
+    format('Content-type: text/javascript~n~nwindow.symbolicFixtureApiBase=~s;~nwindow.symbolicFixtureLoadedProfile=~s;',
+      [JSON,ProfileJSON]).
 
 main :-
-    setup_call_cleanup(plunit_symbolic_agent_http:app_http_fixture(F,Port),
+    setup_call_cleanup(plunit_symbolic_agent_http:http_fixture(F,Port),
       setup_call_cleanup(plunit_symbolic_agent_todos:trap_transports,
         (kb_store:generation(Before),
          format('{"port":~d}~n',[Port]),flush_output,
@@ -32,4 +36,4 @@ main :-
          flag(symbolic_todo_external_calls,Calls,Calls),
          (Before=:=After,Calls=:=0->true;throw(error(symbolic_fixture_isolation_failed,_)))),
         plunit_symbolic_agent_todos:untrap_transports),
-      plunit_symbolic_agent_http:app_http_cleanup(F,Port)).
+      plunit_symbolic_agent_http:http_cleanup(F,Port)).

@@ -75,8 +75,8 @@ test('real isolated host: chat-first New/Previous, symbolic greeting, forms and 
     assert.deepEqual(await browser.evaluate(`fixtureRequests.map(r=>r.path)`), ['symbolic/status']);
     assert.equal(await browser.evaluate(`document.querySelector('.cyc-inspector').hidden`), true);
     assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Cyc conversations"]').options[0].text`), 'New conversation');
-    await fill('cyc-message', 'hello');
-    await click('Send'); await phase('awaiting_input');
+    await fill('cyc-message', 'Keep this unsent draft');
+    await click('Say something'); await phase('awaiting_input');
     const first = await browser.evaluate(`({id:cyc.getState().runId,conversation:cyc.getState().conversationId})`);
     assert.deepEqual(await browser.evaluate(`fixtureRequests.map(r=>r.path)`), ['symbolic/status', 'symbolic/start', 'symbolic/send']);
     assert.equal(await browser.evaluate(`fixtureRequests.at(-1).body.text`), 'hello');
@@ -84,8 +84,7 @@ test('real isolated host: chat-first New/Previous, symbolic greeting, forms and 
     assert.equal(await browser.evaluate(`document.querySelector('.cyc-message time').dateTime===new Date(fixtureLatest.events.find(e=>e.request?.input?.term?.functor==='text').time*1000).toISOString()`), true);
     assert.match(await browser.evaluate(`document.querySelector('.cyc-elapsed').textContent`), /recorded .*\(ledger\).*not recorded/u);
     assert.match(await browser.evaluate(`document.querySelector('.cyc-message time').title`), /not message acceptance or execution duration/u);
-    assert.equal(await browser.evaluate(`cyc.getState().draft`), '');
-    await fill('cyc-message', 'Keep this unsent draft');
+    assert.equal(await browser.evaluate(`cyc.getState().draft`), 'Keep this unsent draft');
     const beforeNew = await browser.evaluate(`fixtureRequests.length`);
     await choose('');
     assert.equal(await browser.evaluate(`fixtureRequests.length`), beforeNew);
@@ -150,6 +149,18 @@ test('real isolated host: chat-first New/Previous, symbolic greeting, forms and 
     assert.equal(await browser.evaluate(`cyc.getState().draft`), 'Custom draft stays here');
     assert.equal(await browser.evaluate(`fixtureRequests.at(-1).body.agent`), 'x_NoAuthoredAgent');
     assert.equal(await browser.evaluate(`document.querySelectorAll('.cyc-message').length`), 0);
+    await click('Settings'); await click('Knowledge');
+    const authored = await browser.evaluate(`symbolicFixtureLoadedProfile`);
+    await fill('cyc-agent', authored.agent); await fill('cyc-definition-mt', authored.definitionMt);
+    await fill('cyc-linked-mts', authored.linkedMts.join('\n'));
+    await fill('cyc-message', 'Custom profile draft is not submitted');
+    await click('Settings'); await click('Say something'); await phase('gap');
+    assert.equal(await browser.evaluate(`fixtureLatest.run.source.knowledgeAgent`), authored.agent);
+    assert.equal(await browser.evaluate(`fixtureRequests.at(-1).body.text`), 'hello');
+    assert.equal(await browser.evaluate(`cyc.getState().draft`), 'Custom profile draft is not submitted');
+    assert.match(await browser.evaluate(`document.querySelector('.cyc-feedback').textContent`), /knowledge gap/u);
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('.cyc-message h3')].some(n=>n.textContent==='Cyc')`), false, 'missing initiation knowledge must not fabricate an agent reply');
+    assert.doesNotMatch(await browser.evaluate(`document.querySelector('.cyc-transcript').textContent`), /limited declarative starter/u);
     assert.deepEqual(browser.exceptions, []);
   } finally {
     if (browser) await browser.close();
@@ -258,7 +269,8 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     assert.equal(disabledSend.cursor, 'not-allowed');
     assert.notEqual(disabledSend.background, enabledSettings.background);
     assert.notEqual(disabledSend.color, enabledSettings.color);
-    assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].some(b=>['Say something','Enqueue'].includes(b.textContent))`), false);
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].some(b=>b.textContent==='Enqueue')`), false);
+    assert.equal((await appearance('Say something')).disabled, false, 'explicit initiation does not need a typed draft');
     assert.match(await browser.evaluate(`document.querySelector('.cyc-control-reason').textContent`), /Write a message to enable Send/u);
     const sendCenter = await browser.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent==='Send');b.scrollIntoView({block:'center'});const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
     await browser.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...sendCenter });
@@ -281,6 +293,7 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     assert.equal(await browser.evaluate(`document.activeElement.getAttribute('aria-expanded')`), 'false');
     await click('Settings');
     await browser.evaluate(`{const p=document.querySelector('[name="cyc-profile"]');p.value='loaded';p.dispatchEvent(new Event('change'))}`);
+    assert.equal((await appearance('Say something')).disabled, true, 'an incomplete loaded profile cannot initiate or fall back');
     await fill('cyc-agent', 'x_Unavailable'); await fill('cyc-definition-mt', 'x_DefMt');
     await fill('cyc-linked-mts', 'x_GrammarMt\nx_GrammarMt');
     await click('Start'); await browser.wait(`document.body.textContent.includes('Loaded agent definition unavailable')`);
@@ -420,10 +433,12 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     assert.equal(await browser.evaluate(`clockIntervals.size`), 1, 'visibility resumes exactly one timer');
     assert.equal((await appearance('Interrupt')).disabled, true);
     assert.equal((await appearance('Interrupt')).border, 'dashed');
+    assert.equal((await appearance('Say something')).disabled, true);
+    assert.equal((await appearance('Say something')).border, 'dashed');
     assert.match(await browser.evaluate(`document.querySelector('.cyc-control-reason').textContent`), /no enqueue queue or mid-step cancellation/u);
     assert.equal(await browser.evaluate(`document.querySelector('.cyc-control-reason').checkVisibility()`), true);
     assert.match(await browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Interrupt').title`), /Wait for the response/u);
-    await click('Interrupt'); await click('Send');
+    await click('Interrupt'); await click('Send'); await click('Say something');
     assert.equal(requests.length, heldRequestCount, 'disabled actions are neither executed nor queued');
     await choose('');
     assert.equal(await browser.evaluate(`cyc.getState().runId`), 'run:2', 'a write pins its conversation identity');

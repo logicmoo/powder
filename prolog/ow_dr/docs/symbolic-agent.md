@@ -423,8 +423,8 @@ event count per conversation; unchanged polling and older-page reads never
 increment it or unread. In-flight results arriving while hidden count only new
 events. Reactivation clears the view's unread count without resetting sequence.
 The default view is chat-first: the conversation selector contains **New
-conversation** and saved runs, followed by the transcript, composer, **Send** and
-applicable workflow controls. **Settings** toggles the profile/state/proof/action/gap/TODO/audit
+conversation** and saved runs, followed by the transcript, composer, **Send**,
+**Say something** and applicable workflow controls. **Settings** toggles the profile/state/proof/action/gap/TODO/audit
 inspector with `aria-expanded`/`aria-controls`; Escape closes it. Settings starts
 collapsed on controller creation and never navigates the main route. Pending
 typed forms, unavailable approval notices and applicable Continue/Interrupt/
@@ -437,8 +437,17 @@ has no asynchronous enqueue queue or mid-step cancellation: while a synchronous
 bounded request is active, Send/Continue/Interrupt cannot submit another request.
 After the response, Continue advances a saved step and Interrupt pauses at that
 completed request boundary. Reads, typed forms, unknown outcomes and ended runs
-have their own reasons and recovery guidance. No ambiguous greeting shortcut or
-fake Enqueue action is exposed; users enter their own message.
+have their own reasons and recovery guidance. No fake Enqueue action is exposed.
+
+**Say something** asks the selected Cyc program to produce an opening: it submits
+the explicit initiation input `hello` through the real bounded interpreter and
+renders only the returned knowledge-defined messages. On New, it creates the
+selected profile run first, then submits initiation only after acknowledged
+creation. It preserves the unsent composer draft and obeys the same profile,
+busy, phase, revision, cumulative-limit and uncertain-outcome rules as Send.
+The starter has greeting knowledge; a custom program without coverage produces
+an honest gap, not a client-generated response, starter substitution or LLM
+fallback. It never runs on page/profile/conversation selection.
 
 Message timestamps use the existing event `time` field: Unix seconds from the
 durable KEE ledger. They are labeled **Recorded**, with a local-date rendering
@@ -652,7 +661,9 @@ TODO gateway under an isolated ledger, assert zero external calls and unchanged
 live source modules/generation, and exercise immutability and explicit selection.
 The Node suite also opens the actual Cyc controller against an ephemeral isolated
 SWI HTTP host: New/Previous identity and draft isolation, an actual knowledge-defined
-`hello` reply, missing authored-profile rejection, oversized title rejection/draft retention, corrected submission,
+`hello` reply from Say something with draft preservation, an isolated native custom
+profile's missing-initiation gap, missing authored-profile rejection,
+oversized title rejection/draft retention, corrected submission,
 Interrupt/Resume at both read and write boundaries, and one real audited TODO.
 That fixture uses a separate project-local ledger, traps external transports,
 checks unchanged native generation and cleans up its owned server/state.
