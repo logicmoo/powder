@@ -13,6 +13,7 @@
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
 :- use_module(library(utf8)).
+:- use_module(library(prolog_wrap)).
 :- dynamic fixture_request/2,fixture_mode/1.
 :- http_handler(root('v1/models'),fixture_models,[]).
 :- http_handler(root('v1/chat/completions'),fixture_chat,[]).
@@ -776,3 +777,44 @@ test(sequence_survives_bounded_event_log_truncation_and_legacy_state) :-
     kb_llm_agent:event_sequence(D,Sequence),assertion(Sequence=:=205).
 :- end_tests(llm_sequence).
 synthetic_event(_,Before,After) :- kb_llm_agent:event(Before,"synthetic",_{},After).
+
+:- begin_tests(llm_discovery_errors).
+test(registry_failures_propagate_and_close_contexts,
+     [forall(member(Head-Expected,[
+       (kb_llm_kee:registry_context(_))-error(kee(unauthenticated,json{detail:"synthetic-private"}),fixture_auth),
+       (kb_kee:registry(_,_))-error(kee(permission_denied,json{detail:"synthetic-private"}),fixture_registry),
+       (kb_llm_kee:json_normalize(_,_))-error(type_error(json,"synthetic-private"),fixture_schema)]))]) :-
+    findall(T,kb_kee_auth:context(T,_,_,_),Before),
+    setup_call_cleanup(
+      wrap_predicate(Head,teacher_discovery_error,_,throw(Expected)),
+      catch(kb_llm_kee:registry_status(Status),Caught,true),
+      unwrap_predicate(Head,teacher_discovery_error)),
+    assertion(Caught==Expected),assertion(var(Status)),
+    findall(T,kb_kee_auth:context(T,_,_,_),After),assertion(After==Before).
+test(silent_registry_failure_is_an_explicit_error_and_closes_context) :-
+    findall(T,kb_kee_auth:context(T,_,_,_),Before),
+    setup_call_cleanup(
+      wrap_predicate(kb_kee:registry(_,_),teacher_discovery_failure,_,fail),
+      catch(kb_llm_kee:registry_status(Status),Caught,true),
+      unwrap_predicate(kb_kee:registry(_,_),teacher_discovery_failure)),
+    assertion(nonvar(Caught)),assertion(Caught=error(llm_registry_discovery_failed,_)),
+    assertion(var(Status)),
+    findall(T,kb_kee_auth:context(T,_,_,_),After),assertion(After==Before).
+test(local_todo_errors_keep_sanitized_codes_without_private_details) :-
+    setup_call_cleanup(kb_llm_kee:registry_context(Token),
+      setup_call_cleanup(
+        wrap_predicate(kb_llm_kee:ownership(_,Own),teacher_todo_owner,_,
+          Own=_{ids:["synthetic-owned"],changesets:[]}),
+        setup_call_cleanup(
+          wrap_predicate(kb_kee:invoke(_,Request,Raw),teacher_todo_read,_,
+            (get_dict(tool,Request,"kee_todo_get")->
+              throw(error(kee(permission_denied,json{detail:"synthetic-private"}),fixture_todo));
+             Raw=json{result:json{items:[],revision:"synthetic"}})),
+          kb_llm_kee:local_todos(kee(Token,"synthetic",_{},[],"synthetic-conversation"),Reply),
+          unwrap_predicate(kb_kee:invoke(_,_,_),teacher_todo_read)),
+        unwrap_predicate(kb_llm_kee:ownership(_,_),teacher_todo_owner)),
+      kb_kee:close_context(Token)),
+    Reply.items=[Item],assertion(Item.id=="synthetic-owned"),assertion(Item.unavailable==true),
+    assertion(Item.error.code==permission_denied),assertion(string(Item.error.message)),
+    kb_kee_schema:json_text(Reply,Text),assertion(\+sub_string(Text,_,_,_,"synthetic-private")).
+:- end_tests(llm_discovery_errors).

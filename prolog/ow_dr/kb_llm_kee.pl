@@ -34,18 +34,17 @@ selected_keys(Keys) :-
     forall(member(Key,Keys),(must_be(string,Key),string_length(Key,L),between(1,4096,L))),
     sort(Keys,Unique),(same_length(Keys,Unique)->true;domain_error(duplicate_scope_keys,Keys)).
 registry_status(Status) :-
-    (catch(setup_call_cleanup(registry_context(Token),
+    (setup_call_cleanup(registry_context(Token),
             (kb_kee:registry(Token,Raw),json_normalize(Raw,Registry)),
-            kb_kee:close_context(Token)),_,fail)->
-       findall(Name,(member(C,Registry.tools),C.available==true,
-                     get_dict(name,C,Name),mutation_name(Name)),Mutations),
-       (length(Mutations,5)->MutationsAvailable=true;MutationsAvailable=false),
-       Status=_{available:true,adapter:"exact selected-material Teacher projection",
-         mutationAvailable:MutationsAvailable,mutationTools:Mutations,managedKbAssertions:false,
-         providerTools:[],exportGateReady:true,
-         limitation:"Only exact, expiring, one-turn approved projections are exportable. Automatic changes are limited to this conversation's audited TODOs. Mutation receipts stop the model loop and stay local. General KB CRUD, symbolic delegation and operators are unavailable."}
-    ;Status=_{available:false,mutationAvailable:false,
-       limitation:"Typed KEE discovery is unavailable. No tools are advertised."}).
+            kb_kee:close_context(Token))->true;
+     throw(error(llm_registry_discovery_failed,_))),
+    findall(Name,(member(C,Registry.tools),C.available==true,
+                  get_dict(name,C,Name),mutation_name(Name)),Mutations),
+    (length(Mutations,5)->MutationsAvailable=true;MutationsAvailable=false),
+    Status=_{available:true,adapter:"exact selected-material Teacher projection",
+       mutationAvailable:MutationsAvailable,mutationTools:Mutations,managedKbAssertions:false,
+       providerTools:[],exportGateReady:true,
+       limitation:"Only exact, expiring, one-turn approved projections are exportable. Automatic changes are limited to this conversation's audited TODOs. Mutation receipts stop the model loop and stay local. General KB CRUD, symbolic delegation and operators are unavailable."}.
 registry_context(Token) :-
     get_time(Now),Expires is Now+5,
     kb_kee:open_context(json{authenticated:true,actor:"local-user",kind:"user",agent:"llm-registry",
@@ -428,7 +427,8 @@ local_todos(kee(Token,_,_,_,Conversation),Reply) :-
     findall(Item,(member(Id,Page),
       catch((kb_kee:invoke(Token,_{tool:"kee_todo_get",schemaVersion:1,callId:Id,
                                  arguments:_{id:Id}},Raw),json_normalize(Raw,Item)),
-            _,Item=_{id:Id,unavailable:true})),Items),
+            Error,(kb_llm_agent:safe_error(Error,Safe),
+                   Item=_{id:Id,unavailable:true,error:Safe}))),Items),
     local_undo_actions(Token,Own,Actions),
     Reply=_{available:true,items:Items,total:Total,limit:25,undoActions:Actions,
       note:"Local application TODOs with durable audit/undo; not KB assertions and not exported by this inspector."}.
