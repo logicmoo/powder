@@ -34,8 +34,10 @@ and route externally. No action changes the user's saved model or settings.
 
 ```text
 plainTextEligible: boolean
+forkSupported: true
 branchOf: null | {id: parentConversationId, revision: parentSnapshotRevision}
 queue: {
+  supported: true,
   state: "idle" | "waiting" | "running" | "paused",
   pauseReason: null | string,
   pending: integer,
@@ -54,6 +56,10 @@ queue: {
   }]
 }
 ```
+
+Use `queue.supported === true` and `forkSupported === true` to gate controls
+when the browser can encounter an older backend. These advertise implemented
+routes, not permission or current eligibility; retain the state/scope checks.
 
 `GET llm/conversations` includes `branchOf` and queue summary fields, **without**
 the `items` array. Open the selected conversation to read its own queue/history.

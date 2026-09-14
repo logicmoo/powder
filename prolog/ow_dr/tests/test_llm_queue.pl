@@ -70,6 +70,14 @@ teacher_queue_child(Operation,Reply) :-
       delete_file(Script)).
 
 :- begin_tests(llm_queue,[setup(teacher_queue_setup(State)),cleanup(teacher_queue_cleanup(State))]).
+test(capability_flags_are_explicit_and_never_start_work) :-
+    teacher_queue_sent(Before),teacher_queue_new(C),
+    assertion(C.queue.supported==true),assertion(C.forkSupported==true),
+    assertion(C.queue.canEnqueue==false),assertion(C.queue.canResume==false),
+    fork_conversation(_{id:C.id,revision:C.revision},Fork),
+    assertion(Fork.queue.supported==true),assertion(Fork.forkSupported==true),
+    assertion(Fork.queue.items==[]),assertion(Fork.status=="ready"),
+    teacher_queue_sent(After),assertion(After==Before).
 test(durable_fifo_idempotence_and_isolated_conversation_history) :-
     teacher_queue_hold(C),teacher_queue_new(Other),
     conversation(C.id,Running),

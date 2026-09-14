@@ -60,7 +60,7 @@ conversation(Input,Reply) :-
       rawResponse:D.lastResponse,
       registry:Registry,todos:_{available:Registry.available,reason:"Use Refresh local TODOs. This inspector never exports task text."},
       notice:D.config.notice,disclosureRequired:true,action:Action,
-      plainTextEligible:Plain,queue:Queue,branchOf:Branch}.
+      plainTextEligible:Plain,queue:Queue,branchOf:Branch,forkSupported:true}.
 observed_status(D,Status) :-
     id_atom(D.id,Id),
     (D.status=="running",\+owned_run(Id,_,_,_)->Status="outcome_unknown";Status=D.status).
@@ -342,7 +342,7 @@ queue_view(D,View) :-
     (N>0,plain_text_eligible(D),\+memberchk(D.status,["running","closed"]),
      id_atom(D.id,Id),\+owned_run(Id,_,_,_)->Resume=true;Resume=false),
     queue_state(D,Q,N,State,Reason),
-    View=_{state:State,pauseReason:Reason,pending:N,canEnqueue:Enqueue,canResume:Resume,
+    View=_{supported:true,state:State,pauseReason:Reason,pending:N,canEnqueue:Enqueue,canResume:Resume,
            items:Items,maximumPending:8,maximumEntries:100,maximumTextCharacters:8192}.
 queue_public_item(D,Item,Public) :-
     (Item.status=="running",\+owned_current(D)->Public=Item.put(status,"outcome_unknown");Public=Item).
