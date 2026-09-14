@@ -6,6 +6,7 @@ const selectedProvider = new URLSearchParams(location.search).get('provider');
 const provider = embed?.provider || (['copilot', 'codex'].includes(selectedProvider) ? selectedProvider : 'copilot');
 const providerName = provider === 'codex' ? 'Codex operator' : 'Copilot operator';
 const prefix = `/api/operators/${provider}`;
+const firstReplyPrompt = 'Please say hello briefly and invite me to share what I would like to discuss. Do not use tools, inspect files, or perform any other actions.';
 let socket, sequence = 0, connected = false, state, reconnect, refreshTimer, draftTimer, pendingSend;
 let draftLoaded = false, draftWrites = Promise.resolve();
 let permissionsKey, commandsKey;
@@ -100,9 +101,14 @@ async function api(path, body) {
 }
 function renderComposer() {
   const ready = connected && draftLoaded && !switching;
+  const available = ready && state?.adapter.available && !(state.stopped && !state.canRestart)
+    && !pendingSend?.sending;
   $('send').textContent = state?.workPending ? 'Enqueue' : 'Send';
-  $('send').disabled = !ready || !state?.adapter.available || (state.stopped && !state.canRestart)
-    || Boolean(pendingSend?.sending) || !$('prompt').value.trim();
+  $('send').disabled = !available || !$('prompt').value.trim();
+  $('say-something').disabled = !available || $('prompt').value.length > 0;
+  $('say-something').textContent = state?.workPending ? 'Enqueue reply' : 'Say something';
+  $('say-something').title = $('prompt').value.length ? 'Your draft is kept. Send or clear it before asking the agent to speak first.'
+    : `${state?.workPending ? 'Enqueue' : 'Send'} a brief-reply request to ${providerName}. This uses its native session, not a local canned answer.`;
   $('interrupt').disabled = !connected || switching || Boolean(interruptPending) || !state?.activeCommandId;
 }
 function renderStatus(value) {
@@ -276,13 +282,14 @@ function connect() {
     reconnect = setTimeout(connect, document.hidden ? 10000 : 1500);
   });
 }
-async function submit(kind, content = '', startAnyway = false) {
+async function submit(kind, content = '', startAnyway = false, keepDraft = false) {
   if (pendingSend?.sending || switching || !connected || (kind === 'prompt' && (!draftLoaded || !content.trim()))) return;
   manualNotice = null;
-  const id = pendingSend && pendingSend.conversationId === state.conversationId && pendingSend.kind === kind && pendingSend.text === content
-    ? pendingSend.id : crypto.randomUUID();
+  const retry = pendingSend && pendingSend.conversationId === state.conversationId && pendingSend.kind === kind && pendingSend.text === content
+    ? pendingSend : null;
+  const id = retry?.id || crypto.randomUUID();
   const conversationId = state.conversationId;
-  const request = {id, kind, text: content, conversationId, sending: true};
+  const request = {id, kind, text: content, conversationId, sending: true, keepDraft: keepDraft || Boolean(retry?.keepDraft)};
   pendingSend = request;
   renderComposer();
   try {
@@ -292,7 +299,7 @@ async function submit(kind, content = '', startAnyway = false) {
     await api('/api/commands', body);
     $('conflict').hidden = true;
     if (state.conversationId !== conversationId) return;
-    if (kind === 'prompt' && $('prompt').value === content) {
+    if (kind === 'prompt' && !request.keepDraft && $('prompt').value === content) {
       clearTimeout(draftTimer); $('prompt').value = '';
       localDrafts.set(conversationId, {text:'', dirty:true}); await saveDraft('', conversationId);
     }
@@ -327,8 +334,12 @@ $('prompt').addEventListener('input', () => {
     .catch(error => notice(`Draft not saved: ${error.message}`, true)), 400);
 });
 $('start').addEventListener('click', () => submit('start_session'));
+$('say-something').addEventListener('click', () => {
+  if ($('say-something').disabled || $('prompt').value.length) return;
+  submit('prompt', firstReplyPrompt, false, true);
+});
 $('start-anyway').addEventListener('click', () => {
-  if (pendingSend) submit(pendingSend.kind, pendingSend.text, true);
+  if (pendingSend) submit(pendingSend.kind, pendingSend.text, true, pendingSend.keepDraft);
   else if (pendingBranch) chooseConversation('__branch__', true);
 });
 $('dismiss-conflict').addEventListener('click', () => {

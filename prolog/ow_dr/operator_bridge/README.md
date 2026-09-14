@@ -141,9 +141,19 @@ authenticates the **human to the bridge**, not either native provider account.
 
 Both embedded and standalone views have a **Conversation** dropdown with **New
 conversation…** and previous conversations, a composer with **Send** when idle
-or **Enqueue** while work is pending, **Interrupt**, and a **Settings** toggle.
-No greeting shortcut or generated greeting is offered while its intended meaning
-is unconfirmed. Empty/disconnected Send and inactive Interrupt controls are
+or **Enqueue** while work is pending, **Say something**, **Interrupt**, and a
+**Settings** toggle. Say something explicitly submits a normal, innocuous prompt
+asking the selected native agent to reply first without tools or file actions.
+It is not draft insertion or a canned client-side answer. While busy its label is
+**Enqueue reply** and it uses the same real FIFO, auth, native permissions,
+conversation binding and request idempotence as Send—including Start anyway
+when a second provider must start.
+
+Say something is disabled while any draft text is present. Its separate preset
+request never replaces or clears a draft typed while the request is in flight.
+Page load, selection, reconnect and clocks never invoke it. Tests use only the
+synthetic SDK/stdio fixtures, not live provider/model calls.
+Empty/disconnected Send and inactive Interrupt controls are
 visibly disabled, including on hover. Settings contains model
 selection, explicit native Start/resume, status/identity, command controls,
 recorded events and Stop. Pending native permissions remain visible **outside**
@@ -300,11 +310,12 @@ existing 8063 bridge, or perform real native/model turns.
 
 Validation for this stage: native SDK/stdio fixture tests exercise distinct
 native IDs, New/Previous, restart/resume, draft/model persistence, idempotency,
-cancel/permission routing, native forks and cancelled detach. Nine real Chromium scenarios
+cancel/permission routing, native forks and cancelled detach. Ten real Chromium scenarios
 cover standalone and embedded chat, stale/delayed responses, Unicode replay,
 permissions outside Settings, origin/window isolation, liveness recovery,
 branch acknowledgement/provenance, FIFO Enqueue/Interrupt, and disabled styles
-including hover/active, and durable local clocks with visibility pause/resume.
+including hover/active, durable local clocks with visibility pause/resume, and
+explicit native first replies with draft preservation and busy FIFO handling.
 These are synthetic conversations, not evidence of a logged-in account or
 successful real model inference.
 

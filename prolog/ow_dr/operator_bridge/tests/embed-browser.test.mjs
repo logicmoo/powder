@@ -133,6 +133,108 @@ test('transcript clocks use durable send times and pause hidden updates without 
   } finally { await browser.close(); await fixture.close(); }
 });
 
+test('Say something dispatches explicit native replies, keeps drafts, and queues behind native permissions without replay', {
+  timeout: 90000, skip: !existsSync(executable) || !existsSync(python),
+}, async () => {
+  const fixture = await startFixture(), browser = await launchChromium(executable);
+  const {send, evaluate, wait} = browser;
+  const stats = async () => (await fetch(fixture.parentURL + '/fixture/stats')).json();
+  const preset = 'Please say hello briefly and invite me to share what I would like to discuss. Do not use tools, inspect files, or perform any other actions.';
+  try {
+    await send('Page.navigate', {url:fixture.parentURL});
+    await wait('window.states?.copilot?.status === "pairing"');
+    for (const provider of ['copilot', 'codex']) {
+      await evaluate(`document.getElementById('${provider}').click()`);
+      const child = await attachFrame(browser, provider);
+      await pairFrame(child);
+      await child.until('!document.querySelector("#say-something").disabled');
+      const original = await child.run('operatorEmbed.api("/api/status")');
+      const other = provider === 'copilot' ? 'codex' : 'copilot';
+      const before = await stats();
+      assert.equal(original.nativeSessionId, null);
+      assert.equal(before[provider + 'Prompts'], 0);
+      assert.equal(before[provider + 'Starts'], 0, 'load, pairing and selection never start the agent');
+      const draft = value => child.run(`document.querySelector("#prompt").value=${JSON.stringify(value)};
+        document.querySelector("#prompt").dispatchEvent(new Event("input"))`);
+      await draft('my unsent draft');
+      assert.equal(await child.run('document.querySelector("#say-something").disabled'), true);
+      assert.equal(await child.run('getComputedStyle(document.querySelector("#say-something")).backgroundColor'), 'rgb(223, 229, 236)');
+      await child.run('document.querySelector("#say-something").click()');
+      assert.equal((await stats())[provider + 'Prompts'], 0);
+      assert.equal(await child.run('document.querySelector("#prompt").value'), 'my unsent draft');
+      await draft('');
+      await child.run(`window.fixtureFetch = window.fetch; window.fixtureRequests = [];
+        window.fetch = async (...args) => {
+          const isCommand = String(args[0]).endsWith('/commands');
+          if (isCommand) fixtureRequests.push(JSON.parse(args[1].body));
+          const response = await fixtureFetch(...args);
+          if (isCommand && response.status === 202 && !window.heldFirstReply) {
+            window.heldFirstReply = true;
+            await new Promise(resolve => { window.releaseFirstReply = resolve; });
+          }
+          if (isCommand && response.status === 202 && window.dropNextAck) {
+            window.dropNextAck = false; throw new TypeError('Synthetic lost acknowledgement');
+          }
+          return response;
+        };
+        document.querySelector("#say-something").click();
+        document.querySelector("#say-something").click()`);
+      if (provider === 'codex') {
+        await child.until('!document.querySelector("#conflict").hidden');
+        assert.equal((await stats()).codexStarts, 0, 'first reply respects the two-provider Start anyway warning');
+        await child.run('document.querySelector("#start-anyway").click()');
+      }
+      await child.until('typeof window.releaseFirstReply === "function"');
+      assert.equal(await child.run('document.querySelector("#say-something").disabled'), true);
+      const first = await child.run('window.fixtureRequests.at(-1)');
+      assert.equal(first.kind, 'prompt');
+      assert.equal(first.text, preset);
+      assert.equal(first.conversationId, original.conversationId);
+      assert.equal(first.startIfNeeded, true);
+      assert.equal('keepDraft' in first, false, 'draft preservation is local, not a new backend command');
+      await draft(preset);
+      await child.run('window.releaseFirstReply()');
+      await child.until('!document.querySelector("#send").disabled && document.querySelector("#transcript").textContent.includes("fixture output")');
+      assert.equal(await child.run('document.querySelector("#prompt").value'), preset, 'even an identical draft typed during acceptance is not cleared');
+      const completed = await child.run('operatorEmbed.api("/api/status")');
+      assert.ok(completed.nativeSessionId);
+      assert.equal(completed.commands.length, 1, 'double click and Start anyway use one request identity');
+      assert.equal((await stats())[provider + 'Prompts'], 1, 'the reply came through the native fixture, not a canned DOM answer');
+      const firstIds = await child.run('fixtureRequests.map(request=>request.id)');
+      assert.equal(new Set(firstIds).size, 1);
+
+      await draft('permission');
+      await child.run('document.querySelector("#send").click()');
+      await child.until('!document.querySelector("#permission-section").hidden && document.querySelector("#prompt").value === "" && !document.querySelector("#say-something").disabled');
+      assert.equal(await child.run('document.querySelector("#inspector").hidden'), true);
+      assert.equal(await child.run('document.querySelector("#say-something").textContent'), 'Enqueue reply');
+      await child.run('window.dropNextAck = true; document.querySelector("#say-something").click()');
+      await child.until('document.querySelector("#notice").textContent.includes("It was not resent")');
+      const queued = await child.run('operatorEmbed.api("/api/status")');
+      assert.equal(queued.permissions.length, 1, 'a first-reply request never grants native permission');
+      assert.equal(queued.commands.filter(command=>command.state === 'queued').length, 1);
+      assert.equal((await stats())[provider + 'Prompts'], 2, 'greeting waits behind the selected native turn');
+      const queuedId = await child.run('fixtureRequests.at(-1).id');
+      await child.run('document.querySelector("#say-something").click()');
+      await child.until('!document.querySelector("#say-something").disabled');
+      assert.equal(await child.run('fixtureRequests.at(-1).id'), queuedId, 'manual unchanged-input retry keeps the accepted request ID');
+      assert.equal((await child.run('operatorEmbed.api("/api/status")')).commands.length, 3);
+      await child.run('[...document.querySelectorAll("#permission-section button")].find(button=>button.textContent === "Deny").click()');
+      await child.until('document.querySelector("#say-something").textContent === "Say something" && document.querySelector("#permission-section").hidden');
+      const finished = await child.run('operatorEmbed.api("/api/status")');
+      assert.equal(finished.commands.find(command=>command.id === queuedId).state, 'complete');
+      assert.equal(finished.nativeSessionId, completed.nativeSessionId);
+      assert.equal((await stats())[provider + 'Prompts'], 3);
+      assert.equal((await stats())[other + 'Prompts'], before[other + 'Prompts'], 'the other provider received no request');
+      assert.ok((await child.run('fixtureRequests')).every(request=>request.conversationId === original.conversationId));
+      await child.run('window.fetch = window.fixtureFetch; document.querySelector("#logout").click(); document.querySelector("#pair-retry").click()');
+      await pairFrame(child);
+      await child.until('document.querySelector("#transcript").textContent.includes("fixture output")');
+      assert.equal((await stats())[provider + 'Prompts'], 3, 're-pair and output replay never ask for another reply');
+    }
+  } finally { await browser.close(); await fixture.close(); }
+});
+
 test('Send becomes Enqueue; Interrupt targets active work and preserves each native provider FIFO', {
   timeout: 90000, skip: !existsSync(executable) || !existsSync(python),
 }, async () => {
@@ -150,7 +252,7 @@ test('Send becomes Enqueue; Interrupt targets active work and preserves each nat
       assert.equal(await child.run('document.querySelector("#send").disabled'), true);
       assert.equal(await child.run('document.querySelector("#interrupt").disabled'), true);
       assert.equal(await child.run('getComputedStyle(document.querySelector("#send")).backgroundColor'), 'rgb(223, 229, 236)');
-      assert.equal(await child.run('document.querySelector("#say-something")'), null);
+      assert.equal(await child.run('document.querySelector("#say-something").disabled'), false);
       const enter = text => child.run(`document.querySelector("#prompt").value=${JSON.stringify(text)};
         document.querySelector("#prompt").dispatchEvent(new Event("input")); document.querySelector("#send").click()`);
       await enter('hang');
@@ -282,7 +384,7 @@ test('standalone recovery offers the same chat-first history and native controls
     await wait(`document.querySelector("#conversation-select").value !== ${JSON.stringify(original)} && document.querySelector("#conversation-select").value !== "__new__" && !document.querySelector("#prompt").disabled`);
     const second = await evaluate('document.querySelector("#conversation-select").value');
     assert.equal(await evaluate('document.querySelector("#prompt").value'), '');
-    await evaluate('document.querySelector("#prompt").value="standalone synthetic fixture"; document.querySelector("#composer").requestSubmit()');
+    await evaluate('document.querySelector("#say-something").click()');
     await wait('document.querySelector("#transcript").textContent.includes("fixture output")');
     await evaluate(`document.querySelector("#conversation-select").value=${JSON.stringify(original)}; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))`);
     await wait('document.querySelector("#prompt").value === "standalone original draft" && !document.querySelector("#conversation-select").disabled');
@@ -291,13 +393,15 @@ test('standalone recovery offers the same chat-first history and native controls
     await wait('document.querySelector("#transcript").textContent.includes("fixture output")');
     for (const [name, width, height, mobile] of [['desktop',1200,900,false], ['mobile',390,844,true]]) {
       await send('Emulation.setDeviceMetricsOverride', {width,height,deviceScaleFactor:1,mobile});
+      await evaluate('document.querySelector("#composer").scrollIntoView({block:"end"})');
       assert.ok(await evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'));
+      assert.ok(await evaluate('document.querySelector("#say-something").getBoundingClientRect().bottom <= innerHeight'));
       const image = await send('Page.captureScreenshot', {format:'png'});
       writeFileSync(fileURLToPath(new URL(`./.artifacts/chat-${name}.png`, import.meta.url)), Buffer.from(image.data, 'base64'));
     }
     const count = await (await fetch(fixture.parentURL + '/fixture/stats')).json();
     assert.equal(count.copilotCreates, 1);
-    assert.equal(count.copilotPrompts, 1, 'native turns came only from explicit Send, never New or Previous');
+    assert.equal(count.copilotPrompts, 1, 'native turns came only from an explicit first-reply request, never New or Previous');
     assert.equal(count.codexStarts, 0);
   } finally { await browser.close(); await fixture.close(); }
 });
@@ -319,7 +423,7 @@ test('chat-first operators keep real native conversations, drafts, settings and 
       await pairFrame(child);
       await child.until('!document.querySelector("#prompt").disabled');
       assert.equal(await child.run('document.querySelector("#inspector").hidden'), true);
-      assert.equal(await child.run('document.querySelector("#say-something")'), null);
+      assert.equal(await child.run('document.querySelector("#say-something").disabled'), false);
       assert.equal(await child.run('document.querySelector("#interrupt").disabled'), true);
       const original = await child.run('operatorEmbed.api("/api/status")');
       const before = await stats();
