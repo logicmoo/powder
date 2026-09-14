@@ -120,4 +120,24 @@ test(exhausted_step_budget_is_not_reset_by_fork,
     assertion(Final.frame.engine.phase==gap),
     assertion(Final.frame.engine.steps==1).
 
+test(copied_frame_and_source_must_match_the_actual_ledger_checkpoint,
+     [setup(fixture(F,C,D)),cleanup(cleanup(F,C,D))]) :-
+    ready(C,P,R),kb_kee_ledger:snapshot(Before),
+    Engine=R.frame.engine.put(steps,0),Forged=R.put(frame,R.frame.put(engine,Engine)),
+    catch(fork(C,D,P,Forged,_,_),E1,true),
+    assertion(E1=error(symbolic_fork_parent_conflict,_)),
+    Source=R.source.put(limits,R.source.limits.put(actions,64)),
+    catch(fork(C,D,P,R.put(source,Source),_,_),E2,true),
+    assertion(E2=error(symbolic_fork_parent_conflict,_)),
+    kb_kee_ledger:snapshot(After),assertion(After==Before).
+
+test(history_and_control_metadata_cannot_change_actual_ownership,
+     [setup(fixture(F,C,D)),cleanup(cleanup(F,C,D))]) :-
+    ready(C,P,R),
+    catch(kb_symbolic_agent_fork:history(D,R,0,10,_),E1,true),
+    assertion(E1=error(symbolic_run_owner_mismatch,_)),
+    C=control(Token,Owner,Audit),Forged=control(Token,Owner.put(actor,"another"),Audit),
+    catch(fork(Forged,D,P,R,_,_),E2,true),
+    assertion(E2=error(symbolic_run_owner_mismatch,_)).
+
 :- end_tests(symbolic_agent_fork).

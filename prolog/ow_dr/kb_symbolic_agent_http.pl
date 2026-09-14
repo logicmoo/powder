@@ -12,6 +12,7 @@
 :- http_handler(openworld_dr(api/symbolic/status),symbolic_endpoint(status),[method(get)]).
 :- http_handler(openworld_dr(api/symbolic/'request-status'),symbolic_endpoint(request_status),[method(get)]).
 :- http_handler(openworld_dr(api/symbolic/start),symbolic_endpoint(start),[method(post)]).
+:- http_handler(openworld_dr(api/symbolic/fork),symbolic_endpoint(fork),[method(post)]).
 :- http_handler(openworld_dr(api/symbolic/conversation),symbolic_endpoint(conversation),[method(get)]).
 :- http_handler(openworld_dr(api/symbolic/send),symbolic_endpoint(send),[method(post)]).
 :- http_handler(openworld_dr(api/symbolic/continue),symbolic_endpoint(continue),[method(post)]).
@@ -60,6 +61,9 @@ report_error(error(symbolic_action_not_dispatched(Cause),_)) :- !,
       Underlying=json{message:Detail}),
     respond(422,json{error:json{code:"symbolic_action_not_dispatched",message:Message,
       cause:Underlying,dispatched:false}}).
+report_error(error(symbolic_fork_outcome_unknown(_),_)) :- !,
+    respond(500,json{error:json{code:"symbolic_fork_outcome_unknown",
+     message:"The branch request may have committed. Inspect its saved request receipt; do not replay it."}}).
 report_error(Error) :-
     error_status(Error,Status,Code),message_to_string(Error,Message),
     respond(Status,json{error:json{code:Code,message:Message}}).
@@ -67,6 +71,13 @@ error_status(error(symbolic_form_invalid(_),_),422,"symbolic_form_invalid") :- !
 error_status(error(symbolic_action_not_dispatched(_),_),422,"symbolic_action_not_dispatched") :- !.
 error_status(error(llm_forbidden,_),403,"symbolic_forbidden") :- !.
 error_status(error(symbolic_conflict(_),_),409,"symbolic_conflict") :- !.
+error_status(error(symbolic_fork_unsafe(_),_),409,"symbolic_fork_unsafe") :- !.
+error_status(error(symbolic_fork_outcome_unknown(_),_),500,"symbolic_fork_outcome_unknown") :- !.
+error_status(error(symbolic_fork_authority_mismatch,_),403,"symbolic_fork_authority_mismatch") :- !.
+error_status(error(symbolic_fork_parent_conflict,_),409,"symbolic_fork_parent_conflict") :- !.
+error_status(error(symbolic_fork_conversation_exists,_),409,"symbolic_fork_conversation_exists") :- !.
+error_status(error(symbolic_fork_request_conflict,_),409,"symbolic_fork_request_conflict") :- !.
+error_status(error(symbolic_fork_history_unavailable,_),409,"symbolic_fork_history_unavailable") :- !.
 error_status(error(symbolic_outcome_unknown_inspect_receipt,_),409,"symbolic_outcome_unknown") :- !.
 error_status(error(kee(Code,_),_),409,Code) :- !.
 error_status(error(symbolic_snapshot_definition_unavailable,_),422,"knowledge_unavailable") :- !.

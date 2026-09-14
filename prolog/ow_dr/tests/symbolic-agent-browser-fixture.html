@@ -25,7 +25,15 @@ const api=async(path,params={},options={})=>{
   window.fixtureRequests.push({path,body:options.body});
   const r=await fetch(u,{...options,headers:{'Content-Type':'application/json'},body:options.body?JSON.stringify(options.body):undefined});
   const b=await r.json();window.fixtureLatest=b;
-  if(!r.ok)throw Object.assign(Error(b.error.message),b.error,{status:r.status});return b;
+  if(!r.ok)throw Object.assign(Error(b.error.message),b.error,{status:r.status});
+  if(path==='symbolic/fork'&&window.fixtureHoldForkReply){
+    window.fixtureHoldForkReply=false;
+    await new Promise(resolve=>{window.fixtureReleaseForkReply=resolve});
+  }
+  if(path==='symbolic/fork'&&window.fixtureDropForkReply){
+    window.fixtureDropForkReply=false;throw new TypeError('Isolated fixture lost the committed fork reply');
+  }
+  return b;
 };
 const host={api,element,button:(text,click,className='button')=>element('button',{type:'button',className,onclick:click},text),
   heading:(title,body)=>element('header',{className:'page-heading'},element('div',{},element('h1',{},title),element('p',{},body)))};

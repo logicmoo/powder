@@ -1,5 +1,6 @@
 :- module(kb_symbolic_agent_host,[request/3]).
 :- use_module(kb_symbolic_agent_control,[]).
+:- use_module(kb_symbolic_agent_fork,[]).
 :- use_module(kb_symbolic_agent_knowledge,[]).
 :- use_module(kb_symbolic_agent_program,[]).
 :- use_module(kb_symbolic_agent_engine,[]).
@@ -40,17 +41,18 @@ schema(Action,obj(Fields)) :-
       Extra=[opt(offset,int(0,100000)),opt(limit,int(1,100))]),
     append(Base,Extra,Fields).
 schema(Action,obj(Fields)) :-
-    memberchk(Action,[send,continue,interrupt,resume,stop,form]),
+    memberchk(Action,[send,continue,interrupt,resume,stop,form,fork]),
     identity(Base),
     (Action==send->Extra=[req(text,str(1,4096))];
-      Action==form->Extra=[req(values,object)];Extra=[]),
+      Action==form->Extra=[req(values,object)];
+      Action==fork->Extra=[req(newConversation,str(1,80))];Extra=[]),
     append([Base,[req(revision,str(64,64)),req(callId,str(1,80))],Extra],Fields).
 
 status(Reply) :-
     kb_store:generation(G),kb_symbolic_agent_profiles:catalog(Profiles),
     Reply=json{identity:"symbolic",label:"Cyc",schema:"powder.symbolic-http.v1",
     knowledge:"unconfigured",message:"Select the limited app-owned starter, or a loaded agent with its definition and linked MTs, then Start. No program executes on selection.",
-    generation:G,model:false,network:false,approvalSupported:false,
+    generation:G,model:false,network:false,approvalSupported:false,forkSupported:true,
     profiles:Profiles,formSupported:true,limits:json{steps:128,actions:16,turns:1000,seconds:2}}.
 
 base_spec(Conversation,Read,Write,Spec) :-
@@ -79,6 +81,19 @@ request_locked(start,A,Reply) :- !,
            conflict(idempotence))
        ;start_new(A,Hash,CallId,Reply))),
       kb_symbolic_agent_control:close_control(Reader)).
+request_locked(fork,A,Reply) :- !,
+    (A.conversation\==A.newConversation->true;conflict(conversation)),
+    request_hash(fork,A,Hash),http_call_id(A.callId,CallId),
+    base_spec(A.newConversation,"all",[],ReadSpec),
+    setup_call_cleanup(kb_symbolic_agent_control:open_control(ReadSpec,Reader),
+      (receipt(Reader,CallId,Receipt),
+       (Receipt.status=="committed"->
+         catch(kb_symbolic_agent_control:get(Reader,Receipt.commit.result.id,Existing),
+           Cause,throw(error(symbolic_fork_outcome_unknown(Cause),_))),
+         (Existing.source.host.requestHash==Hash->
+           public_fork(Reader,Existing,true,Reply);conflict(idempotence))
+       ;fork_new(A,Hash,CallId,Reply))),
+      kb_symbolic_agent_control:close_control(Reader)).
 request_locked(Action,A,Reply) :-
     base_spec(A.conversation,"all",[],ReadSpec),
     setup_call_cleanup(kb_symbolic_agent_control:open_control(ReadSpec,Reader),
@@ -86,6 +101,25 @@ request_locked(Action,A,Reply) :-
        owned_host(Run),
        request_run(Action,A,Reader,Run,Reply)),
       kb_symbolic_agent_control:close_control(Reader)).
+
+fork_new(A,Hash,CallId,Reply) :-
+    base_spec(A.conversation,"all",[],ReadSpec),
+    setup_call_cleanup(kb_symbolic_agent_control:open_control(ReadSpec,Reader),
+      (kb_symbolic_agent_control:get(Reader,A.id,Parent),owned_host(Parent),
+      (Parent.resource.revision==A.revision->true;conflict(revision)),
+      restore_program(A,Parent,Program,Spec)),
+      kb_symbolic_agent_control:close_control(Reader)),
+    ChildSpec=Spec.put(conversation,A.newConversation),
+    setup_call_cleanup(kb_symbolic_agent_control:open_control(Spec,ParentControl),
+      setup_call_cleanup(kb_symbolic_agent_control:open_control(ChildSpec,ChildControl),
+       (kb_symbolic_agent_fork:fork_prepared(ParentControl,ChildControl,Program,
+          Parent,CallId,Hash,Child,Replayed),
+        public_fork(ChildControl,Child,Replayed,Reply)),
+       kb_symbolic_agent_control:close_control(ChildControl)),
+      kb_symbolic_agent_control:close_control(ParentControl)).
+public_fork(C,Run,Replayed,Reply) :-
+    catch(public_recent(C,Run,Replayed,Reply),Cause,
+      throw(error(symbolic_fork_outcome_unknown(Cause),_))).
 
 start_new(A,Hash,CallId,Reply) :-
     prepare_start(A,Program,Snapshot,Config,Selected),
@@ -138,7 +172,8 @@ owned_host(Run) :-
 
 request_run(conversation,A,C,R,Reply) :- !,
     page(A,_,Limit),
-    (get_dict(offset,A,Offset)->true;Offset is max(0,R.resource.data.eventSequence+1-Limit)),
+    event_count(R,Count),
+    (get_dict(offset,A,Offset)->true;Offset is max(0,Count-Limit)),
     public_run(C,R,Offset,Limit,false,Reply).
 request_run(Action,A,_,R,Reply) :-
     memberchk(Action,[todos,audit,receipt]),!,
@@ -264,22 +299,27 @@ goals_mt(R,Mt) :-
 goals_mt(_,_) :- throw(error(symbolic_goals_scope_unavailable,_)).
 
 public_recent(C,R,Replayed,Reply) :-
-    Offset is max(0,R.resource.data.eventSequence-49),
+    event_count(R,Count),Offset is max(0,Count-50),
     public_run(C,R,Offset,50,Replayed,Reply).
+event_count(R,Count) :-
+    (get_dict(lineage,R.source.host,L)->Inherited=L.historyCount;Inherited=0),
+    Count is Inherited+R.resource.data.eventSequence+1.
 public_run(C,R,Offset,Limit,Replayed,Reply) :-
-    kb_symbolic_agent_control:events(C,R.id,Offset,Limit,Raw),
-    maplist(public_event,Raw.result.items,Events),
+    kb_symbolic_agent_fork:history(C,R,Offset,Limit,Raw),
+    maplist(public_event,Raw.items,Events),
+    Sequence is Raw.total-1,kb_symbolic_agent_fork:availability(R,Fork),
     kb_symbolic_agent_wire:encode_term(R.frame.engine,State),
     pending_view(R,Pending),
     kb_store:generation(Current),
     (get_dict(origin,R.source.host,"app_owned_profile")->Knowledge="app_owned_profile";
       Current=:=R.source.kbGeneration->Knowledge="snapshot_bound";Knowledge="generation_changed"),
     Public=json{id:R.id,conversation:R.resource.data.owner.conversation,
-      revision:R.resource.revision,eventSequence:R.resource.data.eventSequence,
+      revision:R.resource.revision,eventSequence:Sequence,
+      nativeEventSequence:R.resource.data.eventSequence,fork:Fork,
       status:R.resource.data.status,phase:R.frame.engine.phase,steps:R.frame.engine.steps,
       actions:R.frame.engine.actions,turns:R.frame.turns,state:State,pending:Pending,
       source:R.source,knowledge:Knowledge,approvalSupported:false},
-    Reply=json{run:Public,events:Events,eventTotal:Raw.result.total,
+    Reply=json{run:Public,events:Events,eventTotal:Raw.total,
       offset:Offset,limit:Limit,replayed:Replayed}.
 pending_view(R,Pending) :-
     (R.frame.pending\==null->
@@ -307,4 +347,4 @@ public_event(Item,Public) :-
     (get_dict(request,Data,Request)->true;Request=null),
     Public=json{sequence:Item.eventSequence,time:Item.time,kind:Item.event.kind,
       callId:Item.event.id,request:Request,semantic:Wire,messages:Messages,
-      action:Item.event.action}.
+      action:Item.event.action,inherited:Item.inherited,origin:Item.origin}.

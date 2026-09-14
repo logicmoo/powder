@@ -24,6 +24,8 @@ export function controlAvailability(run, pending = false, unknown = false) {
       && (run.pending?.kind !== 'action' || run.pending.stage === 'planned'),
     stop: !!run && !pending && !terminal,
     form: !!run && !pending && !unknown && phase === 'awaiting_form',
+    fork: !!run && !pending && !unknown && phase === 'awaiting_input' && !run.pending
+      && run.fork?.supported === true && run.fork.allowed === true,
   };
 }
 export function symbolicText(wire) {
@@ -119,6 +121,7 @@ export function createSymbolicAgent(host, {
   const controls = {};
   for (const [action, label] of Object.entries({
     start: 'Start', send: 'Send', continue: 'Continue', interrupt: 'Interrupt', resume: 'Resume', stop: 'Stop',
+    fork: 'Branch conversation',
   })) controls[action] = button(label, () => perform(action), action === 'send' ? 'button' : 'button secondary');
   const refresh = button('Refresh state', refreshState, 'button secondary');
   const recover = button('Inspect uncertain request', recoverRequest, 'button secondary');
@@ -126,6 +129,8 @@ export function createSymbolicAgent(host, {
   const controlReason = el('p', { id: `${viewId}-control-reason`, className: 'muted cyc-control-reason',
     role: 'status', 'aria-live': 'polite' });
   for (const control of Object.values(controls)) control.setAttribute('aria-describedby', controlReason.id);
+  const forkReason = el('p', { id: `${viewId}-fork-reason`, className: 'muted cyc-fork-reason' });
+  controls.fork.setAttribute('aria-describedby', forkReason.id);
   saySomething.setAttribute('aria-describedby', controlReason.id);
   const settingsToggle = button('Settings', () => showSettings(!settingsOpen), 'button secondary');
   settingsToggle.setAttribute('aria-controls', `${viewId}-settings`);
@@ -135,8 +140,8 @@ export function createSymbolicAgent(host, {
     'aria-label': 'Message timing', hidden: true });
   const requests = el('section', { className: 'cyc-requests', 'aria-label': 'Cyc form or approval request' });
   const chat = el('section', { className: 'cyc-chat' },
-    el('div', { className: 'cyc-history-bar' }, el('label', {}, 'Conversation ', picker), settingsToggle, recover),
-    identity, transcript, requests,
+    el('div', { className: 'cyc-history-bar' }, el('label', {}, 'Conversation ', picker), controls.fork, settingsToggle, recover),
+    forkReason, identity, transcript, requests,
     el('form', { className: 'cyc-composer', onsubmit: event => { event.preventDefault(); perform('send'); } },
       el('label', { className: 'field' }, 'Message to Cyc', text),
       el('div', { className: 'cyc-actions' }, controls.send, saySomething, controls.continue, controls.interrupt, controls.resume, controls.stop),
@@ -284,6 +289,25 @@ export function createSymbolicAgent(host, {
     if (!currentId && !profileReady) return 'Choose an available knowledge profile in Settings before sending.';
     return text.value.trim() ? '' : 'Write a message to enable Send, or ask Cyc to open with Say something.';
   }
+  function forkExplanation() {
+    if (busy) return 'Branch unavailable while a request is in flight. No work is queued.';
+    if (unknown) return 'Branch unavailable until uncertain requests are resolved; nothing is replayed.';
+    if (!run) return 'Branching requires a saved conversation at an input checkpoint.';
+    if (!run.fork?.supported) return 'This backend has not advertised durable conversation branching.';
+    if (controlAvailability(run).fork)
+      return 'Branch copies this input checkpoint and completed history. Budgets stay cumulative; actions are never replayed.';
+    const reasons = {
+      unresolved_action: 'Resolve the action outcome before branching.',
+      input_checkpoint_required: 'Finish the workflow and return to input before branching.',
+      pending_continuation: 'A pending continuation or compensation prevents branching.',
+      nonground_checkpoint: 'This checkpoint cannot be safely copied.',
+      lineage_depth_limit: 'The maximum branch depth (16) has been reached.',
+    };
+    return `Branch unavailable. ${reasons[run.fork.reason] ?? 'A verified, quiescent input checkpoint is required.'}`;
+  }
+  function receiptConversation(pending) {
+    return pending?.action === 'fork' ? pending.body?.newConversation : pending?.body?.conversation;
+  }
   function pendingMessage() {
     let depth = 0;
     for (let pending = unknown; pending && depth++ < 4; pending = pending.previous)
@@ -348,6 +372,8 @@ export function createSymbolicAgent(host, {
     const explanation = controlExplanation(profileReady);
     controlReason.textContent = explanation; controlReason.hidden = !explanation;
     for (const control of Object.values(controls)) control.title = control.disabled ? explanation : '';
+    forkReason.textContent = forkExplanation();
+    controls.fork.title = forkReason.textContent;
     saySomething.title = saySomething.disabled ? explanation
       : 'Ask the selected Cyc program for an opening through its real “hello” interpretation. Your unsent draft is preserved.';
     if (!controls.interrupt.disabled) controls.interrupt.title = 'Pause at a completed request boundary; an in-flight step cannot be cancelled.';
@@ -368,6 +394,7 @@ export function createSymbolicAgent(host, {
       ? `Cyc · ${run.phase.replaceAll('_', ' ')}`
       : currentId ? lastError ? 'Cyc · saved conversation unavailable' : 'Cyc · opening saved conversation' : 'New conversation';
     if (unknown) identity.textContent += ' · request outcome unknown — refresh and inspect; never automatically retried';
+    if (run?.source?.host?.lineage) identity.textContent += ' · conversation branch';
     profileSummary.textContent = currentId
       ? `Profile: ${run?.source?.knowledgeAgent ?? history.find(item => item.id === currentId)?.agent ?? 'loading'}. Messages use its defined language; no model is called.`
       : profile.value === 'loaded'
@@ -386,7 +413,7 @@ export function createSymbolicAgent(host, {
   function drawPicker() {
     picker.replaceChildren(el('option', { value: '' }, 'New conversation'));
     for (const item of [...history].reverse()) picker.append(el('option', { value: item.id },
-      `${item.title ?? item.agent ?? 'Cyc'} · ${item.status ?? 'saved'} · ${item.id.slice(-8)}`));
+      `${item.parentId ? 'Branch · ' : ''}${item.title ?? item.agent ?? 'Cyc'} · ${item.status ?? 'saved'} · ${item.id.slice(-8)}`));
     picker.value = currentId ?? '';
   }
   function draw() {
@@ -408,17 +435,20 @@ export function createSymbolicAgent(host, {
       transcript.append(button('Return to latest events', refreshState, 'text-button'));
     pages.get('State').replaceChildren(el('h2', {}, 'Durable semantic state'), data(run?.state ? symbolicText(run.state) : 'No run.'),
       data(run ? { revision: run.revision, phase: run.phase, turns: run.turns,
-        steps: run.steps, actions: run.actions, knowledge: run.knowledge } : {}), refresh);
+        steps: run.steps, actions: run.actions, knowledge: run.knowledge,
+        lineage: run.source?.host?.lineage ?? null } : {}), refresh);
     pages.get('Proofs').replaceChildren(el('h2', {}, 'Source evidence and transitions'),
       ...events.filter(e => e.semantic).map(e => el('details', {},
-        el('summary', {}, `Event ${e.sequence} · ${e.kind}`), data(symbolicText(e.semantic)))));
+        el('summary', {}, `Event ${e.sequence} · ${e.kind}${e.inherited ? ' · inherited' : ''}`),
+        e.inherited ? data(e.origin) : null, data(symbolicText(e.semantic)))));
     const gaps = events.filter(e => JSON.stringify(e.semantic ?? null).includes('"gap"'));
     pages.get('Gaps').replaceChildren(el('h2', {}, 'Knowledge gaps'),
       ...(gaps.length ? gaps.map(e => data(symbolicText(e.semantic)))
         : [el('p', {}, 'No gap events in this page. This does not prove complete knowledge.')]));
     pages.get('Actions').replaceChildren(el('h2', {}, 'Action boundary'),
       data(run?.pending ?? 'No pending action.'),
-      ...events.filter(e => e.action).map(e => data({ event: e.sequence, ...e.action })));
+      ...events.filter(e => e.action).map(e => data({ event: e.sequence, ...e.action,
+        inherited: e.inherited ?? false, origin: e.origin ?? null })));
     if (run?.pending?.kind === 'action' && ['unknown', 'dispatched'].includes(run.pending.stage))
       pages.get('Actions').append(el('p', {}, 'Outcome unresolved. Inspect the durable receipt; do not replay the action. Stop preserves the pending evidence.'),
         button('Inspect durable receipt', inspectReceipt, 'button secondary'));
@@ -435,6 +465,8 @@ export function createSymbolicAgent(host, {
         title: 'Durable ledger event time, not message acceptance or execution duration.' }, dateFormat.format(millis)), ' · ', age);
       timeNodes.push({ node: age, millis });
     }
+    if (event.inherited) stamp.append(el('span', { className: 'cyc-inherited',
+      title: `Original conversation ${event.origin?.conversation ?? 'unavailable'}, run ${event.origin?.runId ?? 'unavailable'}. Read-only history; no receipt ownership transferred.` }, ' · inherited history'));
     return el('article', { className: 'cyc-message' }, el('h3', {}, label), stamp, el('pre', {}, content));
   }
   function data(value) { return el('pre', { className: 'cyc-data' }, typeof value === 'string' ? value : JSON.stringify(value, null, 2)); }
@@ -522,6 +554,7 @@ export function createSymbolicAgent(host, {
     sequences.set(currentConversation, sequence);
     const firstText = events.find(event => event.request?.input?.term?.functor === 'text')?.request.input.term.args[0]?.value;
     const entry = { id: currentId, conversation: currentConversation, agent: run.source?.knowledgeAgent,
+      parentId: run.source?.host?.lineage?.parentRun,
       title: prior?.title ?? (typeof firstText === 'string' ? firstText.slice(0, 60) : undefined),
       status: run.phase, sequence, events };
     history = [...history.filter(item => item.id !== currentId), entry].slice(-20);
@@ -536,10 +569,19 @@ export function createSymbolicAgent(host, {
       || expected.id && reply.run.id !== expected.id)
       throw Object.assign(new Error('Conversation identity mismatch. The response was not applied.'), { code: 'symbolic_identity_mismatch' });
   }
+  function checkWriteReply(reply, action, body) {
+    checkReply(reply, action === 'fork' ? { conversation: body.newConversation } : body);
+    if (action !== 'fork') return;
+    const lineage = reply.run.source?.host?.lineage;
+    if (reply.run.id === body.id || lineage?.parentRun !== body.id
+      || lineage.parentConversation !== body.conversation || lineage.parentRevision !== body.revision)
+      throw Object.assign(new Error('Branch lineage mismatch. The response was not applied.'), { code: 'symbolic_identity_mismatch' });
+  }
   async function writeRequest(job, action, body) {
     const previous = unknown;
     job.callId = body.callId;
     unknown = { action, body, draftKey: currentId ?? 'new', formKey: action === 'form' ? formDraftKey : null,
+      ...(action === 'fork' ? { draft: text.value } : {}),
       ...(previous ? { previous } : {}) };
     if (action === 'send') {
       unknown.localSubmittedAt = Date.now();
@@ -548,7 +590,7 @@ export function createSymbolicAgent(host, {
     write(SYMBOLIC_STORAGE.pending, unknown); update();
     const reply = await api(`symbolic/${action}`, {}, { method: 'POST', body, signal: operationSignal(job) });
     if (!isCurrent(job)) return null;
-    checkReply(reply, body);
+    checkWriteReply(reply, action, body);
     if (requestClock?.callId === body.callId) requestClock = null;
     unknown = previous ?? null; write(SYMBOLIC_STORAGE.pending, unknown);
     return reply;
@@ -570,7 +612,8 @@ export function createSymbolicAgent(host, {
     if (action === 'send' && !messageText.trim()) return;
     saveDraft();
     const inheritedDraft = text.value, job = beginOperation('write');
-    feedback.textContent = starting ? 'Starting the selected knowledge profile…' : 'Running one bounded step…';
+    feedback.textContent = starting ? 'Starting the selected knowledge profile…' : action === 'fork'
+      ? 'Creating a durable branch without running or replaying any action…' : 'Running one bounded step…';
     try {
       if (starting) {
         const config = profile.value === 'loaded'
@@ -583,13 +626,18 @@ export function createSymbolicAgent(host, {
         if (action === 'start') { feedback.textContent = 'Conversation ready. Send a message; no Resume is needed.'; return; }
       }
       const body = { id: currentId, conversation: currentConversation, revision: run.revision,
+        ...(action === 'fork' ? { newConversation: crypto.randomUUID() } : {}),
         callId: crypto.randomUUID(), ...extra, ...(action === 'send' ? { text: messageText } : {}) };
       const reply = await writeRequest(job, action, body);
       if (!reply) return;
       if (action === 'form' && reply.run.phase !== 'awaiting_form') clearFormDraft();
+      if (action === 'fork') {
+        drafts[reply.run.id] = inheritedDraft; write(SYMBOLIC_STORAGE.draft, drafts);
+      }
       absorb(reply);
       if (sendingDraft) { text.value = ''; saveDraft(); }
       feedback.textContent = `Recorded ${run.phase}. ${run.pending?.kind === 'action' ? 'Inspect the planned action, then Continue.' : ''}`;
+      if (action === 'fork') feedback.textContent = 'Branch created. Parent unchanged; history and counters preserved. Your copied draft has not been sent.';
       if (action === 'send' && run.phase === 'gap')
         feedback.textContent = 'The selected profile has a knowledge gap for that message. Inspect Gaps in Settings; no model fallback was used.';
       if (action === 'form' && run.phase === 'awaiting_form')
@@ -615,8 +663,8 @@ export function createSymbolicAgent(host, {
       const reply = await api('symbolic/conversation', { ...expected, limit: 100 }, { signal: operationSignal(job) });
       if (!isCurrent(job)) return;
       checkReply(reply, expected);
-      if (unknown?.body?.conversation === expected.conversation
-        && reply.events?.some(e => e.callId === `symbolic-http/${unknown.body.callId}`)) {
+      if (receiptConversation(unknown) === expected.conversation
+        && reply.events?.some(e => !e.inherited && e.callId === `symbolic-http/${unknown.body.callId}`)) {
         discardAcknowledgedForm(unknown, reply);
         unknown = unknown.previous ?? null; write(SYMBOLIC_STORAGE.pending, unknown);
       }
@@ -631,16 +679,18 @@ export function createSymbolicAgent(host, {
     const pending = unknown, job = beginOperation('read');
     try {
       const reply = await api('symbolic/request-status',
-        { conversation: pending.body.conversation, callId: pending.body.callId }, { signal: operationSignal(job) });
+        { conversation: receiptConversation(pending), callId: pending.body.callId }, { signal: operationSignal(job) });
       if (!isCurrent(job)) return;
       if (reply.receipt?.status === 'committed') {
-        const expected = { id: reply.receipt.commit.result.id, conversation: pending.body.conversation };
+        const expected = { id: reply.receipt.commit.result.id, conversation: receiptConversation(pending) };
         const restored = await api('symbolic/conversation', { ...expected, limit: 100 }, { signal: operationSignal(job) });
         if (!isCurrent(job)) return;
-        checkReply(restored, expected); saveDraft(); saveFormDraft();
+        checkReply(restored, expected); checkWriteReply(restored, pending.action, pending.body);
+        saveDraft(); saveFormDraft();
         discardAcknowledgedForm(pending, restored);
         if (currentId !== restored.run.id) {
-          text.value = drafts[restored.run.id] ?? (pending.action === 'start' ? drafts[pending.draftKey ?? 'new'] ?? '' : '');
+          text.value = drafts[restored.run.id] ?? (pending.action === 'fork' ? pending.draft ?? ''
+            : pending.action === 'start' ? drafts[pending.draftKey ?? 'new'] ?? '' : '');
           drafts[restored.run.id] = text.value;
           if (pending.action === 'start') drafts[pending.draftKey ?? 'new'] = '';
           write(SYMBOLIC_STORAGE.draft, drafts);

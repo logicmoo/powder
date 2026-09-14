@@ -493,6 +493,7 @@ ledger runs: the run ID and conversation ID can still retrieve them.
 |---|---|
 | GET `status` | No arguments; unconfigured status, host bounds and app-profile descriptors, no source reads |
 | POST `start` | `{agent,definitionMt,linkedMts,conversation,callId}` **or** `{profile:"cyc-starter-v1",conversation,callId}` |
+| POST `fork` | `{id,conversation,revision,newConversation,callId}`; parent identity/revision, fresh child conversation; returns the child |
 | GET `conversation` | `{id,conversation,offset?,limit?}`; latest 50 by default |
 | POST `send` | `{id,conversation,revision,callId,text}` |
 | POST `continue`, `interrupt`, `resume`, `stop` | `{id,conversation,revision,callId}` |
@@ -564,33 +565,70 @@ is 1–256 characters. Client validation explains the bound and retains the draf
 Server form rejection returns HTTP 422 `symbolic_form_invalid`, preserves the
 editable form and its revision, and never creates a dispatch claim.
 
-### Conversation branching: design boundary, not an available operation
+### Durable conversation branches
 
-New creates a fresh initial run; it does not fork or replay a previous run.
-There is currently no symbolic fork route or durable fork event. The current
-`create_prepared` always constructs the initial engine state, while action IDs,
-audit ownership and receipts are bound to the original run/conversation.
-Copying browser history or calling Start cannot truthfully clone that state.
-No Git branching or basic-page approval checkbox is implied.
+**Branch conversation** copies an actual saved input checkpoint into a fresh
+durable KEE run and conversation. It is not Git branching, another Start,
+browser-only history copying, or action replay. New still means a fresh initial
+program state. Neither operation happens on page/chip/conversation selection.
 
-A safe extension needs a versioned, atomic host operation bound to the parent's
-exact run, conversation, resource revision and event sequence. Initially it
-should accept only a verified quiescent checkpoint, with no pending form,
-approval, planned/dispatched action, unresolved outcome, runnable continuation
-or compensation. It must:
+`kb_symbolic_agent_fork.pl` is a trusted host adapter, not a new KEE tool. It
+uses the existing authorized `kee_agent_run_create` capability and real ledger
+commit. The exact parent resource revision and agent-control domain CAS prevent
+parent changes between validation and publication, including another process.
+An unrelated concurrent agent-control update may conservatively conflict.
+The parent resource and its events are never modified by branching.
 
-- Allocate a fresh run/conversation and independent event/action identity.
-- Copy the validated immutable program/source manifest and inert semantic
-  cursor without invoking the interpreter or dispatching anything.
-- Preserve parent history/proof/receipt references as read-only lineage, not
-  copied mutation ownership or newly completed actions. Counters must distinguish
-  inherited diagnostic/budget use from new branch activity without resetting
-  cumulative limits to bypass the host ceiling.
-- Leave the parent unchanged, invalidate on revision races, and provide a
-  durable idempotent creation receipt with unknown-outcome inspection.
+Eligibility is deliberately narrow: phase `awaiting_input`, no durable or
+engine pending request, empty continuation queue and compensation stack,
+no active compensation, and a ground validated cursor. Forms, approvals,
+planned/dispatched/unknown actions, gaps, interrupted and terminal phases
+cannot branch. The immutable program/snapshot is reverified. The host never
+invokes the interpreter or a knowledge action during a fork.
 
-Until that contract and isolated race/restart/zero-dispatch tests exist, the UI
-offers New/Previous rather than an unsafe or misleading Branch button.
+The copied cursor preserves semantic FSM/goals and **all cumulative steps,
+actions and turns**, including spent/exhausted budgets. Source limits, program
+hash, snapshot hash, generation, selected MTs and profile configuration remain
+unchanged. The child's native ledger record starts with a real `created` event
+and local ledger step zero; this is not an instruction-budget reset. Subsequent
+execution uses the copied cumulative engine counters, and fresh run-prefixed
+action IDs. No approval or mutation receipt is reissued.
+
+`source.host.lineage`, schema `powder.symbolic-fork.v1`, durably pins the parent
+run/conversation, resource and source revisions, native event sequence, inherited
+history count and counter floor. History is structurally shared through
+immutable ledger references rather than copying events as new effects.
+Server-side history reconstructs that exact completed prefix even after the
+parent advances, then appends the child's own events. Original timestamps,
+proof IDs, action call IDs and receipt revisions remain intact. Each event
+exposes `inherited` and `origin` (original run/conversation, native event sequence,
+resource revision and changeset). An inherited receipt keeps its original
+actor/agent/conversation namespace; it is not a new child-owned mutation.
+Missing or inconsistent ancestry fails rather than fabricating history.
+
+Public `run.eventSequence` and event `sequence` use the combined history;
+`run.nativeEventSequence` retains native numbering for diagnostics. Raw control
+events remain native-numbered for idempotence verification. Pages remain bounded
+to 100 events, browser caches to 200, ancestry to 16 branches and combined history
+to the ledger's 10,000-event ceiling. Branching does not evade ledger quotas.
+
+The API advertises `forkSupported:true` and per-run
+`fork:{supported,allowed,reason}`. The button is visibly disabled with an
+accessible explanation for busy/uncertain/unsafe states or older backends.
+An acknowledged fork selects the child and copies the unsent draft inertly,
+retaining the parent's draft and full identity in Previous. Inherited messages
+are labeled; detailed lineage, counters, proof and action references are in
+Settings. Selection is pinned during writes, and stale reads cannot replace
+the selected conversation.
+
+The fork request's receipt belongs to **`newConversation`**, not its parent.
+Lost replies retain that child receipt namespace and the parent/draft checkpoint.
+**Inspect uncertain request** restores the committed child using reads only;
+refreshing the parent cannot acknowledge a child write. Postcommit read failures
+return HTTP 500 `symbolic_fork_outcome_unknown`, not a misleading known rejection.
+Repeated identical committed calls return the same child; changed calls under
+the same idempotence identity conflict. No recovery automatically sends a
+message, forks again or replays an inherited action.
 
 ## Explicit app-owned starter
 
@@ -637,7 +675,7 @@ displays this separate origin and source manifest.
 
 ```powershell
 swipl -q -s prolog\ow_dr\tests\test_symbolic_agent_language.pl -s prolog\ow_dr\tests\test_symbolic_agent_engine.pl -s prolog\ow_dr\tests\test_symbolic_agent_kee.pl -s prolog\ow_dr\tests\test_symbolic_agent_todos.pl -s prolog\ow_dr\tests\test_symbolic_agent_control.pl -s prolog\ow_dr\tests\test_symbolic_agent_snapshot.pl -g "run_tests([symbolic_agent_language,symbolic_agent_engine,symbolic_agent_kee,symbolic_agent_todos,symbolic_agent_control,symbolic_agent_snapshot])" -t halt
-swipl -q -s prolog\ow_dr\tests\test_symbolic_agent_http.pl -g "run_tests([symbolic_agent_http])" -t halt
+swipl -q -s prolog\ow_dr\tests\test_symbolic_agent_http.pl -s prolog\ow_dr\tests\test_symbolic_agent_fork.pl -g "run_tests([symbolic_agent_http,symbolic_agent_fork])" -t halt
 $env:LOGOS_CHROME = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
 node --test prolog\ow_dr\tests\symbolic-agent-ui.test.mjs
 ```

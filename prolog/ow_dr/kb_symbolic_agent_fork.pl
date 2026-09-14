@@ -46,9 +46,18 @@ fork_prepared(ParentControl,ChildControl,Program,Parent,CallId,Hash,Child,Replay
      kb_symbolic_agent_state:encode_cursor(Parent.frame,Cursor),
      Args=json{revision:Parent.revision,mt:Parent.resource.mt,
                sourceJson:SourceJSON,stateJson:Cursor},
-     kb_symbolic_agent_control:control_call(ChildControl,"kee_agent_run_create",Args,CallId,Created),
-     kb_symbolic_agent_control:get(ChildControl,Created.result.result.id,Child),
+     commit_fork(ChildControl,Args,CallId,Created),
+     catch(kb_symbolic_agent_control:get(ChildControl,Created.result.result.id,Child),
+       Cause,throw(error(symbolic_fork_outcome_unknown(Cause),_))),
      Replayed=Created.result.replayed).
+
+commit_fork(Control,Args,CallId,Reply) :-
+    catch(kb_symbolic_agent_control:control_call(Control,"kee_agent_run_create",Args,CallId,Reply),
+      Cause,(known_rejection(Cause)->throw(Cause);
+        throw(error(symbolic_fork_outcome_unknown(Cause),_)))).
+known_rejection(error(kee(Code,_),_)) :-
+    memberchk(Code,[domain_conflict,resource_conflict,revision_conflict,ledger_busy,
+      idempotence_conflict,invalid_arguments,permission_denied,mt_denied,context_expired]).
 
 availability(Run,json{supported:true,allowed:Allowed,reason:Reason}) :-
     (unsafe(Run,Why)->Allowed=false,atom_string(Why,Reason);
@@ -68,10 +77,12 @@ depth(Source,Depth) :-
       Depth=0).
 owner(control(_,Owner,_),Run) :-
     (Run.resource.data.owner==Owner->true;throw(error(symbolic_run_owner_mismatch,_))).
-reader(control(Token,_,_),P) :-
+reader(control(Token,Owner,_),P) :-
     kb_kee_registry:capability(kee_agent_run_get,Capability),
     kb_kee_auth:admit(Token,Capability,P),
-    (P.kind==symbolic->true;throw(error(symbolic_context_required,_))).
+    (P.kind==symbolic->true;throw(error(symbolic_context_required,_))),
+    (Owner==json{actor:P.actor,agent:P.agent,conversation:P.conversation}->true;
+      throw(error(symbolic_run_owner_mismatch,_))).
 same_authority(P,C) :-
     (P.actor==C.actor,P.agent==C.agent,P.conversation\==C.conversation,
      P.permissions==C.permissions,P.readMts==C.readMts,P.writeMts==C.writeMts,
@@ -80,9 +91,12 @@ current_parent(State,Parent) :-
     (kb_kee_ledger:resource(Parent.id,State,Raw),
      kb_symbolic_agent_kee:canonical_json(Raw,Current),Current==Parent.resource->true;
       throw(error(symbolic_fork_parent_conflict,_))),
+    atom_json_dict(Current.data.sourceJson,Source,[]),
+    kb_symbolic_agent_state:decode_cursor(Current.data.stateJson,Frame),
+    (Source==Parent.source,Frame==Parent.frame->true;
+      throw(error(symbolic_fork_parent_conflict,_))),
     kb_kee_ledger:domain_revision(State,agent_control,Revision),
-    atom_string(Revision,Text),
-    (Text==Parent.revision->true;throw(error(symbolic_fork_parent_conflict,_))).
+    (Revision==Parent.revision->true;throw(error(symbolic_fork_parent_conflict,_))).
 fresh_conversation(State,P) :-
     (member(R,State.resources),R.kind==agent_run,
      R.data.owner==json{actor:P.actor,agent:P.agent,conversation:P.conversation}->
