@@ -14,6 +14,8 @@
 .cyc-message pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 75ch; }
 .cyc-composer { display: grid; gap: 12px; padding: 18px; border-top: 1px solid var(--line); }
 .symbolic-agent .field { display: grid; gap: 6px; min-width: 0; }
+.cyc-loaded-config { display: grid; gap: 14px; }
+.symbolic-agent select { min-width: 0; max-width: 100%; }
 .symbolic-agent input:not([type="checkbox"]), .symbolic-agent textarea { width: 100%; min-width: 0; box-sizing: border-box; }
 .cyc-feedback { margin: 0; padding: 0 18px 18px; overflow-wrap: anywhere; }
 .cyc-inspector { border-left: 1px solid var(--line); min-width: 0; }

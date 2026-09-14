@@ -5,7 +5,7 @@
 let instance = 0;
 export const SYMBOLIC_STORAGE = Object.freeze({
   settings: 'powder.cyc.settings.v1', draft: 'powder.cyc.drafts.v1',
-  history: 'powder.cyc.history.v1', pending: 'powder.cyc.pending.v1',
+  history: 'powder.cyc.history.v1', pending: 'powder.cyc.pending.v1', forms: 'powder.cyc.forms.v1',
 });
 export function linkedMts(text) {
   return [...new Set(text.split(/\r?\n/u).map(value => value.trim()).filter(Boolean))];
@@ -74,6 +74,10 @@ export function createSymbolicAgent(host, {
   let run = null, events = [], unknown = read(SYMBOLIC_STORAGE.pending, null);
   let currentId = history.at(-1)?.id ?? null, currentConversation = history.at(-1)?.conversation ?? null;
   let inspection = 'State', eventTotal = 0, lastError = null, refreshWhenIdle = false;
+  let profileCatalog = [], profilesLoaded = false, profilesLoading = false;
+  let formDrafts = read(SYMBOLIC_STORAGE.forms, {});
+  if (!formDrafts || typeof formDrafts !== 'object' || Array.isArray(formDrafts)) formDrafts = {};
+  let formDraftKey = null, formInputs = new Map();
   const sequences = new Map(history.map(item => [item.conversation,
     Number.isSafeInteger(item.sequence) && item.sequence >= 0 ? item.sequence
       : Math.max(0, (item.events?.at(-1)?.sequence ?? -1) + 1)]));
@@ -84,7 +88,7 @@ export function createSymbolicAgent(host, {
   const panel = el('section', { className: 'symbolic-agent', hidden: !active, 'data-agent': 'symbolic' },
     heading('Cyc', 'Knowledge-defined text dialogue and workflows. No model, network fallback or operator access.'));
   const feedback = el('p', { className: 'cyc-feedback', role: 'status', 'aria-live': 'polite' },
-    'Knowledge unavailable until an explicit loaded definition and its linked MTs are selected.');
+    'Choose the limited app-owned starter, or configure an explicitly loaded definition, then Start.');
   const identity = el('p', { className: 'cyc-identity' });
   const transcript = el('section', { className: 'cyc-transcript', 'aria-label': 'Cyc conversation history' });
   const picker = el('select', { 'aria-label': 'Cyc conversations', onchange: selectConversation });
@@ -130,16 +134,23 @@ export function createSymbolicAgent(host, {
   const mt = el('input', { name: 'cyc-definition-mt', value: settings.definitionMt ?? '', placeholder: 'Canonical definition MT key' });
   const links = el('textarea', { name: 'cyc-linked-mts', rows: 6, value: settings.linkedMts ?? '',
     placeholder: 'One explicitly selected linked MT key per line' });
+  const profile = el('select', { name: 'cyc-profile', onchange: saveSettings },
+    el('option', { value: '' }, 'Choose a profile'),
+    el('option', { value: 'loaded' }, 'Loaded knowledge — explicit agent and MTs'));
+  profile.value = settings.profile ?? (settings.agent ? 'loaded' : '');
+  const profileNotice = el('p', { className: 'muted' });
   for (const input of [agent, mt, links]) input.addEventListener('input', () => {
-    settings = { agent: agent.value, definitionMt: mt.value, linkedMts: links.value };
-    write(SYMBOLIC_STORAGE.settings, settings); update();
+    saveSettings();
   });
   const scope = el('pre', { className: 'cyc-data' });
-  pages.get('Knowledge').append(el('h2', {}, 'Loaded knowledge selection'),
+  const loadedConfig = el('div', { className: 'cyc-loaded-config' },
     el('p', {}, 'No implicit definition, MT inheritance or fixture loading. All required lexicon, grammar, dialogue, templates, plans, goals, policy and state links must be selected.'),
     el('label', { className: 'field' }, 'Knowledge agent', agent),
     el('label', { className: 'field' }, 'Definition MT', mt),
-    el('label', { className: 'field' }, 'Linked MTs', links), controls.start,
+    el('label', { className: 'field' }, 'Linked MTs', links),
+    el('p', { className: 'muted' }, 'A loaded definition needs (isa AGENT SymbolicTextAgent), symbolicStartCategory, symbolicInitialState and eight symbolicAgentContext roles. If you have no such authored program, choose the limited app-owned starter instead.'));
+  pages.get('Knowledge').append(el('h2', {}, 'Explicit knowledge profile'),
+    el('label', { className: 'field' }, 'Profile', profile), profileNotice, loadedConfig, controls.start,
     el('p', { className: 'muted' }, 'Settings apply only to a new run. Stop ends a run; history remains. Application TODO changes are audited, not source-file edits.'),
     scope);
   const inspectContent = new Map();
@@ -174,15 +185,39 @@ export function createSymbolicAgent(host, {
     for (const key of keys.slice(0, Math.max(0, keys.length - 21))) delete drafts[key];
     write(SYMBOLIC_STORAGE.draft, drafts);
   }
+  function saveSettings() {
+    settings = { profile: profile.value, agent: agent.value, definitionMt: mt.value, linkedMts: links.value };
+    write(SYMBOLIC_STORAGE.settings, settings); update();
+  }
+  function saveFormDraft() {
+    if (!formDraftKey) return;
+    formDrafts[formDraftKey] = Object.fromEntries([...formInputs].map(([key, input]) =>
+      [key, input.type === 'checkbox' ? input.checked : input.value]));
+    for (const key of Object.keys(formDrafts).slice(0, -20)) delete formDrafts[key];
+    write(SYMBOLIC_STORAGE.forms, formDrafts);
+  }
+  function clearFormDraft() {
+    if (formDraftKey) {
+      delete formDrafts[formDraftKey]; write(SYMBOLIC_STORAGE.forms, formDrafts);
+    }
+    formDraftKey = null; formInputs = new Map();
+  }
   function update() {
     const allowed = controlAvailability(run, busy, !!unknown);
     for (const [name, control] of Object.entries(controls)) control.disabled = !allowed[name];
     controls.send.disabled ||= !text.value.trim();
-    controls.start.disabled ||= !agent.value.trim() || !mt.value.trim();
+    const selectedProfile = profileCatalog.find(item => item.id === profile.value);
+    controls.start.disabled ||= profile.value === 'loaded' ? !agent.value.trim() || !mt.value.trim() : !selectedProfile;
+    loadedConfig.hidden = profile.value !== 'loaded';
+    profileNotice.textContent = selectedProfile
+      ? `${selectedProfile.description} Try: ${(selectedProfile.examples ?? []).join(', ')}. Read as an isolated program only after Start; never added to the live KB.`
+      : profile.value === 'loaded' ? 'Reads only the current loaded generation. Missing definitions fail without loading any source.'
+        : 'Choose the finite starter for hello/help and typed TODOs, or an authored program already loaded into the KB.';
     refresh.disabled = busy || !currentId;
     recover.hidden = !unknown; recover.disabled = busy;
     picker.disabled = busy;
     text.disabled = busy;
+    for (const field of requests.querySelectorAll('input,textarea,button')) field.disabled = busy || !!unknown;
     identity.textContent = run
       ? `${run.source?.knowledgeAgent ?? 'Cyc'} · ${run.phase} · ${run.steps}/128 steps · ${run.actions}/16 actions`
       : 'Cyc · not started';
@@ -209,7 +244,7 @@ export function createSymbolicAgent(host, {
     if (!events.length) transcript.append(el('div', { className: 'cyc-empty' },
       el('h2', {}, run ? 'Ready for knowledge-defined input' : 'Start with explicit knowledge'),
       el('p', {}, run ? 'Unknown language becomes an inspectable gap, never a model request.'
-        : 'Select a loaded agent in Knowledge. The host will verify its complete bounded snapshot before creating a run.')));
+        : 'Choose the limited starter in Knowledge, or configure an authored loaded program. Start verifies its bounded program before creating a run.')));
     for (const event of events) {
       const input = event.request?.input?.term;
       if (input?.type === 'compound' && input.functor === 'text' && input.args[0]?.type === 'string')
@@ -242,6 +277,9 @@ export function createSymbolicAgent(host, {
   }
   function data(value) { return el('pre', { className: 'cyc-data' }, typeof value === 'string' ? value : JSON.stringify(value, null, 2)); }
   function drawRequest() {
+    saveFormDraft();
+    if (run && formDraftKey?.startsWith(`${run.id}:`) && run.pending?.kind !== 'form') clearFormDraft();
+    formDraftKey = null; formInputs = new Map();
     requests.replaceChildren();
     const pending = run?.pending;
     if (pending?.kind === 'approval') {
@@ -263,12 +301,17 @@ export function createSymbolicAgent(host, {
           recordError(new Error(feedback.textContent)); update();
         }
       } });
+      formDraftKey = `${currentId}:${JSON.stringify(pending.key)}`; formInputs = fields;
+      const saved = formDrafts[formDraftKey] ?? {};
       form.append(el('h2', {}, 'Knowledge-defined form'), data(symbolicText(pending.key)));
       for (const field of pending.fields) {
         const input = el(field.type === 'Term' ? 'textarea' : 'input', {
           type: field.type === 'Boolean' ? 'checkbox' : field.type === 'Number' ? 'number' : 'text',
           name: field.name, required: field.type !== 'Boolean', maxLength: 4096,
           step: field.type === 'Number' ? 'any' : undefined, disabled: busy || !!unknown,
+          value: field.type !== 'Boolean' ? saved[field.name] ?? '' : undefined,
+          checked: field.type === 'Boolean' ? saved[field.name] === true : undefined,
+          oninput: saveFormDraft,
         });
         fields.set(field.name, input); form.append(el('label', { className: 'field' }, `${field.name} (${field.type})`, input));
       }
@@ -299,17 +342,19 @@ export function createSymbolicAgent(host, {
     saveDraft();
     const callId = crypto.randomUUID();
     const body = action === 'start'
-      ? { agent: agent.value.trim(), definitionMt: mt.value.trim(), linkedMts: linkedMts(links.value),
-        conversation: crypto.randomUUID(), callId }
+      ? { ...(profile.value === 'loaded'
+        ? { agent: agent.value.trim(), definitionMt: mt.value.trim(), linkedMts: linkedMts(links.value) }
+        : { profile: profile.value }), conversation: crypto.randomUUID(), callId }
       : { id: currentId, conversation: currentConversation, revision: run.revision, callId,
         ...(action === 'send' ? { text: text.value } : {}), ...extra };
     busy = true; unknown = { action, body }; write(SYMBOLIC_STORAGE.pending, unknown); update();
-    feedback.textContent = action === 'start' ? 'Verifying loaded knowledge…' : 'Running one bounded step…';
+    feedback.textContent = action === 'start' ? 'Verifying the selected knowledge program…' : 'Running one bounded step…';
     try {
       const reply = await api(`symbolic/${action}`, {}, { method: 'POST', body, signal: lifecycle.signal });
       if (disposed) return;
       unknown = null; write(SYMBOLIC_STORAGE.pending, null);
       if (action === 'start') { events = []; text.value = ''; }
+      if (action === 'form') clearFormDraft();
       absorb(reply);
       if (action === 'send') { text.value = ''; saveDraft(); }
       feedback.textContent = `Recorded ${run.phase}. ${run.pending?.kind === 'action' ? 'Inspect the planned action, then Continue.' : ''}`;
@@ -333,6 +378,7 @@ export function createSymbolicAgent(host, {
       const reply = await api('symbolic/conversation', { id: currentId, conversation: currentConversation, limit: 100 }, { signal: lifecycle.signal });
       if (disposed) return;
       if (unknown && reply.events?.some(e => e.callId === `symbolic-http/${unknown.body.callId}`)) {
+        if (unknown.action === 'form') clearFormDraft();
         unknown = null; write(SYMBOLIC_STORAGE.pending, null);
       }
       absorb(reply);
@@ -353,6 +399,7 @@ export function createSymbolicAgent(host, {
           id: reply.receipt.commit.result.id, conversation: unknown.body.conversation, limit: 100,
         }, { signal: lifecycle.signal });
         if (disposed) return;
+        if (unknown.action === 'form') clearFormDraft();
         events = []; unknown = null; write(SYMBOLIC_STORAGE.pending, null); absorb(restored);
         feedback.textContent = 'Committed request found. Restored state without replaying its action.';
       } else feedback.textContent = 'No committed receipt found. Outcome remains unknown; no request was replayed.';
@@ -399,12 +446,27 @@ export function createSymbolicAgent(host, {
     } catch (error) { if (!disposed) { recordError(error); feedback.textContent = error.message; } }
     finally { if (!disposed) settled(); }
   }
+  async function loadProfiles() {
+    if (disposed || profilesLoaded || profilesLoading) return;
+    profilesLoading = true;
+    try {
+      const result = await api('symbolic/status', {}, { signal: lifecycle.signal });
+      if (disposed) return;
+      profileCatalog = Array.isArray(result.profiles) ? result.profiles : [];
+      const selected = settings.profile ?? profile.value;
+      for (const item of profileCatalog) profile.append(el('option', { value: item.id }, item.label));
+      profile.value = selected; profilesLoaded = true; update();
+    } catch (error) {
+      if (!disposed) { recordError(error); feedback.textContent = `Profile discovery unavailable: ${error.message}. Loaded-profile configuration remains available.`; update(); }
+    } finally { profilesLoading = false; }
+  }
   function setActive(value) {
     if (disposed) return;
     const activating = !!value && !active;
     active = !!value; panel.hidden = !active;
     if (active) unread = 0;
     emit();
+    if (activating) void loadProfiles();
     if (activating && currentId) {
       if (busy) refreshWhenIdle = true;
       else void refreshState();
@@ -412,13 +474,14 @@ export function createSymbolicAgent(host, {
   }
   function destroy() {
     if (disposed) return;
-    saveDraft(); disposed = true; lifecycle.abort();
+    saveDraft(); saveFormDraft(); disposed = true; lifecycle.abort();
     signal?.removeEventListener('abort', destroy); panel.remove(); emit();
   }
   if (signal?.aborted) destroy();
   else signal?.addEventListener('abort', destroy, { once: true });
   events = history.find(item => item.id === currentId)?.events ?? [];
   selectTab(currentId ? inspection : 'Knowledge'); draw();
+  if (active && !disposed) void loadProfiles();
   if (active && currentId && !disposed) void refreshState();
   return { element: panel, activate: () => setActive(true), deactivate: () => setActive(false),
     getState: state, destroy };

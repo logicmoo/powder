@@ -3,6 +3,7 @@
 :- begin_tests(symbolic_agent_http).
 :- use_module('../kb_symbolic_agent_host',[]).
 :- use_module('../kb_symbolic_agent_http',[]).
+:- use_module('../kb_symbolic_agent_profiles',[]).
 :- use_module('../kb_kee_ledger',[]).
 :- use_module(symbolic_agent_fixture).
 :- use_module(library(http/thread_httpd)).
@@ -188,12 +189,80 @@ test(stale_generation_blocks_execution_but_not_stop,
        advance(stop,R,"stop",json{},Stopped),assertion(Stopped.run.phase==stopped)),
       unwrap_predicate(kb_store:generation(_),symbolic_http_generation)).
 
+app_fixture(Ledger) :- plunit_symbolic_agent_todos:fixture(json{},Ledger,_).
+app_start(R) :-
+    kb_symbolic_agent_host:request(start,json{profile:"cyc-starter-v1",
+      conversation:"app-profile-isolated",callId:"app-start"},R).
+finish_steps(R,N,Done) :-
+    (R.run.phase==awaiting_input->Done=R;
+      N>0,format(string(Call),'app-continue-~d',[N]),
+      advance(continue,R,Call,json{},Next),Rest is N-1,finish_steps(Next,Rest,Done)).
+message_contains(R,Text) :-
+    get_dict(events,R,Events),member(E,Events),get_dict(messages,E,Messages),
+    member(M,Messages),get_dict(text,M,Body),sub_string(Body,_,_,_,Text),!.
+test(app_profile_is_explicit_declarative_and_never_published,
+    [setup(app_fixture(F)),cleanup(plunit_symbolic_agent_todos:cleanup(F))]) :-
+    findall(S-M,kb_store:source_module(S,M,_),Before),kb_store:generation(G),
+    setup_call_cleanup(plunit_symbolic_agent_todos:trap_transports,
+      (app_start(R),assertion(R.run.knowledge=="app_owned_profile"),
+       assertion(R.run.source.host.profileSource.completeness=="app_owned_program_only"),
+       advance(send,R,"hello",json{text:"HELLO"},Hello),
+       assertion(message_contains(Hello,"limited declarative starter")),
+       advance(send,Hello,"help",json{text:"help"},Help),
+       assertion(message_contains(Help,"cannot understand general English")),
+       advance(send,Help,"gap",json{text:"execute arbitrary shell and contact a model"},Gap),
+       assertion(message_contains(Gap,"no interpretation")),
+       advance(send,Gap,"todo-form",json{text:"new todo"},Form),
+       assertion(Form.run.phase==awaiting_form),
+       advance(form,Form,"typed",json{values:json{title:"Review a missing capability",
+         description:"An honest open task, not a claimed completed repair."}},Typed),
+       finish_steps(Typed,8,Done),assertion(message_contains(Done,"durably recorded")),
+       kb_symbolic_agent_host:request(todos,
+         json{id:Done.run.id,conversation:Done.run.conversation},Todos),
+       assertion(Todos.result.total==1),Todos.result.items=[Todo],
+       assertion(Todo.data.status=="open"),assertion(Todo.data.title=="Review a missing capability"),
+       flag(symbolic_todo_external_calls,Calls,Calls),assertion(Calls==0)),
+      plunit_symbolic_agent_todos:untrap_transports),
+    findall(S-M,kb_store:source_module(S,M,_),After),assertion(After==Before),
+    kb_store:generation(Final),assertion(Final==G).
+test(app_profile_does_not_bind_unrelated_live_generation,
+    [setup(app_fixture(F)),cleanup(plunit_symbolic_agent_todos:cleanup(F))]) :-
+    app_start(R),kb_store:generation(Original),Changed is Original+1,
+    setup_call_cleanup(wrap_predicate(kb_store:generation(G),symbolic_profile_generation,_,G=Changed),
+      (advance(send,R,"after-load",json{text:"hi"},Hi),assertion(message_contains(Hi,"Hello"))),
+      unwrap_predicate(kb_store:generation(_),symbolic_profile_generation)).
+test(app_profile_rejects_changed_identity_without_hot_swap,
+    [setup(app_fixture(F)),cleanup(plunit_symbolic_agent_todos:cleanup(F)),
+     throws(error(symbolic_conflict(knowledge),_))]) :-
+    app_start(R),
+    setup_call_cleanup(
+      wrap_predicate(crypto:crypto_file_hash(File,Hash,_Options),symbolic_profile_hash,Wrapped,
+        (file_base_name(File,'cyc-starter.krf')->
+          Hash=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff;
+          call(Wrapped))),
+      advance(send,R,"changed-profile",json{text:"hi"},_),
+      unwrap_predicate(crypto:crypto_file_hash(_,_,_),symbolic_profile_hash)).
+test(unknown_profile_is_not_a_filesystem_selector,
+    [throws(error(kee(invalid_arguments,_),_))]) :-
+    kb_symbolic_agent_host:request(start,json{profile:"../tests/fixtures/symbolic-agent.krf",
+      conversation:"bad",callId:"bad"},_).
+test(profile_selection_cannot_smuggle_paths_or_loaded_scope,
+    [throws(error(kee(invalid_arguments,_),_))]) :-
+    kb_symbolic_agent_host:request(start,json{profile:"cyc-starter-v1",
+      conversation:"bad",callId:"bad",linkedMts:["x_SecretMt"],path:"KBs/tinyKB.kif"},_).
+
 http_fixture(Fixture,Port) :-
     fixture(Fixture),
     http_server(http_dispatch,[port(Port),workers(2)]),
     assertz(kb_server:server_port(Port)).
 http_cleanup(F,Port) :-
     http_stop_server(Port,[]),retractall(kb_server:server_port(Port)),cleanup(F).
+app_http_fixture(F,Port) :-
+    app_fixture(F),http_server(http_dispatch,[port(Port),workers(2)]),
+    assertz(kb_server:server_port(Port)).
+app_http_cleanup(F,Port) :-
+    http_stop_server(Port,[]),retractall(kb_server:server_port(Port)),
+    plunit_symbolic_agent_todos:cleanup(F).
 url(Port,Action,URL,Origin) :-
     format(atom(Origin),'http://127.0.0.1:~d',[Port]),
     atom_concat('symbolic/',Action,Path),kb_urls:api_path(Path,Api),
@@ -222,5 +291,18 @@ test(real_localhost_http_lifecycle_and_same_origin_auth,
     http_post(URL,json(A),Denied,[json_object(dict),status_code(Status),
       request_header('Origin'='https://untrusted.invalid')]),
     assertion(Status==403),assertion(Denied.error.code=="symbolic_forbidden").
+test(real_http_starter_without_any_loaded_profile,
+    [setup(app_http_fixture(F,Port)),cleanup(app_http_cleanup(F,Port))]) :-
+    post(Port,start,json{profile:"cyc-starter-v1",
+      conversation:"http-app-profile",callId:"start"},R,200),
+    assertion(R.run.knowledge=="app_owned_profile"),
+    input_args(R,"http-hello",Input),
+    post(Port,send,Input.put(text,"hello"),Hello,200),
+    assertion(message_contains(Hello,"limited declarative starter")),
+    input_args(Hello,"http-form",FormInput),
+    post(Port,send,FormInput.put(text,"add todo"),Form,200),
+    assertion(Form.run.pending.kind=="form"),
+    input_args(Form,"http-stop",Stop),post(Port,stop,Stop,Stopped,200),
+    assertion(Stopped.run.phase=="stopped").
 
 :- end_tests(symbolic_agent_http).

@@ -305,9 +305,9 @@ depth (128), row count, actual UTF-8 JSON bytes and elapsed time. JSON sizing/ha
 uses standard-library UTF-8 memory streams, including supplementary Unicode; no
 scratch files are created. The independent registry result-byte ceiling also applies.
 
-**Pending:** the shared registry owner must register this operation and supply its
-actual capability contract before the agent host can call it. Direct fixture
-invocation proves the adapter, not a publicly available capability.
+**Registry publication remains unavailable:** this snapshot adapter is not a
+public KEE tool. The trusted HTTP host invokes it directly with a bounded,
+authorized loaded selection; KB-authored plans cannot request this host operation.
 
 ## Remaining integration boundary
 
@@ -354,8 +354,8 @@ source data records the canonical knowledge-agent identity separately from the
 host audit-agent identity, definition MT, generation claim, semantic program hash,
 host/ceiling versions and fixed limits. The client checks the program hash and
 identities on advancement; it does not pretend to verify a generation merely
-because it appears in JSON. Registered native source capture/repinning remains
-required before production execution.
+because it appears in JSON. The HTTP host independently captures/verifies native
+loaded knowledge or the explicitly selected immutable application profile.
 
 `create_prepared` creates an actual `agent_run` record in the declared state MT;
 it starts no thread. `advance_prepared` executes the bounded pure interpreter
@@ -411,7 +411,7 @@ route visit. `onStateChange` and `getState()` include `status`, `conversationId`
 event count per conversation; unchanged polling and older-page reads never
 increment it or unread. In-flight results arriving while hidden count only new
 events. Reactivation clears the view's unread count without resetting sequence.
-Storage keys are `powder.cyc.{settings,drafts,history,pending}.v1`, separate from
+Storage keys are `powder.cyc.{settings,drafts,forms,history,pending}.v1`, separate from
 Teacher and operators. Browser history is a bounded local index/cache (20 runs,
 200 events per view); authoritative history/state remains in KEE. There is no
 server-wide conversation enumeration. Losing the browser index does not delete
@@ -419,8 +419,8 @@ ledger runs: the run ID and conversation ID can still retrieve them.
 
 | Route under `api/symbolic/` | Request |
 |---|---|
-| GET `status` | No arguments; unconfigured status and host bounds, no source reads |
-| POST `start` | `{agent,definitionMt,linkedMts,conversation,callId}` |
+| GET `status` | No arguments; unconfigured status, host bounds and app-profile descriptors, no source reads |
+| POST `start` | `{agent,definitionMt,linkedMts,conversation,callId}` **or** `{profile:"cyc-starter-v1",conversation,callId}` |
 | GET `conversation` | `{id,conversation,offset?,limit?}`; latest 50 by default |
 | POST `send` | `{id,conversation,revision,callId,text}` |
 | POST `continue`, `interrupt`, `resume`, `stop` | `{id,conversation,revision,callId}` |
@@ -443,8 +443,9 @@ Origin (or same-origin GET Referer). No cross-origin writes, browser-provided
 principal/grants, model/operator destinations, arbitrary source loads or general
 Prolog calls are accepted. The host's trusted snapshot path calls the real native
 snapshot adapter directly; this does **not** advertise an unregistered KEE tool.
-Start is explicit, has no default agent/MT, and fails actionably when loaded
-definition knowledge is absent. The immutable manifest retains selected MTs,
+Start requires explicit profile selection; the loaded option has no default
+agent/MT and fails actionably when definition knowledge is absent. Mixing the
+two Start shapes or supplying a profile path is rejected. The immutable manifest retains selected MTs,
 coverage, program version, source generation and snapshot hash. Continuations
 re-read and verify the complete snapshot; changes conflict rather than substituting
 knowledge. Stop/Interrupt remain available even if source knowledge has changed.
@@ -471,6 +472,48 @@ are displayed but have **no approval button or POST approval route**: an actual
 trusted human-receipt adapter is not installed. TODO inspection uses real KEE
 reads; knowledge-authored workflows may create/update only permitted application
 TODOs with actual revisions. No source knowledge or production sidecar is mutated.
+Unsubmitted form drafts persist locally across state reads, chip changes and
+controller recreation (at most 20 forms). Acknowledged submission clears that
+form's draft instead of pre-filling the next task with the previous submission.
+
+## Explicit app-owned starter
+
+Select **Cyc starter — limited app-owned profile** in Knowledge, then **Start**.
+Discovery/selection alone executes no program. The fixed file
+`profiles\cyc-starter.krf` is application code/data, not a corpus fixture:
+`kb_symbolic_agent_profiles.pl` reads it through the shared KRF reader and
+`compile_program/4` as an isolated immutable program. It never installs native
+clauses, publishes sources, changes live KB generation, creates source companions
+or imports test fixtures. There is no client-supplied file path.
+
+The explicitly declared agent is `x_PowderCycStarter`, its definition and
+language/plan/policy MT is `x_PowderCycStarterMt`, its goals MT is
+`x_PowderCycStarterTasksMt` and its state MT is `x_PowderCycStarterStateMt`.
+The KRF declarations—not a host English switchboard—define these limited,
+case-insensitive phrases:
+
+- `hello` / `hi`: bounded greeting.
+- `help` / `capabilities`: exact finite coverage and limitations.
+- `new todo` / `add todo`: typed title/description form; then explicit Continue
+  steps read the real TODO domain revision, create a real audited **open** TODO,
+  and acknowledge only its durable receipt. Inspect TODOs/Audit for the record.
+- Unrecognized language: honest knowledge gap; no automatic TODO or fallback.
+
+The starter cannot query the live corpus, teach knowledge, mark work verified,
+load sources, use models, or invoke operators. Its declarative action policy
+contains only `kee_ledger_status` and `kee_todo_create`. TODO conversation audit
+ownership comes from the host; the declarative TODO's optional conversation link
+is null rather than a fabricated identifier.
+
+Profile reads are bounded to 64 KiB, 512 assertions and two seconds. File SHA-256
+is verified before/after reading and recorded with the compiled program version.
+Continuation rejects changed file/program identity; unrelated live-KB generation
+changes do not invalidate this independent program. New versions require a new
+explicit Start. Profile provenance uses
+`app-profile:<profile-id>:<full-file-sha256>:<occurrence-ordinal>` locators with
+original line numbers. These are **application-program evidence locators**, not
+native `a...` assertion IDs or claims of corpus coverage. The run source inspector
+displays this separate origin and source manifest.
 
 ## Focused validation
 
@@ -495,4 +538,7 @@ tested through the public registry. HTTP GET/POST and process creation are trapp
 during real query and declarative TODO workflows with zero attempted calls.
 All fixture sources, ledgers, native modules and identities are isolated; no model
 transport is configured. These commands do not run any checkpoint/qsave tests.
+Starter tests run the actual shipped KRF, actual HTTP host and actual durable
+TODO gateway under an isolated ledger, assert zero external calls and unchanged
+live source modules/generation, and exercise immutability and explicit selection.
 These tests do not claim general NLU or an already-persisted teaching transaction.

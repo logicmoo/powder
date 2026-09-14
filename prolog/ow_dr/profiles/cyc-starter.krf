@@ -1,0 +1,79 @@
+; Application-owned, opt-in, finite symbolic profile. This file is never
+; published into the live KB. Change requires a new explicit Start.
+(in-microtheory PowderCycStarterMt)
+(isa PowderCycStarter SymbolicTextAgent)
+(symbolicAgentContext PowderCycStarter Lexicon PowderCycStarterMt)
+(symbolicAgentContext PowderCycStarter Grammar PowderCycStarterMt)
+(symbolicAgentContext PowderCycStarter Dialogue PowderCycStarterMt)
+(symbolicAgentContext PowderCycStarter Templates PowderCycStarterMt)
+(symbolicAgentContext PowderCycStarter Plans PowderCycStarterMt)
+(symbolicAgentContext PowderCycStarter Policy PowderCycStarterMt)
+(symbolicAgentContext PowderCycStarter Goals PowderCycStarterTasksMt)
+(symbolicAgentContext PowderCycStarter State PowderCycStarterStateMt)
+(symbolicStartCategory PowderCycStarter StarterSentence)
+(symbolicInitialState PowderCycStarter StarterReady)
+(symbolicCaseMode PowderCycStarter Insensitive)
+(symbolicAllowedCapability PowderCycStarter "kee_ledger_status")
+(symbolicAllowedCapability PowderCycStarter "kee_todo_create")
+
+(symbolicLexeme StarterGreeting (TheList "hello") StarterHello)
+(symbolicLexeme StarterGreeting (TheList "hi") StarterHello)
+(symbolicProduction StarterSentence
+  (TheList (symbolicNonterminal StarterGreeting ?Greeting)) ?Greeting)
+(symbolicProduction StarterSentence (TheList (symbolicLiteral "help")) StarterHelp)
+(symbolicProduction StarterSentence (TheList (symbolicLiteral "capabilities")) StarterHelp)
+(symbolicProduction StarterSentence (TheList (symbolicLiteral "new") (symbolicLiteral "todo")) StarterNewTodo)
+(symbolicProduction StarterSentence (TheList (symbolicLiteral "add") (symbolicLiteral "todo")) StarterNewTodo)
+
+(symbolicTemplate StarterGreetingText
+  (TheList (symbolicText "Hello. I am Cyc's limited declarative starter. Try help or new todo. I do not call a model.")))
+(symbolicTemplate StarterHelpText
+  (TheList (symbolicText "I recognize hello, hi, help, capabilities, new todo, and add todo. A TODO uses a typed form and audited application storage. Continue advances each planned action. I cannot understand general English, query your corpus, edit sources, or use operators. Select an explicitly loaded profile for other knowledge-defined behavior.")))
+(symbolicTemplate StarterGapText
+  (TheList (symbolicText "This finite profile has no interpretation for that text. Nothing was sent to a model or recorded as a TODO. Try help or new todo; describe missing capabilities in the TODO form.")))
+(symbolicTemplate StarterTodoRecordedText
+  (TheList (symbolicText "The open TODO is durably recorded. Inspect TODOs or Audit for its identity and receipt. This is not a completed or verified knowledge improvement.")))
+
+(symbolicDialogueRule StarterReady (symbolicUtterance StarterHello)
+  symbolicTrue (symbolicSay StarterGreetingText))
+(symbolicDialogueRule StarterReady (symbolicUtterance StarterHelp)
+  symbolicTrue (symbolicSay StarterHelpText))
+(symbolicDialogueRule StarterReady (symbolicLanguageGap ?Status ?Text)
+  symbolicTrue (symbolicSay StarterGapText))
+(symbolicDialogueRule StarterReady (symbolicAmbiguous ?Meanings)
+  symbolicTrue (symbolicSay StarterGapText))
+(symbolicDialogueRule StarterReady (symbolicUtterance StarterNewTodo)
+  symbolicTrue
+  (symbolicSequence
+    (TheList
+      (symbolicAwaitForm StarterTodoForm
+        (TheList (symbolicFormField "title" String) (symbolicFormField "description" String))
+        (TheList (symbolicFieldValue "title" ?Title) (symbolicFieldValue "description" ?Description)))
+      (symbolicInvoke "kee_ledger_status" (symbolicObject (TheList))
+        (symbolicResultFields
+          (TheList (symbolicResultField (TheList "domainRevisions" "application_todo") ?Revision))))
+      (symbolicInvoke "kee_todo_create"
+        (symbolicObject
+          (TheList
+            (symbolicField "revision" ?Revision)
+            (symbolicField "mt" (symbolicContextKey PowderCycStarterTasksMt))
+            (symbolicField "data"
+              (symbolicObject
+                (TheList
+                  (symbolicField "title" ?Title)
+                  (symbolicField "description" ?Description)
+                  (symbolicField "status" "open")
+                  (symbolicField "priority" 0)
+                  (symbolicField "dependencies" (symbolicArray (TheList)))
+                  (symbolicField "evidence" (symbolicArray (TheList)))
+                  (symbolicField "acceptance" (symbolicArray (TheList)))
+                  (symbolicField "links"
+                    (symbolicObject
+                      (TheList
+                        (symbolicField "conversation" Null)
+                        (symbolicField "agent" "x_PowderCycStarter")
+                        (symbolicField "changesets" (symbolicArray (TheList)))
+                        (symbolicField "assertions" (symbolicArray (TheList)))))))))))
+        (symbolicResultFields (TheList (symbolicResultField (TheList "result" "id") ?Todo))))
+      (symbolicGoal (StarterTodoCreated ?Todo))
+      (symbolicSay StarterTodoRecordedText))))

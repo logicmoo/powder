@@ -2,6 +2,7 @@
 :- use_module(kb_symbolic_agent_control,[]).
 :- use_module(kb_symbolic_agent_knowledge,[]).
 :- use_module(kb_symbolic_agent_program,[]).
+:- use_module(kb_symbolic_agent_profiles,[]).
 :- use_module(kb_symbolic_agent_state,[]).
 :- use_module(kb_symbolic_agent_wire,[]).
 :- use_module(kb_symbolic_agent_kee,[]).
@@ -26,9 +27,11 @@ request(Action,Input,Reply) :-
 identity([req(conversation,str(1,80)),req(id,str(1,128))]).
 schema(status,obj([])).
 schema(request_status,obj([req(conversation,str(1,80)),req(callId,str(1,80))])).
-schema(start,obj([req(conversation,str(1,80)),req(callId,str(1,80)),
-    req(agent,str(1,4096)),req(definitionMt,str(1,4096)),
-    req(linkedMts,list(str(1,4096),199))])).
+schema(start,choice([obj(App),obj(Loaded)])) :-
+    Common=[req(conversation,str(1,80)),req(callId,str(1,80))],
+    append(Common,[req(profile,enum(['cyc-starter-v1']))],App),
+    append(Common,[req(agent,str(1,4096)),req(definitionMt,str(1,4096)),
+      req(linkedMts,list(str(1,4096),199))],Loaded).
 schema(Action,obj(Fields)) :-
     memberchk(Action,[conversation,todos,audit,receipt]),
     identity(Base),
@@ -42,11 +45,12 @@ schema(Action,obj(Fields)) :-
       Action==form->Extra=[req(values,object)];Extra=[]),
     append([Base,[req(revision,str(64,64)),req(callId,str(1,80))],Extra],Fields).
 
-status(json{identity:"symbolic",label:"Cyc",schema:"powder.symbolic-http.v1",
-    knowledge:"unconfigured",message:"Select a loaded agent, its definition MT and every linked MT, then Start. No example or source is loaded automatically.",
+status(Reply) :-
+    kb_store:generation(G),kb_symbolic_agent_profiles:catalog(Profiles),
+    Reply=json{identity:"symbolic",label:"Cyc",schema:"powder.symbolic-http.v1",
+    knowledge:"unconfigured",message:"Select the limited app-owned starter, or a loaded agent with its definition and linked MTs, then Start. No program executes on selection.",
     generation:G,model:false,network:false,approvalSupported:false,
-    formSupported:true,limits:json{steps:128,actions:16,turns:1000,seconds:2}}) :-
-    kb_store:generation(G).
+    profiles:Profiles,formSupported:true,limits:json{steps:128,actions:16,turns:1000,seconds:2}}.
 
 base_spec(Conversation,Read,Write,Spec) :-
     get_time(Now),Expiry is Now+60,
@@ -83,22 +87,34 @@ request_locked(Action,A,Reply) :-
       kb_symbolic_agent_control:close_control(Reader)).
 
 start_new(A,Hash,CallId,Reply) :-
-    sort([A.definitionMt|A.linkedMts],Selected),
-    base_spec(A.conversation,Selected,[],ReadSpec),
-    setup_call_cleanup(kb_kee:open_context(ReadSpec,Token),
-      capture(Token,A,Program,Snapshot),
-      kb_kee:close_context(Token)),
+    prepare_start(A,Program,Snapshot,Config,Selected),
     host_spec(A.conversation,Selected,Program,Spec),
     mt_text(Program.mts.goalsMt,GoalsMt),
-    Host=json{config:json{agent:A.agent,definitionMt:A.definitionMt,linkedMts:A.linkedMts},
-      requestHash:Hash,snapshotHash:Snapshot.snapshotHash,selectedMts:Selected,
+    Host0=json{config:Config,requestHash:Hash,snapshotHash:Snapshot.snapshotHash,selectedMts:Selected,
       recordCount:Snapshot.recordCount,coverage:Snapshot.microtheories,goalsMt:GoalsMt},
+    (get_dict(profileSource,Snapshot,Source)->
+      Host=Host0.put(_{origin:"app_owned_profile",profileSource:Source});
+      Host=Host0.put(origin,"loaded_knowledge")),
     setup_call_cleanup(kb_symbolic_agent_control:open_control(Spec,Control),
       (kb_symbolic_agent_control:create_prepared(Control,Program,Snapshot.generation,[],
          CallId,Host,Run),
        public_recent(Control,Run,false,Reply)),
       kb_symbolic_agent_control:close_control(Control)).
+prepare_start(A,Program,Snapshot,json{profile:Profile},Selected) :-
+    get_dict(profile,A,Profile),!,
+    kb_symbolic_agent_profiles:compile_profile(Profile,Program,Snapshot),
+    Selected=Snapshot.selectedMts.
+prepare_start(A,Program,Snapshot,Config,Selected) :-
+    sort([A.definitionMt|A.linkedMts],Selected),
+    base_spec(A.conversation,Selected,[],ReadSpec),
+    setup_call_cleanup(kb_kee:open_context(ReadSpec,Token),
+      capture(Token,A,Program,Snapshot),
+      kb_kee:close_context(Token)),
+    Config=json{agent:A.agent,definitionMt:A.definitionMt,linkedMts:A.linkedMts}.
 
+capture(_,A,Program,Snapshot) :-
+    get_dict(profile,A,Profile),!,
+    kb_symbolic_agent_profiles:compile_profile(Profile,Program,Snapshot).
 capture(Token,A,Program,Snapshot) :-
     kb_store:generation(G),kb_kee_auth:principal(Token,Principal),
     Args=json{agent:A.agent,mt:A.definitionMt,linkedMts:A.linkedMts,generation:G,
@@ -143,7 +159,7 @@ restore_program(A,R,Program,Spec) :-
     selected_read(A.conversation,R,ReadSpec),
     setup_call_cleanup(kb_kee:open_context(ReadSpec,Token),
       capture(Token,R.source.host.config,Program,Snapshot),kb_kee:close_context(Token)),
-    (Snapshot.generation=:=R.source.kbGeneration,
+    ((get_dict(origin,R.source.host,"app_owned_profile");Snapshot.generation=:=R.source.kbGeneration),
      Snapshot.snapshotHash==R.source.host.snapshotHash->true;conflict(knowledge)),
     kb_symbolic_agent_control:verify_program(Program,R),
     host_spec(A.conversation,R.source.host.selectedMts,Program,Spec).
@@ -231,7 +247,6 @@ inspect(receipt,A,C,R,json{receipt:Receipt}) :- !,
     receipt(C,A.actionCallId,Receipt).
 inspect(Action,A,control(Token,_,_),R,json{tool:Name,result:Result}) :-
     (Action==todos->Name="kee_todo_list";Name="kee_audit"),
-    kb_terms:context_from_key(R.source.host.config.definitionMt,_),
     % The goals scope was verified during Start and is stored explicitly.
     goals_mt(R,Mt),page(A,Offset,Limit),
     kb_symbolic_agent_kee:invoke(Token,[Name],
@@ -250,7 +265,8 @@ public_run(C,R,Offset,Limit,Replayed,Reply) :-
     kb_symbolic_agent_wire:encode_term(R.frame.engine,State),
     pending_view(R,Pending),
     kb_store:generation(Current),
-    (Current=:=R.source.kbGeneration->Knowledge="snapshot_bound";Knowledge="generation_changed"),
+    (get_dict(origin,R.source.host,"app_owned_profile")->Knowledge="app_owned_profile";
+      Current=:=R.source.kbGeneration->Knowledge="snapshot_bound";Knowledge="generation_changed"),
     Public=json{id:R.id,conversation:R.resource.data.owner.conversation,
       revision:R.resource.revision,eventSequence:R.resource.data.eventSequence,
       status:R.resource.data.status,phase:R.frame.engine.phase,steps:R.frame.engine.steps,

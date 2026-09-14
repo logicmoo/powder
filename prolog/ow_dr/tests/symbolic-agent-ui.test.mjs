@@ -64,13 +64,15 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     const body = raw ? JSON.parse(raw) : null, action = url.pathname.slice('/api/symbolic/'.length);
     requests.push({ action, body, params: Object.fromEntries(url.searchParams) });
     let reply;
-    if (action === 'start') {
+    if (action === 'status') reply = { profiles: [{ id: 'cyc-starter-v1', label: 'Cyc starter — limited app-owned profile',
+      description: 'Finite declarative dialogue and typed open-TODO creation.', examples: ['hello', 'help', 'new todo'] }] };
+    else if (action === 'start') {
       if (body.agent === 'x_Unavailable') {
         res.statusCode = 422; reply = { error: { code: 'knowledge_unavailable', message: 'Loaded agent definition unavailable' } };
       } else {
         latest = { run: { id: `run:${runs.size + 1}`, conversation: body.conversation, revision: 'r1',
           phase: 'awaiting_input', status: 'created', steps: 0, actions: 0, turns: 0,
-          source: { knowledgeAgent: body.agent, definitionMt: body.definitionMt },
+          source: { knowledgeAgent: body.profile ? 'x_PowderCycStarter' : body.agent, definitionMt: body.definitionMt },
           state: wire(symbol('x_AwaitCommand')), pending: null, knowledge: 'snapshot_bound' },
         events: [], eventTotal: 0 };
         runs.set(latest.run.id, latest); reply = latest;
@@ -115,9 +117,11 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
   try {
     await browser.send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
     await browser.wait(`!!window.cyc`);
-    assert.equal(requests.length, 0, 'mount must not create a run or load knowledge');
+    await browser.wait(`document.querySelector('[name="cyc-profile"]').options.length===3`);
+    assert.deepEqual(requests.map(r => r.action), ['status'], 'mount may discover profiles but must not start or load knowledge');
     assert.deepEqual(await browser.evaluate(`({sequence:cyc.getState().sequence,error:cyc.getState().error,conversationId:cyc.getState().conversationId})`),
       { sequence: 0, error: null, conversationId: null });
+    await browser.evaluate(`{const p=document.querySelector('[name="cyc-profile"]');p.value='loaded';p.dispatchEvent(new Event('change'))}`);
     await fill('cyc-agent', 'x_Unavailable'); await fill('cyc-definition-mt', 'x_DefMt');
     await fill('cyc-linked-mts', 'x_GrammarMt\nx_GrammarMt');
     await click('Start'); await browser.wait(`document.body.textContent.includes('Loaded agent definition unavailable')`);
@@ -154,9 +158,18 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     await browser.wait(`document.body.textContent.includes('Actual fixture application record')`);
     await fill('cyc-message', 'form please'); await click('Send');
     await browser.wait(`document.querySelector('[name="note"]')`);
+    await fill('note', 'Unsent form draft');
+    await browser.evaluate(`cyc.deactivate();cyc.activate()`); await browser.wait(`!cyc.getState().pending`);
+    assert.equal(await browser.evaluate(`document.querySelector('[name="note"]').value`), 'Unsent form draft');
+    assert.equal(await browser.evaluate(`document.querySelector('[name="note"]').disabled`), false);
     await browser.evaluate(`document.querySelector('[name="note"]').value='Verified input';document.querySelector('.cyc-requests form').requestSubmit()`);
     await browser.wait(`requestsDone=cyc.getState().status==='awaiting_input'&&!cyc.getState().pending`);
     assert.deepEqual(requests.find(r => r.action === 'form').body.values, { note: 'Verified input' });
+    await fill('cyc-message', 'form please'); await click('Send');
+    await browser.wait(`document.querySelector('[name="note"]')&&!cyc.getState().pending`);
+    assert.equal(await browser.evaluate(`document.querySelector('[name="note"]').value`), '', 'a new form does not reuse a submitted draft');
+    await browser.evaluate(`document.querySelector('[name="note"]').value='Second form';document.querySelector('.cyc-requests form').requestSubmit()`);
+    await browser.wait(`cyc.getState().status==='awaiting_input'&&!cyc.getState().pending`);
     await fill('cyc-message', 'approval please'); await click('Send');
     await browser.wait(`document.body.textContent.includes('Approval adapter unavailable')`);
     assert.equal(requests.some(r => r.action === 'approval'), false);
@@ -177,6 +190,14 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     await click('Inspect uncertain request'); await browser.wait(`!cyc.getState().unknownOutcome&&!cyc.getState().pending`);
     assert.equal(requests.filter(r => r.action === 'send').length, sendCount, 'recovery must inspect, never replay');
     await click('Stop'); await browser.wait(`cyc.getState().status==='stopped'&&!cyc.getState().pending`);
+    await click('Knowledge');
+    const beforeProfileStart = requests.length;
+    await browser.evaluate(`{const p=document.querySelector('[name="cyc-profile"]');p.value='cyc-starter-v1';p.dispatchEvent(new Event('change'))}`);
+    assert.equal(requests.length, beforeProfileStart, 'profile selection executes nothing');
+    await click('Start'); await browser.wait(`cyc.getState().runId==='run:3'&&!cyc.getState().pending`);
+    const starterRequest = requests.filter(r => r.action === 'start').at(-1).body;
+    assert.equal(starterRequest.profile, 'cyc-starter-v1');
+    assert.equal('agent' in starterRequest || 'linkedMts' in starterRequest, false);
     await browser.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     assert.equal(await browser.evaluate(`document.documentElement.scrollWidth<=innerWidth`), true);
     await browser.evaluate(`cyc.destroy();window.cyc=make({active:false});document.querySelector('main').append(cyc.element)`);
