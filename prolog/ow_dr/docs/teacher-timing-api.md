@@ -13,15 +13,16 @@ per actual completion request, without rewriting or fallback.
 ```text
 timing: {
   supported: boolean,
-  clock: "native_monotonic_milliseconds" | null,
+  clock: "native_monotonic_milliseconds" | "wall_clock_milliseconds" | null,
   current: Trace | null,
   last: Trace | null,
-  queued: [{callId, elapsedMs: number | null}]
+  queued: [{callId, elapsedMs: number | null, clock: string | null}]
 }
 
 Trace = {
   runId: string,
   requestId: string | null,
+  clock: "native_monotonic_milliseconds" | "wall_clock_milliseconds",
   turn: integer | null,
   queueCallId: string | null,
   queueEnteredAt: unixSeconds | null,
@@ -45,9 +46,14 @@ Trace = {
 }
 ```
 
-All duration fields use the native monotonic clock. Wall timestamps are server
-Unix seconds; clock adjustments may reorder those wall values without changing
-durations. `runId` matches the existing `turn_started.detail.run` and active-turn
+Phase reporting requires no native build. When the optional native adapter is
+available, durations use its monotonic clock. Otherwise they use SWI's standard
+`get_time/1`, explicitly labelled `wall_clock_milliseconds`. A run keeps its
+chosen clock throughout; negative differences are clamped to zero. Wall-clock
+durations can be affected by clock corrections and are not monotonic guarantees.
+Each trace and pending queue observation identifies its own clock; clocks are
+never mixed to reconstruct queue wait. Wall timestamps are server Unix seconds.
+`runId` matches the existing `turn_started.detail.run` and active-turn
 identity. `turn` is null when admission failed before a turn was accepted.
 `queueCallId` links a dispatched queue entry, without merging its timeline with
 the preceding run. The conversation's normal revision/sequence do not advance
@@ -141,7 +147,7 @@ Interrupted/restarted runs never resume because of timing reads. Forks inherit
 no timing state. If a run predates telemetry or its volatile observations were
 lost, `current` is null rather than fabricated.
 
-## Native clock
+## Optional native clock
 
 SWI's `statistics(walltime)` is thread-relative and uses wall-clock time. It
 is not used for these durations. The narrow `kb_llm_clock.c` adapter reads
@@ -149,7 +155,8 @@ Windows `QueryPerformanceCounter` (POSIX `CLOCK_MONOTONIC` on other platforms).
 It creates no threads, processes, handles, files, network requests or provider
 state.
 
-Build the generated adapter before publishing this optional feature:
+The existing-stack wall-clock phase DTO works immediately without this adapter.
+For optional monotonic precision, build:
 
 ```powershell
 .\prolog\ow_dr\build_llm_clock_windows.ps1
@@ -165,7 +172,8 @@ publication separately.
 
 On POSIX, the same source can be built with the installed SWI toolchain:
 `swipl-ld -shared -o kb_llm_clock.so kb_llm_clock.c` from the module directory.
-If the adapter is unavailable, `timing.supported` is false; Send still works.
+If the adapter is unavailable, phases remain available with
+`clock:"wall_clock_milliseconds"`; neither Send nor the timeline requires a build.
 
 ## Isolated validation
 
@@ -177,7 +185,9 @@ Tests use synthetic isolated transports/state, including a real delayed
 loopback endpoint. They check monotonicity across threads/wall-clock rollback,
 increasing endpoint wait, closed terminal durations, cancellation, independent
 drained-run timelines, no metadata leakage, no extra HTTP/discovery, and exactly
-the existing three successful-turn conversation writes.
+the existing three successful-turn conversation writes. A gated fallback case
+also exercises live wall-clock phases with native clock reads prohibited;
+rollback and mixed queue/run clock bases are covered explicitly.
 
 An isolated Windows measurement read the native clock 10,000 times in 1.283 ms
 and recorded 100 phase transitions in 5.598 ms. These are local instrumentation

@@ -16,10 +16,15 @@ load_clock :-
     clock_directory(Directory),current_prolog_flag(shared_object_extension,Extension),
     file_name_extension(kb_llm_clock,Extension,Name),directory_file_path(Directory,Name,File),
     (exists_file(File)->catch(load_foreign_library(File),_,true);true).
-supported(true) :- current_predicate(monotonic_milliseconds/1),!.
-supported(false).
+supported(true).
+clock_kind("native_monotonic_milliseconds") :- current_predicate(monotonic_milliseconds/1),!.
+clock_kind("wall_clock_milliseconds").
+clock_milliseconds("native_monotonic_milliseconds",Millis) :- monotonic_milliseconds(Millis).
+clock_milliseconds("wall_clock_milliseconds",Millis) :- get_time(Wall),Millis is Wall*1000.
+observation_clock(S,Clock) :-
+    (get_dict(clock,S,Saved)->Clock=Saved;Clock="native_monotonic_milliseconds").
 wall_stamp(Wall) :- get_time(Wall).
-stamp(Mono,Wall) :- monotonic_milliseconds(Mono),wall_stamp(Wall).
+stamp(Clock,Millis,Wall) :- clock_milliseconds(Clock,Millis),wall_stamp(Wall).
 text(Value,Text) :- (string(Value)->Text=Value;atom(Value),atom_string(Value,Text)).
 observe(Goal) :-
     (supported(true)->catch((once(Goal)->true;true),Error,observation_error(Error));true).
@@ -30,10 +35,10 @@ observation_error(_).
 with_run(Run,Goal) :-
     setup_call_cleanup(asserta(active_run(Run),Ref),Goal,erase(Ref)).
 begin_run(Conversation,Run) :-
-    observe((text(Conversation,Id),text(Run,Key),stamp(Mono,Wall),
+    observe((text(Conversation,Id),text(Run,Key),clock_kind(Clock),stamp(Clock,Mono,Wall),
       with_mutex(powder_llm_timing,
         (observation(Id,Key,_)->true;
-         State=timing_state{runId:Key,conversationId:Id,turn:null,queueCallId:null,requestId:null,
+         State=timing_state{runId:Key,conversationId:Id,turn:null,queueCallId:null,requestId:null,clock:Clock,
            queueEnteredAt:null,queueWaitMs:null,startedAt:Wall,runStartedAt:Wall,
            startMono:Mono,runMono:Mono,finishedAt:null,endMono:null,observedAt:Wall,
            status:"running",terminalStatus:null,result:null,steps:[],nextIndex:1,truncated:false,
@@ -47,9 +52,10 @@ request_id(Request) :-
 request_id_value(S,RequestId) :- (get_dict(requestId,S,RequestId)->true;RequestId=null).
 phase(Operation) :- (active_run(Run)->phase(Run,Operation);true).
 phase(Run,Operation) :-
-    observe((operation(Operation),text(Run,Key),stamp(Mono,Wall),
+    observe((operation(Operation),text(Run,Key),
       with_mutex(powder_llm_timing,transaction(
         (observation(Id,Key,Before),Before.status=="running",
+         observation_clock(Before,Clock),stamp(Clock,Mono,Wall),
          close_step(Before,Mono,Wall,Closed),text(Operation,Name),request_id_value(Before,RequestId),
          Next is Closed.nextIndex+1,
          After=Closed.put(_{current:timing_step{index:Closed.nextIndex,operation:Name,
@@ -57,9 +63,10 @@ phase(Run,Operation) :-
          replace(Id,Key,After)))))).
 instant(Operation) :-
     (active_run(Run)->
-      observe((operation(Operation),text(Run,Key),stamp(Mono,Wall),
+      observe((operation(Operation),text(Run,Key),
         with_mutex(powder_llm_timing,transaction(
           (observation(Id,Key,Before),Before.status=="running",
+           observation_clock(Before,Clock),stamp(Clock,Mono,Wall),
            close_step(Before,Mono,Wall,Closed),text(Operation,Name),request_id_value(Before,RequestId),
            Point=timing_step{index:Closed.nextIndex,operation:Name,startedAt:Wall,
                             finishedAt:Wall,durationMs:0,kind:"instant",requestId:RequestId},
@@ -86,10 +93,12 @@ bind_turn(Run,Turn) :-
     observe((integer(Turn),text(Run,Key),with_mutex(powder_llm_timing,transaction(
       (observation(Id,Key,S),replace(Id,Key,S.put(turn,Turn))))))).
 queue_entered(Conversation,CallId,_CreatedAt) :-
-    observe((text(Conversation,Id),text(CallId,Key),stamp(Mono,Wall),
+    observe((text(Conversation,Id),text(CallId,Key),clock_kind(Clock),stamp(Clock,Mono,Wall),
       with_mutex(powder_llm_timing,
         (queued_clock(Id,Key,_,_)->true;
-         assertz(queued_clock(Id,Key,Mono,Wall)),prune_queues)))).
+         assertz(queued_clock(Id,Key,clock(Clock,Mono),Wall)),prune_queues)))).
+queue_origin(clock(Clock,Millis),Clock,Millis) :- !.
+queue_origin(Millis,"native_monotonic_milliseconds",Millis) :- number(Millis).
 prune_queues :-
     findall(Id-Key,queued_clock(Id,Key,_,_),Entries),
     (length(Entries,N),N>512,Entries=[Id-Key|_]->retractall(queued_clock(Id,Key,_,_));true).
@@ -97,7 +106,8 @@ queue_link(Run,CallId,EnteredAt) :-
     observe((text(Run,Key),text(CallId,Call),
       with_mutex(powder_llm_timing,transaction(
         (observation(Id,Key,S),S.queueCallId==null,
-         (queued_clock(Id,Call,Mono,Wall)->
+         (queued_clock(Id,Call,Origin,Wall),queue_origin(Origin,Clock,Mono),
+          observation_clock(S,Clock)->
             Wait is max(0,S.runMono-Mono),
             Step=timing_step{index:0,operation:"queue_wait",startedAt:Wall,
                             finishedAt:S.runStartedAt,durationMs:Wait,kind:"interval",requestId:null},
@@ -116,9 +126,12 @@ queue_cancelled(Conversation,CallId) :-
     observe((text(Conversation,Id),text(CallId,Key),
       with_mutex(powder_llm_timing,retractall(queued_clock(Id,Key,_,_))))).
 queue_elapsed(Conversation,CallId,Elapsed) :-
+    queue_elapsed(Conversation,CallId,Elapsed,_).
+queue_elapsed(Conversation,CallId,Elapsed,Clock) :-
     (supported(true),text(Conversation,Id),text(CallId,Key),
-     with_mutex(powder_llm_timing,queued_clock(Id,Key,Start,_))->
-       monotonic_milliseconds(Now),Elapsed is max(0,Now-Start);Elapsed=null).
+     with_mutex(powder_llm_timing,queued_clock(Id,Key,Origin,_))->
+       queue_origin(Origin,Clock,Start),clock_milliseconds(Clock,Now),
+       Elapsed is max(0,Now-Start);Elapsed=null,Clock=null).
 
 checkpoint(Run,Status,Result,Snapshot) :-
     catch((checkpoint_observed(Run,Status,Result,Observed)->Snapshot=Observed;Snapshot=null),
@@ -136,9 +149,10 @@ checkpoint_observed(Run,Status,Result,Snapshot) :-
 fail_run(Run,Status,Result) :-
     observe(checkpoint(Run,Status,Result,_)),finish(Run).
 finish(Run) :-
-    observe((text(Run,Key),stamp(Mono,Wall),
+    observe((text(Run,Key),
       with_mutex(powder_llm_timing,transaction(
         (observation(Id,Key,Before),Before.status=="running",
+         observation_clock(Before,Clock),stamp(Clock,Mono,Wall),
          close_step(Before,Mono,Wall,Closed),
          (Before.terminalStatus==null->Status="outcome_unknown";Status=Before.terminalStatus),
          After=Closed.put(_{status:Status,finishedAt:Wall,endMono:Mono,observedAt:Wall}),
@@ -148,7 +162,8 @@ prune_finished :-
     keysort(Entries,Sorted),length(Sorted,N),Drop is max(0,N-64),
     forall((nth0(I,Sorted,_-(Id-Run)),I<Drop),retractall(observation(Id,Run,_))).
 snapshot(S,Trace) :-
-    (S.status=="running"->stamp(Mono,Wall),Live=true,Complete=false;
+    observation_clock(S,Clock),
+    (S.status=="running"->stamp(Clock,Mono,Wall),Live=true,Complete=false;
      Mono=S.endMono,Wall=S.observedAt,Live=false,Complete=true),
     Elapsed is max(0,Mono-S.startMono),RunElapsed is max(0,Mono-S.runMono),
     (S.current==null->Current=null;
@@ -156,7 +171,7 @@ snapshot(S,Trace) :-
      Current=timing_step{index:Step.index,operation:Step.operation,startedAt:Step.startedAt,
                         elapsedMs:StepElapsed,requestId:StepRequestId}),
     request_id_value(S,RequestId),
-    Trace=timing{runId:S.runId,turn:S.turn,queueCallId:S.queueCallId,requestId:RequestId,
+    Trace=timing{runId:S.runId,turn:S.turn,queueCallId:S.queueCallId,requestId:RequestId,clock:Clock,
       queueEnteredAt:S.queueEnteredAt,queueWaitMs:S.queueWaitMs,
       status:S.status,result:S.result,startedAt:S.startedAt,runStartedAt:S.runStartedAt,
       finishedAt:S.finishedAt,observedAt:Wall,elapsedMs:Elapsed,runElapsedMs:RunElapsed,
@@ -183,10 +198,13 @@ conversation_timing_observed(D,Timing) :-
        Last=Saved.put(_{source:Source,live:false});
      Last=null),
     (get_dict(queue,D,Q)->
-       findall(timing_queue{callId:CallId,elapsedMs:Elapsed},
+       findall(timing_queue{callId:CallId,elapsedMs:Elapsed,clock:QueueClock},
          (member(Item,Q.items),Item.status=="queued",CallId=Item.callId,
-          queue_elapsed(Id,CallId,Elapsed)),Queued);Queued=[]),
-    (Supported==true->Clock="native_monotonic_milliseconds";Clock=null),
+          queue_elapsed(Id,CallId,Elapsed,QueueClock)),Queued);Queued=[]),
+    (Supported==true->
+       (Current\==null->Clock=Current.clock;
+        Last\==null,get_dict(clock,Last,LastClock)->Clock=LastClock;
+        clock_kind(Clock));Clock=null),
     Timing=timing{supported:Supported,clock:Clock,
                   current:Current,last:Last,queued:Queued}.
 current_state(D,Pairs,State) :-

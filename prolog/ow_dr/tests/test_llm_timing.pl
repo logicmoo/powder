@@ -67,6 +67,35 @@ test(request_ids_follow_rounds_without_rewriting_completed_steps) :-
     findall(Id,(member(S,Trace.steps),S.operation=="endpoint_wait",Id=S.requestId),WaitIds),
     assertion(WaitIds==Ids),Trace.steps=[First|_],assertion(First.requestId==null),
     kb_llm_timing:request_id_value(timing{},null).
+test(wall_clock_fallback_labels_and_clamps_rollback) :-
+    uuid(Run),
+    setup_call_cleanup(
+      wrap_predicate(kb_llm_timing:clock_kind(Clock),teacher_timing_wall_kind,_,Clock="wall_clock_milliseconds"),
+      (kb_llm_timing:begin_run("wall-clock-fixture",Run),
+       setup_call_cleanup(
+         wrap_predicate(kb_llm_timing:clock_milliseconds(_,Millis),teacher_timing_wall_rollback,_,Millis=1.0),
+         (kb_llm_timing:phase(Run,endpoint_wait),
+          kb_llm_timing:checkpoint(Run,"completed","reply",_),
+          kb_llm_timing:finish(Run)),
+         unwrap_predicate(kb_llm_timing:clock_milliseconds(_,_),teacher_timing_wall_rollback))),
+      unwrap_predicate(kb_llm_timing:clock_kind(_),teacher_timing_wall_kind)),
+    kb_llm_timing:latest_terminal("wall-clock-fixture",T),
+    assertion(T.clock=="wall_clock_milliseconds"),assertion(T.elapsedMs=:=0),
+    assertion(T.runElapsedMs=:=0),teacher_timing_trace(T),
+    kb_llm_timing:conversation_timing(timing_doc{id:"wall-clock-fixture",activeTurn:null},DTO),
+    assertion(DTO.clock=="wall_clock_milliseconds").
+test(queue_clocks_never_mix_native_and_wall_time_bases) :-
+    uuid(Id),
+    setup_call_cleanup(
+      wrap_predicate(kb_llm_timing:clock_kind(Clock),teacher_timing_queue_wall,_,Clock="wall_clock_milliseconds"),
+      kb_llm_timing:queue_entered(Id,"different-clock",1.0),
+      unwrap_predicate(kb_llm_timing:clock_kind(_),teacher_timing_queue_wall)),
+    uuid(Run),kb_llm_timing:begin_run(Id,Run),
+    kb_llm_timing:queue_link(Run,"different-clock",1.0),
+    kb_llm_timing:checkpoint(Run,"completed","reply",_),
+    kb_llm_timing:finish(Run),kb_llm_timing:latest_terminal(Id,T),
+    assertion(T.clock=="native_monotonic_milliseconds"),assertion(T.queueWaitMs==null),
+    kb_llm_timing:queue_cancelled(Id,"different-clock").
 test(optional_timing_metadata_cannot_reduce_the_existing_storage_budget) :-
     length(Codes,1048500),maplist(=(0'a),Codes),string_codes(Text,Codes),
     Base=timing_fixture{data:Text},
@@ -142,11 +171,11 @@ test(interrupt_closes_the_observed_trace_without_provider_replay,
 test(observer_failure_does_not_fail_send_or_restore_discovery) :-
     start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
     setup_call_cleanup(
-      wrap_predicate(kb_llm_timing:stamp(_,_),teacher_timing_fault,_,throw(error(synthetic_clock_failure,_))),
+      wrap_predicate(kb_llm_timing:stamp(_,_,_),teacher_timing_fault,_,throw(error(synthetic_clock_failure,_))),
       (start_chat(_{id:C.id,revision:C.revision,text:"Synthetic clock failure",approvedNonsensitive:true},_),
        wait_chat(C.id,Done),assertion(Done.status=="ready"),assertion(\+fixture_request(models,_))),
-      unwrap_predicate(kb_llm_timing:stamp(_,_),teacher_timing_fault)).
-test(unavailable_native_clock_does_not_gate_send) :-
+      unwrap_predicate(kb_llm_timing:stamp(_,_,_),teacher_timing_fault)).
+test(disabled_observations_do_not_gate_send) :-
     start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
     setup_call_cleanup(
       wrap_predicate(kb_llm_timing:supported(Available),teacher_timing_unavailable,_,Available=false),
@@ -155,6 +184,27 @@ test(unavailable_native_clock_does_not_gate_send) :-
        assertion(Done.timing.supported==false),assertion(Done.timing.clock==null),
        assertion(\+fixture_request(models,_))),
       unwrap_predicate(kb_llm_timing:supported(_),teacher_timing_unavailable)).
+test(wall_clock_only_send_exposes_live_phases_without_native_clock_calls,
+     [setup(assertz(user:fixture_mode(slow))),cleanup(retractall(user:fixture_mode(_)))]) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    setup_call_cleanup(
+      wrap_predicate(kb_llm_timing:clock_kind(Clock),teacher_timing_no_native,_,Clock="wall_clock_milliseconds"),
+      setup_call_cleanup(
+        wrap_predicate(kb_llm_timing:clock_milliseconds(Kind,_),teacher_timing_no_native_reads,Wrapped,
+          (Kind=="native_monotonic_milliseconds"->throw(error(unexpected_native_clock_call,_));call(Wrapped))),
+        (start_chat(_{id:C.id,revision:C.revision,text:"Synthetic wall-clock phases",approvedNonsensitive:true},_),
+         call_with_time_limit(30,teacher_timing_wait(C.id,"endpoint_wait",Waiting)),
+         T=Waiting.timing.current,assertion(T.clock=="wall_clock_milliseconds"),
+         assertion(Waiting.timing.clock=="wall_clock_milliseconds"),assertion(T.live==true),
+         sleep(0.05),conversation(C.id,Again),
+         assertion(Again.timing.current.elapsedMs>=T.elapsedMs),
+         assertion(Again.revision=:=Waiting.revision),assertion(Again.sequence=:=Waiting.sequence),
+         wait_chat(C.id,Done),assertion(Done.status=="ready"),
+         assertion(Done.timing.last.clock=="wall_clock_milliseconds"),
+         assertion(Done.timing.last.complete==true),teacher_timing_trace(Done.timing.last),
+         assertion(\+fixture_request(models,_))),
+        unwrap_predicate(kb_llm_timing:clock_milliseconds(_,_),teacher_timing_no_native_reads)),
+      unwrap_predicate(kb_llm_timing:clock_kind(_),teacher_timing_no_native)).
 test(control_exception_in_cleanup_observation_still_releases_native_authority) :-
     start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
     setup_call_cleanup(
