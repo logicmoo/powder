@@ -1,12 +1,15 @@
 'use strict';
+(() => {
 const $ = id => document.getElementById(id);
+const embed = window.operatorEmbed;
 const selectedProvider = new URLSearchParams(location.search).get('provider');
-const provider = ['copilot', 'codex'].includes(selectedProvider) ? selectedProvider : 'copilot';
+const provider = embed?.provider || (['copilot', 'codex'].includes(selectedProvider) ? selectedProvider : 'copilot');
 const providerName = provider === 'codex' ? 'Codex operator' : 'Copilot operator';
 const prefix = `/api/operators/${provider}`;
 let socket, sequence = 0, connected = false, state, reconnect, refreshTimer, draftTimer, pendingSend;
 let draftLoaded = false, draftWrites = Promise.resolve();
-$(`${provider}-chip`).setAttribute('aria-current', 'page');
+let permissionsKey, commandsKey;
+$(`${provider}-chip`)?.setAttribute('aria-current', 'page');
 $('native-label').textContent = providerName;
 $('prompt-label').textContent = `Message to ${providerName}`;
 function text(tag, value, className) {
@@ -22,6 +25,7 @@ function saveDraft(value) {
   return draftWrites;
 }
 async function api(path, body) {
+  if (embed) return embed.api(path, body);
   const scopedPath = path === '/api/logout' ? path
     : path === '/api/operator/stop' ? `${prefix}/stop` : prefix + path.slice(4);
   const response = await fetch(scopedPath, body === undefined ? {cache: 'no-store'} : {
@@ -58,41 +62,51 @@ function renderStatus(value) {
     ['Conversation', value.conversationId], ['Native session / thread', value.nativeSessionId || 'Not started'],
     ['Bridge PID', value.bridge.pid], ['CLI PIDs', value.adapter.ownedPids.join(', ') || 'None'],
     ['Provider', value.provider], ['Executable', value.adapter.executable?.path || 'Not discovered / test adapter'],
+    ['Model', value.adapter.model || 'Provider-native default; access not verified'],
     ['Native authentication', value.adapter.authentication || 'Provider-owned; not shared'],
     ['Application lifecycle', value.application.message || 'No restart authority']]) {
     identity.append(text('dt', label), text('dd', String(item)));
   }
-  const permissions = $('permissions'); permissions.replaceChildren();
-  if (!value.permissions.length) permissions.append(text('p', 'No pending permission requests.', 'muted'));
-  for (const request of value.permissions) {
-    const article = document.createElement('article');
-    article.append(text('strong', request.title), text('pre', request.detail));
-    for (const decision of ['deny', 'allow']) {
-      const button = text('button', decision === 'allow' ? 'Allow this request' : 'Deny');
-      button.type = 'button'; button.disabled = !connected;
-      button.addEventListener('click', async () => {
-        article.querySelectorAll('button').forEach(b => { b.disabled = true; });
-        try { await api(`/api/permissions/${encodeURIComponent(request.id)}`, {decision}); await refresh(); }
-        catch (error) { notice(error.message, true); await refresh(); }
-      });
-      article.append(button);
+  const nextPermissionsKey = JSON.stringify([connected, value.permissions]);
+  if (permissionsKey !== nextPermissionsKey) {
+    permissionsKey = nextPermissionsKey;
+    const permissions = $('permissions'); permissions.replaceChildren();
+    if (embed && value.permissions.length) $('inspector').open = true;
+    if (!value.permissions.length) permissions.append(text('p', 'No pending permission requests.', 'muted'));
+    for (const request of value.permissions) {
+      const article = document.createElement('article');
+      article.append(text('strong', request.title), text('pre', request.detail));
+      for (const decision of ['deny', 'allow']) {
+        const button = text('button', decision === 'allow' ? 'Allow this request' : 'Deny');
+        button.type = 'button'; button.disabled = !connected;
+        button.addEventListener('click', async () => {
+          article.querySelectorAll('button').forEach(b => { b.disabled = true; });
+          try { await api(`/api/permissions/${encodeURIComponent(request.id)}`, {decision}); await refresh(); }
+          catch (error) { permissionsKey = null; notice(error.message, true); await refresh(); }
+        });
+        article.append(button);
+      }
+      permissions.append(article);
     }
-    permissions.append(article);
   }
-  const commands = $('commands'); commands.replaceChildren();
-  for (const command of value.commands.slice(0, 15)) {
-    const item = text('li', `${command.kind}: ${command.state} · ${command.id}`);
-    if (['queued', 'running', 'awaiting_permission'].includes(command.state)) {
-      const cancel = text('button', 'Cancel this command');
-      cancel.type = 'button'; cancel.disabled = !connected;
-      cancel.addEventListener('click', async () => {
-        cancel.disabled = true;
-        try { await api(`/api/commands/${encodeURIComponent(command.id)}/cancel`, {}); await refresh(); }
-        catch (error) { notice(error.message, true); }
-      });
-      item.append(cancel);
+  const nextCommandsKey = JSON.stringify([connected, value.commands.slice(0, 15)]);
+  if (commandsKey !== nextCommandsKey) {
+    commandsKey = nextCommandsKey;
+    const commands = $('commands'); commands.replaceChildren();
+    for (const command of value.commands.slice(0, 15)) {
+      const item = text('li', `${command.kind}: ${command.state} · ${command.id}`);
+      if (['queued', 'running', 'awaiting_permission'].includes(command.state)) {
+        const cancel = text('button', 'Cancel this command');
+        cancel.type = 'button'; cancel.disabled = !connected;
+        cancel.addEventListener('click', async () => {
+          cancel.disabled = true;
+          try { await api(`/api/commands/${encodeURIComponent(command.id)}/cancel`, {}); await refresh(); }
+          catch (error) { commandsKey = null; notice(error.message, true); await refresh(); }
+        });
+        item.append(cancel);
+      }
+      commands.append(item);
     }
-    commands.append(item);
   }
 }
 async function refresh() {
@@ -111,6 +125,14 @@ function event(item) {
   while ($('transcript').children.length > 1000) $('transcript').firstElementChild.remove();
 }
 function connect() {
+  if (embed) {
+    embed.connect({
+      open() { connected = true; },
+      status: renderStatus, event,
+      close() { connected = false; if (state) renderStatus(state); },
+    });
+    return;
+  }
   clearTimeout(reconnect);
   socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/events/${provider}?since=${sequence}`);
   socket.addEventListener('open', () => { connected = true; refresh(); });
@@ -177,6 +199,7 @@ $('stop').addEventListener('click', async () => {
   catch (error) { notice(error.message, true); }
 });
 $('logout').addEventListener('click', async () => {
+  if (embed) { embed.close(); return; }
   try { await api('/api/logout', {}); location.assign('/'); }
   catch (error) { notice(error.message, true); }
 });
@@ -189,6 +212,9 @@ document.querySelectorAll('.provider-chip').forEach(link => {
     } catch (error) { notice(`Provider switch paused: draft was not saved. ${error.message}`, true); }
   });
 });
-api('/api/draft').then(value => { $('prompt').value = value.text; draftLoaded = true; })
-  .catch(error => notice(error.message, true));
-connect();
+if (!embed || embed.paired) {
+  api('/api/draft').then(value => { $('prompt').value = value.text; draftLoaded = true; })
+    .catch(error => notice(error.message, true));
+  connect();
+}
+})();

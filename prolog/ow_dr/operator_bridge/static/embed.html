@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Isolated operator · powder</title>
+<link rel="stylesheet" href="/assets/recovery.css"><link rel="stylesheet" href="/assets/embed.css">
+<script src="/assets/embed.js" defer></script><script src="/assets/recovery.js" defer></script></head>
+<body>
+<!-- THESIS: Native operator conversations stay inside the main workspace without crossing its authority boundary.
+OWN-WORLD: Inherit powder's slate, white, blue and system typography; compact work controls, not a terminal imitation.
+STORY: Pair inside this origin, start explicitly, read output, decide each native permission.
+FIRST VIEWPORT: Origin boundary and pairing, then conversation/composer with an expandable inspector.
+FORM: Narrow extension of the recovery surface; the parent owns navigation, never commands. -->
+<div id="embed-bootstrap" data-parent-origin="{{PARENT}}" data-provider="{{PROVIDER}}" data-capability="{{CAPABILITY}}" hidden></div>
+<main>
+<p id="parent-status" class="muted">Waiting for the configured main workspace…</p>
+<section id="pairing-view" aria-labelledby="pair-title">
+<h1 id="pair-title">Pair operator</h1>
+<p>Your local pairing phrase goes only to <strong>operator.localhost</strong>. It is not a provider login or model credential.</p>
+<p id="pair-error" role="status">{{ERROR}}</p>
+<form id="pair-form" action="/embed/login" method="post" autocomplete="off">
+<input id="pair-provider" name="provider" value="{{PROVIDER}}" type="hidden">
+<label for="phrase">Local bridge pairing phrase</label>
+<input id="phrase" name="phrase" type="password" minlength="16" maxlength="1024" required autocomplete="off">
+<button id="pair-submit" type="submit" disabled>Pair this operator frame</button>
+</form>
+<a id="pair-retry" hidden>Pair again</a>
+<p class="boundary">Start, Send, Cancel and permission decisions happen only here. Pairing or reconnecting never starts an operator or sends a prompt. Each provider is paired separately.</p>
+</section>
+<div id="paired-view" hidden>
+<section class="summary" aria-labelledby="title">
+<div><h1 id="title">Operator conversation</h1><p>Independent of Teacher and Symbolic. Your transcript and draft stay with this provider.</p></div>
+<button id="logout" type="button">Unpair this frame</button>
+</section>
+<dl class="connections"><div><dt>Bridge</dt><dd id="bridge">Connecting</dd></div>
+<div><dt id="native-label">Native operator</dt><dd id="copilot">Not connected</dd></div>
+<div><dt>Prolog</dt><dd id="prolog">Not registered</dd></div></dl>
+<p id="notice" class="notice" role="status">Loading recorded output only…</p>
+<section id="conflict" class="notice" hidden aria-labelledby="conflict-title">
+<h2 id="conflict-title">Another operator is active in this checkout</h2>
+<p id="conflict-message"></p>
+<p>We recommend one operator at a time. You may run both; edits are not race-proof. Starting anyway does not approve any native tool permission.</p>
+<button id="start-anyway" type="button">Start anyway</button>
+<button id="dismiss-conflict" type="button">Do not start</button>
+</section>
+<section class="conversation" aria-labelledby="transcript-title">
+<div class="section-heading"><h2 id="transcript-title">Operator transcript</h2><button id="start" type="button" disabled>Start / resume session</button></div>
+<p id="empty" class="muted empty">No recorded operator messages. Nothing is sent automatically.</p>
+<ol id="transcript" tabindex="0" aria-label="Sequenced operator events"></ol>
+<form id="composer">
+<label id="prompt-label" for="prompt">Message to selected operator</label>
+<textarea id="prompt" rows="4" maxlength="65536" placeholder="Describe the action for this operator to consider." disabled></textarea>
+<div class="compose-actions"><span class="muted">Output replay never repeats a command. Do not paste credentials.</span>
+<button id="send" type="submit" disabled>Send to operator</button></div>
+</form>
+</section>
+<details id="inspector"><summary>Permissions, native identity and command inspector</summary>
+<section><h2>Permissions</h2><p class="muted">Only an explicit decision in this frame can approve a native request.</p><div id="permissions"></div></section>
+<section><h2>Session identity</h2><dl id="identity"></dl></section>
+<section><h2>Recent commands</h2><ul id="commands"></ul></section>
+<section><h2>Stop this operator</h2><label for="confirmation">Type STOP OPERATOR to confirm</label>
+<input id="confirmation" autocomplete="off"><button id="stop" type="button" class="danger">Stop operator session</button></section>
+</details>
+</div>
+</main></body></html>

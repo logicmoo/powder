@@ -8,6 +8,8 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser(description="powder independent human operator/recovery bridge")
     parser.add_argument("--port", type=int, default=8063)
+    parser.add_argument("--parent-origin", default="http://localhost:3050",
+                        help="Exact allowed main-workspace origin for isolated embedded views")
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--state-dir", type=Path, default=Path(__file__).with_name(".state"))
     parser.add_argument("--application-status-url", help="Optional read-only loopback Prolog status URL; no restart authority")
@@ -53,7 +55,7 @@ def main() -> None:
         service = OperatorHub(services)
         print(f"Recovery view: http://{HOST}:{args.port}/")
         print("Native providers start only after explicit human Start. No automatic sessions or prompts.")
-        app = create_app(service, auth, args.port)
+        app = create_app(service, auth, args.port, allowed_parent=args.parent_origin)
         if args.application_status_url:
             monitor = ApplicationMonitor(service, args.application_status_url)
             async def start_monitor(application):

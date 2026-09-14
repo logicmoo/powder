@@ -1,10 +1,11 @@
 # Independent Copilot + Codex operator bridge
 
-This directory owns a Python process and recovery view, **not a Prolog job**.
-It does not alter the existing pools, loader, application UI, server, Teacher,
+This directory owns a Python process, isolated embedded operator views and a
+standalone recovery view, **not a Prolog job**.
+It does not alter the existing pools, loader, application server, Teacher,
 Symbolic agent, source corpus, or shared registries.
 
-**Current state:** authenticated transport, durable journals, recovery view and
+**Current state:** authenticated transport, durable journals, embedded/recovery views and
 separate native adapters are implemented. Real **protocol health only** passed for
 Copilot CLI **1.0.82** with Python SDK **1.0.13**, and Codex CLI **0.149.0**.
 Native session/turn/permission behavior is covered with explicit fake SDK/protocol
@@ -124,12 +125,58 @@ request bodies as below. Streams are `/events/{provider}?since=N`; every frame
 tags its provider. Numeric sequences are **per provider**, never global.
 Legacy unscoped endpoints remain Copilot-only compatibility aliases.
 
-The independent recovery view selects `/?provider=copilot` or
-`/?provider=codex`. Drafts and histories live in their respective journals,
-including across browser refresh. Parent chips can open those top-level views;
-they must not copy operator authentication into teacher/symbolic JS or send
-another chip's messages to these routes. Embedded UI/capability integration
-remains subject to the hostname/origin boundary below.
+The main four-chip workspace embeds `/embed?provider=copilot` and
+`/embed?provider=codex` on the isolated operator origin. It must keep each frame
+mounted while switching chips. The independent recovery view still selects
+`/?provider=copilot` or `/?provider=codex` **only for standalone recovery**.
+Drafts and histories live in their respective journals across refresh.
+
+Load `web/operator-agent.css` and import `createOperatorAgent` from
+`web/operator-agent.js` in the main application's existing asset path:
+
+```javascript
+const view = createOperatorAgent(host, {
+  provider: 'copilot', active: true, signal,
+  bridgeURL: 'http://operator.localhost:8063/embed',
+  onStateChange({provider, state, connected, unread}) { /* update that chip only */ },
+});
+view.activate();   // visibility lifecycle only
+view.deactivate(); // does not unmount, stop, send, cancel or decide permissions
+view.getState();   // defensive copy of the four safe fields above
+view.destroy();    // closes/removes only this view and revokes its pairing
+```
+
+Configure the bridge's `--parent-origin=http://localhost:3050` to the **exact**
+main-workspace origin (scheme, hostname, port; no path, wildcard or trailing
+slash). This is also the default. A host-owned main configuration endpoint may
+provide the fixed operator `/embed` URL; it must never proxy operator APIs or
+receive pairing phrases, session cookies or frame capabilities. The iframe is
+sandboxed with only `allow-scripts allow-same-origin allow-forms`. Its CSP allows
+only the configured ancestor. No popups or top navigation are enabled.
+
+#### Display-only postMessage protocol
+
+All messages have `channel:"powder.operator.embed.v1"`, the fixed `provider`, and
+a random per-document `nonce` (a **public handshake challenge**, not authority).
+The frame sends `{type:"hello",nonce,provider,channel}` to the exact configured
+parent origin. The parent replies with those fields plus
+`type:"bind",active:boolean`. Later parent messages may use only
+`type:"lifecycle",active:boolean`. All keys and types must match exactly.
+
+Both directions check the exact Origin **and** source WindowProxy. The child
+requires its direct parent, not a sibling or nested owner. Parent status frames
+add only `type:"state",revision,state,connected,unread`; revisions strictly
+increase for that document challenge. Unknown fields/types, stale revisions,
+other providers, windows and origins are ignored. Status values are bounded to
+`pairing`, `disconnected`, `offline`, `idle`, `busy`, `awaiting_permission`;
+unread is an integer from 0–999. Parent messages have no command, text, URL,
+permission, model, credential or arbitrary dispatch interface.
+
+All Start/Send/Cancel/Stop/permission interactions are authored inside the
+operator-origin document. A new iframe, pairing, handshake, tab selection,
+output replay or reconnect **never starts a native session or sends a prompt**.
+Models and native authentication remain provider-owned CLI settings, visible
+honestly in each frame's inspector; pairing does not prove model/account access.
 
 Optional arguments: `--port`, `--project-root` (must remain this primary checkout
 on `master`), `--state-dir` (only beneath this directory's `.state`).
@@ -146,17 +193,18 @@ the application process is still alive.
 * Every mutation and WebSocket upgrade requires the exact own Origin.
   Foreign/null origins and cross-site API requests are rejected before parsing
   command bodies.
-* Every API/event request requires an opaque, host-only, HttpOnly,
+* Every standalone API/event request requires an opaque, host-only, HttpOnly,
   SameSite=Strict cookie. Tokens exist only in browser cookies and a hashed,
   expiring in-memory registry. They are not placed in URLs, JS, storage, logs or
   Git. Bridge restart invalidates browser authentication and requires re-pairing.
 * The hostname separation matters: cookies are **not port-scoped**. Reusing
   `localhost` for Prolog and the bridge could disclose operator cookies to the
   Prolog server. Do not add the Prolog Origin to this bridge's allowlist.
-* Recovery is deliberately top-level (`frame-ancestors 'none'`), not an iframe
-  or cross-origin authenticated fetch surface. The parent Operator chip may
-  open this view. Embedded integration requires a separate reviewed capability
-  contract; the Teacher/Symbolic code must never receive operator credentials.
+* Standalone recovery remains top-level (`frame-ancestors 'none'`, X-Frame-Options
+  DENY). Only `/embed` and its native form response permit the configured parent.
+  Document `Referrer-Policy: same-origin` preserves the exact native form Origin
+  in Chromium (which otherwise sends `Origin:null` under `no-referrer`); it sends
+  no cross-origin referrers. Origin/Host checks are not relaxed.
 * HTTP loopback is not remote TLS. This is a browser/agent-origin boundary, not
   a defense against malicious code already running as the same OS user.
 * State directories receive a protected Windows owner/SYSTEM ACL (0700 on
@@ -169,9 +217,47 @@ the application process is still alive.
   reviewed output/permission projection. Oversized or redacted permission
   details are denied rather than asking a user to approve an incomplete view.
 
+### Cross-site frame authentication without weakening Strict cookies
+
+`localhost` and `operator.localhost` are cross-site. The embedded view **does
+not depend on third-party or partitioned cookies**, and does not downgrade the
+standalone SameSite=Strict cookie. Its native HTML form posts the human-entered
+phrase directly to `/embed/login` on the operator origin. A separate,
+provider-scoped 384-bit random capability is returned inside that frame's
+no-store document. Operator-origin JS removes the bootstrap element and retains
+the capability in a closure only. It is never posted to the parent, put in a
+URL/browser storage, journaled or logged. There is no provider login/token form.
+
+The server stores only its hash, provider, expiry and stream ownership. It
+expires after 12 hours (or the configured auth lifetime); an unclaimed capability
+expires after 30 seconds. One output stream owns each capability. Requests use
+`credentials:"omit"` and the `X-Operator-Embed` header on **own-Origin POSTs**
+under `/embed/api/{provider}`. Existing cookies cannot authorize those routes;
+frame capabilities cannot authorize standalone routes or another provider.
+No CORS headers are provided, including to the allowed framing parent.
+
+The output-only `POST .../events` accepts `{since:N}` and streams NDJSON
+snapshots, never commands. Each snapshot contains the provider's status and
+bounded sequenced journal output inside the frame. Start/Send/Cancel/permissions
+use the same native service/adapters as standalone recovery. Revocation detaches
+the principal immediately; stream close/failure revokes and detaches when
+observed (normally within the 750 ms output heartbeat, bounded writes at 5 s).
+Unpair, page navigation and frame destruction also send a best-effort revocation.
+Bridge shutdown/restart invalidates every frame capability. Queued commands
+require their **own author** still connected when dispatched; another view
+cannot keep a revoked author's queued input alive. Already-dispatched native
+work is not falsely reported cancelled; permissions remain pending without
+automatic approval. Re-pairing reads durable output/drafts without resending.
+
+The frame shows an explicit **Pair again** recovery action on disconnection
+rather than silently recycling capabilities. Chip deactivation leaves output
+connected and the provider draft intact. The configured parent is trusted to
+display the frame honestly (a malicious allowlisted parent can visually
+clickjack any embeddable UI); it still receives no operator command authority.
+
 ## Public HTTP / event interface
 
-All `/api/*` paths below require the cookie; POSTs also require the exact Origin.
+All standalone `/api/*` paths below require the cookie; POSTs also require the exact Origin.
 
 | Interface | Meaning |
 |---|---|
@@ -328,8 +414,30 @@ are deliberately not sent to this pinned stable protocol.
 ## Validation
 
 ```powershell
+prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_embed prolog.ow_dr.operator_bridge.tests.test_service prolog.ow_dr.operator_bridge.tests.test_http prolog.ow_dr.operator_bridge.tests.test_providers prolog.ow_dr.operator_bridge.tests.test_native_adapters
+node --test prolog\ow_dr\operator_bridge\tests\embed-browser.test.mjs
+```
+
+The embedded browser test launches a disposable localhost parent and
+operator.localhost child on ephemeral ports. It uses the **real native adapter
+classes** with the existing synthetic Copilot SDK and Codex stdio peers, never
+real provider executables or model prompts. It verifies frame-native pairing
+with third-party Strict cookies unavailable, zero native starts on pairing,
+wrong parent/window/origin/message rejection, safe status-only messages,
+provider-specific model settings/drafts/permissions, Start anyway, unpair/re-pair
+replay, unread state, destruction, mobile/desktop overflow and standalone
+HttpOnly Strict recovery pairing. Set `LOGOS_CHROME` if Chromium is not installed
+at the default Chrome path. Fixture files/profiles are removed on completion.
+
+**Validated 2026-09-14:** 71 selected Python tests and the real Chromium
+cross-site integration test passed. No production bridge activation, real model
+activity or live Prolog reload/restart was part of that validation.
+
+The broader pre-existing suite also includes an isolated Prolog lifecycle test;
+run it only when that additional fixture activity is desired:
+
+```powershell
 prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest discover -s prolog\ow_dr\operator_bridge\tests -t . -v
-node --check prolog\ow_dr\operator_bridge\static\recovery.js
 ```
 
 Tests use clearly named test-only fake adapters, isolated loopback HTTP/WS
@@ -339,10 +447,8 @@ operator conversation and test-native-session identity remain alive. It loads
 no KBs. Only those created children are stopped. No production process, private
 KB prompt, actual model request or source corpus is involved.
 
-The shared Chrome tool was unavailable during the first fixture visual check
-(another browser instance owned its profile). Real HTTP asset/MIME/authentication
-and WebSocket tests pass; an interactive desktop/mobile visual check remains for
-the coordinator. The disposable offline fixture was health-checked and stopped.
+The embedded browser test now covers real HTTP asset, MIME, native-form and
+cross-site authentication behavior. Operator events render as text, not HTML.
 
 The dual-provider fixtures additionally prove warning-then-allow concurrency,
 simultaneous-start admission, independent session/auth markers/history/drafts,

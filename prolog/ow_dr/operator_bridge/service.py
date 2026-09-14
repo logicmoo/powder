@@ -96,13 +96,13 @@ class OperatorService:
             raise BridgeError("adapter_unavailable", f"No live {self.provider} adapter is connected.", 503)
         command, created = self.journal.submit(payload.get("id"), kind, text)
         if created:
-            self.queue.put_nowait((command["id"], kind, text))
+            self.queue.put_nowait((command["id"], kind, text, principal))
             await self.notify()
         return command
 
     async def _worker(self) -> None:
         while True:
-            command_id, kind, text = await self.queue.get()
+            command_id, kind, text, principal = await self.queue.get()
             dispatched = False
             try:
                 if self.journal.command(command_id)["state"] != "queued":
@@ -114,8 +114,7 @@ class OperatorService:
                 self.active = command_id
                 self.journal.state(command_id, "running")
                 await self.notify()
-                if not self.connections:
-                    raise BridgeError("browser_disconnected", "No browser is connected; command was not dispatched.")
+                self.human(principal)
                 if kind == "start_session":
                     if self.connected:
                         session = {"sessionId": self.native_session_id(),

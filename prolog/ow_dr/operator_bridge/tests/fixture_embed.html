@@ -1,0 +1,27 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic embedded operators</title>
+<link rel="stylesheet" href="/web/operator-agent.css"></head><body>
+<h1>Synthetic four-agent workspace</h1>
+<nav><button id="teacher">Teacher fixture</button><button id="symbolic">Symbolic fixture</button>
+<button id="copilot">Copilot operator</button><button id="codex">Codex operator</button></nav>
+<div id="host"></div><script type="module">
+import {createOperatorAgent} from '/web/operator-agent.js';
+window.framesByProvider = {};
+window.states = {};
+window.messages = [];
+window.addEventListener('message', event => {
+  if (event.origin === '{{BRIDGE}}') window.messages.push(event.data);
+});
+for (const provider of ['copilot', 'codex']) {
+  framesByProvider[provider] = createOperatorAgent(document.querySelector('#host'), {
+    provider, active: provider === 'copilot', bridgeURL: '{{BRIDGE}}/embed',
+    onStateChange: state => { states[provider] = state; },
+  });
+}
+for (const choice of ['teacher', 'symbolic', 'copilot', 'codex']) {
+  document.getElementById(choice).onclick = () => {
+    for (const [provider, view] of Object.entries(framesByProvider))
+      view[provider === choice ? 'activate' : 'deactivate']();
+  };
+}
+</script></body></html>

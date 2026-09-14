@@ -80,7 +80,7 @@ class Auth:
     def _derive(self, phrase: str) -> bytes:
         return hashlib.pbkdf2_hmac("sha256", phrase.encode(), self.salt, 600_000)
 
-    def login(self, phrase: str) -> str:
+    def verify_pairing(self, phrase: str) -> None:
         now = time.monotonic()
         self.attempts = [t for t in self.attempts if now - t < 60]
         if len(self.attempts) >= 5:
@@ -88,6 +88,10 @@ class Auth:
         self.attempts.append(now)
         if len(phrase) > 1024 or not hmac.compare_digest(self._derive(phrase), self.digest):
             raise BridgeError("pairing_failed", "Local pairing failed.", 401)
+
+    def login(self, phrase: str) -> str:
+        self.verify_pairing(phrase)
+        now = time.monotonic()
         self.sessions = {key: expiry for key, expiry in self.sessions.items() if expiry > now}
         if len(self.sessions) >= 16:
             raise BridgeError("session_limit", "Too many local browser sessions.", 429)

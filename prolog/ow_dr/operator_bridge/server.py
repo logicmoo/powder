@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import html
 from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
 from .security import Auth, COOKIE, HOST
+from .embed import EmbedAuth, EMBED_HEADER, DEFAULT_PARENT, parent_origin
 from .service import OperatorService
 from .hub import OperatorHub
 from .workspace import BridgeError
@@ -15,9 +17,12 @@ STATIC = Path(__file__).with_name("static")
 PRINCIPAL = web.RequestKey("operator_principal", str)
 
 
-def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int) -> web.Application:
+def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
+               *, allowed_parent: str = DEFAULT_PARENT) -> web.Application:
     authority = f"{HOST}:{port}"
     origin = f"http://{authority}"
+    allowed_parent = parent_origin(allowed_parent)
+    embed_auth = EmbedAuth(auth)
 
     def selected(request) -> OperatorService:
         provider = request.match_info.get("provider", "copilot")
@@ -38,13 +43,17 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int) ->
             if supplied_origin is not None and supplied_origin != origin:
                 raise BridgeError("invalid_origin", "Cross-origin operator access is forbidden.", 403)
             event_channel = request.path == "/events" or request.path.startswith("/events/")
-            sensitive = request.path.startswith("/api/") or event_channel
+            embedded_api = request.path.startswith("/embed/api/")
+            sensitive = request.path.startswith("/api/") or event_channel or embedded_api
             mutating = request.method not in ("GET", "HEAD")
-            if (mutating or event_channel) and supplied_origin != origin:
+            if (mutating or event_channel or embedded_api) and supplied_origin != origin:
                 raise BridgeError("origin_required", "An exact operator Origin is required.", 403)
             if sensitive and request.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
                 raise BridgeError("invalid_fetch_site", "Cross-site operator requests are forbidden.", 403)
-            if sensitive:
+            if embedded_api:
+                request[PRINCIPAL] = embed_auth.require(
+                    request.headers.get(EMBED_HEADER), selected(request).provider)
+            elif sensitive:
                 request[PRINCIPAL] = auth.require(request.cookies.get(COOKIE))
             response = await handler(request)
         except BridgeError as error:
@@ -59,16 +68,25 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int) ->
             response = web.json_response({"error": {"code": "bridge_error",
                 "message": "Bridge operation failed; outcome may be unknown. Inspect status before retrying."}}, status=500)
         if not response.prepared:
+            embeddable = request.path in ("/embed", "/embed/login")
+            ancestors = allowed_parent if embeddable else "'none'"
             response.headers.update({
                 "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
-                "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
+                # no-referrer serializes native form POST Origin as null in Chromium.
+                # same-origin retains the guard without disclosing referrers to the parent.
+                "Referrer-Policy": "same-origin" if embeddable or request.path == "/" else "no-referrer",
                 "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; "
-                    "connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+                    "connect-src 'self'; img-src 'self'; form-action 'self'; "
+                    f"frame-ancestors {ancestors}; base-uri 'none'",
+                "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
             })
+            if not embeddable:
+                response.headers["X-Frame-Options"] = "DENY"
         return response
 
     app = web.Application(middlewares=[boundary], client_max_size=300000)
     sockets: set[web.WebSocketResponse] = set()
+    embedded_streams: set[asyncio.Task] = set()
 
     async def document(request):
         name = "recovery.html"
@@ -80,7 +98,7 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int) ->
 
     async def asset(request):
         name = request.match_info["name"]
-        if name not in ("recovery.css", "recovery.js"):
+        if name not in ("recovery.css", "recovery.js", "embed.js", "embed.css"):
             raise web.HTTPNotFound()
         return web.FileResponse(STATIC / name)
 
@@ -93,6 +111,34 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int) ->
         response.set_cookie(COOKIE, token, httponly=True, samesite="Strict", path="/",
                             max_age=int(auth.lifetime))
         return response
+
+    def embed_document(provider, token="", error=""):
+        if provider not in ("copilot", "codex"):
+            raise BridgeError("unknown_provider", "Select copilot or codex.", 400)
+        # Configuration/capability is parsed and removed by operator-origin JS before use.
+        page = (STATIC / "embed.html").read_text(encoding="utf-8")
+        for key, value in {"PARENT": allowed_parent, "PROVIDER": provider,
+                           "CAPABILITY": token, "ERROR": error}.items():
+            page = page.replace("{{" + key + "}}", html.escape(value, quote=True))
+        return web.Response(text=page, content_type="text/html")
+
+    async def embedded(request):
+        if set(request.query) - {"provider"}:
+            raise BridgeError("invalid_request", "Embed accepts only a provider selection.", 400)
+        return embed_document(request.query.get("provider", "copilot"))
+
+    async def embedded_login(request):
+        if request.content_type != "application/x-www-form-urlencoded":
+            raise BridgeError("invalid_content_type", "Use the frame's native pairing form.", 415)
+        values = await request.post()
+        provider = values.get("provider")
+        if provider not in ("copilot", "codex") or set(values) != {"provider", "phrase"}:
+            raise BridgeError("invalid_request", "Use the frame's provider-specific pairing form.", 400)
+        try:
+            token = embed_auth.login(values["phrase"], provider)
+        except BridgeError as error:
+            return embed_document(provider, error=error.message)
+        return embed_document(provider, token)
 
     async def payload(request):
         if request.content_type != "application/json":
@@ -149,6 +195,54 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int) ->
                 raise BridgeError("invalid_draft", "Draft text is required.", 400)
             return web.json_response(selected(request).draft(data["text"]))
         return web.json_response(selected(request).draft())
+
+    async def embedded_draft_read(request):
+        await payload(request)
+        return web.json_response(selected(request).draft())
+
+    async def embedded_logout(request):
+        await payload(request)
+        token = request.headers.get(EMBED_HEADER)
+        principal = request[PRINCIPAL]
+        embed_auth.revoke(token)
+        selected(request).detach(principal)
+        return web.json_response({"loggedOut": True})
+
+    async def embedded_events(request):
+        body = await payload(request)
+        cursor = body.get("since", 0)
+        if set(body) != {"since"} or type(cursor) is not int:
+            raise BridgeError("invalid_cursor", "Supply an integer output cursor.", 400)
+        operator = selected(request)
+        operator.journal.events(cursor, 1)
+        token = request.headers.get(EMBED_HEADER)
+        principal = embed_auth.connect(token, operator.provider)
+        stream = web.StreamResponse(headers={
+            "Content-Type": "application/x-ndjson", "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        })
+        task = asyncio.current_task()
+        embedded_streams.add(task)
+        operator.attach(principal)
+        try:
+            await stream.prepare(request)
+            while True:
+                embed_auth.require(token, operator.provider)
+                if request.transport is None or request.transport.is_closing():
+                    break
+                batch = operator.journal.events(cursor)
+                frame = {"type": "snapshot", "provider": operator.provider,
+                         "data": operator.status(), **batch}
+                await asyncio.wait_for(stream.write((json.dumps(frame) + "\n").encode()), 5)
+                cursor = batch["lastSequence"]
+                await asyncio.sleep(0.75)
+        except (ConnectionError, TimeoutError, BridgeError):
+            pass
+        finally:
+            embed_auth.revoke(token)
+            operator.detach(principal)
+            embedded_streams.discard(task)
+        return stream
 
     async def websocket(request):
         operator = selected(request)
@@ -211,12 +305,25 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int) ->
         await service.close()
 
     async def shutdown(application):
+        for task in list(embedded_streams):
+            task.cancel()
+        await asyncio.gather(*list(embedded_streams), return_exceptions=True)
         await asyncio.gather(*(ws.close(code=1001, message=b"Bridge shutting down.")
                                for ws in list(sockets)), return_exceptions=True)
 
     app.router.add_get("/", document)
     app.router.add_get("/assets/{name}", asset)
     app.router.add_post("/login", login)
+    app.router.add_get("/embed", embedded)
+    app.router.add_post("/embed/login", embedded_login)
+    embedded_prefix = "/embed/api/{provider}"
+    for suffix, handler in (
+        ("/status", status), ("/commands", command), ("/commands/{id}", command_status),
+        ("/commands/{id}/cancel", cancel), ("/permissions/{id}", permission),
+        ("/stop", stop), ("/logout", embedded_logout), ("/draft", draft),
+        ("/draft/read", embedded_draft_read), ("/events", embedded_events),
+    ):
+        app.router.add_post(embedded_prefix + suffix, handler)
     app.router.add_get("/api/status", status)
     app.router.add_post("/api/commands", command)
     app.router.add_get("/api/commands/{id}", command_status)
