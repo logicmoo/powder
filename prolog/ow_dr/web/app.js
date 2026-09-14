@@ -14,6 +14,7 @@ import { createAnnotationHost } from './annotation-host.js';
 import { renderTVASettings, renderAssertionAnnotationEditor } from './native-tva.js';
 import { loadedMTTree } from './mt-inheritance.js';
 import { createTermFileContext } from './term-file-context.js';
+import { createAgentWorkspace } from './agents.js';
 
 const $ = selector => document.querySelector(selector);
 const content = $('#content');
@@ -37,6 +38,7 @@ const annotations = createAnnotationHost({ api, presentation, reference: nativeR
   getGeneration: () => state.status?.generation });
 let annotationRevision = null;
 let sourceEditor, sourceOpenCount = 0, acceptedRoute = location.hash, pendingInterfaceReload = false;
+let agentWorkspace;
 const pendingJobs = new Set();
 
 function nativeReference({ key, expression, kind }) {
@@ -2102,8 +2104,25 @@ const pages = {
   assertion: assertionPage, source: sourcePage, sources: sourcesPage, packs: sourcePacksPage,
   query: queryPage, mappings: mappingsPage, settings: settingsPage,
   tasks: tasksPage, task: taskPage,
+  agents: agentsPage,
   'ui-settings': uiSettingsPage,
 };
+
+function agentsPage(route) {
+  agentWorkspace ??= createAgentWorkspace({ api, element, button, heading });
+  agentWorkspace.activate(route);
+  return agentWorkspace.element;
+}
+
+function replacePage(node) {
+  const retained = agentWorkspace?.element;
+  for (const child of [...content.childNodes]) {
+    if (child !== retained) child.remove();
+  }
+  if (retained) retained.hidden = node !== retained;
+  if (node !== retained) content.prepend(node);
+  else if (retained.parentNode !== content) content.append(retained);
+}
 
 function uiSettingsPage(_route, signal) {
   const page = renderUISettings(presentation, { signal });
@@ -2141,21 +2160,23 @@ async function renderRoute() {
   const controller = new AbortController();
   state.routeController = controller;
   const route = parseRoute(location.hash, state.settings);
+  agentWorkspace?.deactivate();
   const navRoute = { term: 'search', nats: 'search', assertion: 'search', source: 'sources', microtheory: 'microtheories', task: 'tasks', mappings: 'settings' }[route.name] ?? route.name;
   for (const anchor of document.querySelectorAll('#navigation a')) {
     if (anchor.dataset.route === navRoute) anchor.setAttribute('aria-current', 'page');
     else anchor.removeAttribute('aria-current');
   }
   content.setAttribute('aria-busy', 'true');
-  content.replaceChildren(element('div', { className: 'loading', role: 'status' }, 'Loading…'));
+  replacePage(element('div', { className: 'loading', role: 'status' }, 'Loading…'));
   try {
-    await ensureContext(controller.signal);
+    // Agent recovery must not depend on a successful KB/catalog status read.
+    if (route.name !== 'agents') await ensureContext(controller.signal);
     const page = pages[route.name];
     const result = page
       ? await page(route, controller.signal)
       : empty('Page not found', 'This browser route is not recognized.', link('Return to overview', 'overview', {}, 'button'));
     if (view !== state.view) return;
-    content.replaceChildren(result);
+    replacePage(result);
     const displayedRoute = result.resolvedRoute ?? route;
     if (result.resolvedRoute) {
       for (const anchor of document.querySelectorAll('#navigation a')) {
@@ -2173,10 +2194,10 @@ async function renderRoute() {
     }
     refreshFileDisplays();
     scheduleFileInformation();
-    document.title = `${content.querySelector('h1')?.textContent ?? 'Browse'} · ${APP_NAME}`;
+    document.title = `${result.querySelector('h1')?.textContent ?? 'Browse'} · ${APP_NAME}`;
   } catch (error) {
     if (view !== state.view || error.name === 'AbortError') return;
-    content.replaceChildren(errorPanel(error));
+    replacePage(errorPanel(error));
     classicLayout.setContext({ title: 'Context index', coverage: 'unavailable', emptyMessage: error.message });
     document.title = `Request error · ${APP_NAME}`;
   } finally {

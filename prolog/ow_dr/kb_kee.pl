@@ -23,8 +23,8 @@ registry(Token,Reply) :-
         json{capability:assertion_subset_load,reason:true_subset_backend_not_implemented},
         json{capability:provider_file_load,reason:per_invocation_host_user_choice_bridge_required},
         json{capability:dependency_planning,reason:provider_bridge_not_integrated},
-        json{capability:symbolic_run,reason:runner_not_implemented},
-        json{capability:generate_comment,reason:explicit_model_host_bridge_not_implemented}]}.
+        json{capability:symbolic_run,reason:explicit_symbolic_host_control_not_a_kee_tool},
+        json{capability:generate_comment,reason:explicit_teacher_action_not_a_kee_tool}]}.
 public_capability(Principal,C,Public) :-
     (catch(kb_kee_auth:authorize(Principal,C),error(kee(_,Reason),_),Denied=Reason)->
        (var(Denied)->Available=true,Why=null;Available=false,Why=Denied)
