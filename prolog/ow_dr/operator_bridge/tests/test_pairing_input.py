@@ -4,12 +4,72 @@ import subprocess
 import sys
 import unittest
 import warnings
+from contextlib import ExitStack
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ..__main__ import main, read_pairing_phrase
+from ..security import Auth
+from ..workspace import BridgeError
 
 
 class PairingInputTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows independent launcher")
+    def test_trusted_local_launcher_forwards_mode_without_pairing_instructions(self):
+        from ..launch import main as launch
+        with patch.object(sys, "argv", ["launch", "--trusted-local"]):
+            with patch("subprocess.Popen", return_value=SimpleNamespace(pid=424242)) as process:
+                with patch("sys.stdout", new_callable=io.StringIO) as output:
+                    launch()
+                self.assertIn("--trusted-local", process.call_args.args[0])
+                self.assertIn("trusted-local", output.getvalue())
+                self.assertNotIn("Pair using", output.getvalue())
+                self.assertTrue(process.call_args.kwargs["close_fds"])
+
+    def test_trusted_local_is_explicit_and_not_a_phrase_bypass(self):
+        with self.assertRaises(BridgeError):
+            Auth()
+        with self.assertRaises(BridgeError):
+            Auth("synthetic fixture phrase", trusted_local=True)
+        local = Auth(trusted_local=True)
+        with self.assertRaises(BridgeError):
+            local.login("")
+        self.assertTrue(local.require(local.local_login()))
+        with self.assertRaises(BridgeError):
+            Auth("synthetic fixture phrase").local_login()
+
+    def test_trusted_local_cli_never_reads_phrase_or_repairs_existing_state(self):
+        prefix = "prolog.ow_dr.operator_bridge."
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, "argv", ["bridge", "--trusted-local", "--offline"]))
+            stack.enter_context(patch("pathlib.Path.exists", return_value=True))
+            stack.enter_context(patch(prefix + "workspace.Workspace.inspect",
+                return_value=SimpleNamespace(root=str(Path(__file__).resolve().parents[4]))))
+            mocks = {name: stack.enter_context(patch(prefix + name)) for name in (
+                "security.check_private_directory", "security.private_directory", "security.InstanceLock",
+                "pairing_file.read_pairing_file", "__main__.read_pairing_phrase", "journal.Journal",
+                "adapter.configured_adapter", "service.OperatorService", "hub.OperatorHub", "server.create_app")}
+            start = stack.enter_context(patch("aiohttp.web.run_app"))
+            output = stack.enter_context(patch("sys.stdout", new_callable=io.StringIO))
+            main()
+            mocks["pairing_file.read_pairing_file"].assert_not_called()
+            mocks["__main__.read_pairing_phrase"].assert_not_called()
+            mocks["security.private_directory"].assert_not_called()
+            mocks["security.check_private_directory"].assert_called_once()
+            self.assertTrue(mocks["server.create_app"].call_args.args[1].trusted_local)
+            self.assertEqual(start.call_args.kwargs["host"], "127.0.0.1")
+            self.assertIn("trusted-local", output.getvalue())
+            for call in mocks["journal.Journal"].call_args_list:
+                self.assertIn(call.args[0].name, ("operator.sqlite3", "codex.sqlite3"))
+
+    def test_trusted_local_cannot_be_combined_with_secret_input(self):
+        for option in (["--pairing-stdin"], ["--pairing-file", "never-read-this-file"]):
+            with patch.object(sys, "argv", ["bridge", "--trusted-local", *option]):
+                with patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit) as error:
+                    main()
+                self.assertEqual(error.exception.code, 2)
+
     def test_private_utf8_pipe_preserves_phrase_without_printing(self):
         phrase = " synthetic pairing phrase \u03bb "
         with patch("sys.stdout", new_callable=io.StringIO) as output:

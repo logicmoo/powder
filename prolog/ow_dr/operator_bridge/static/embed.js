@@ -1,7 +1,8 @@
 'use strict';
 (() => {
   const bootstrap = document.getElementById('embed-bootstrap');
-  const {parentOrigin, provider} = bootstrap.dataset;
+  const {parentOrigin, provider, accessMode} = bootstrap.dataset;
+  const trustedLocal = accessMode === 'trusted-local';
   let capability = bootstrap.dataset.capability;
   bootstrap.remove();
   const channel = 'powder.operator.embed.v1';
@@ -10,7 +11,7 @@
   let parentProbe;
   const prefix = `/embed/api/${provider}`;
   let bound = false, active = false, disposed = false, unread = 0, revision = 0;
-  let connected = false, state = 'pairing', controller, lastSequence = null;
+  let connected = false, state = trustedLocal ? 'connecting' : 'pairing', controller, lastSequence = null;
   let conversationId = null, sequence = 0, error = null;
   let resolveReady;
   let viewHandlers;
@@ -31,7 +32,7 @@
   }
   const helloTimer = setInterval(emitHello, 750);
   const handshakeTimer = setTimeout(() => {
-    if (!bound) disconnect('This frame is not attached to the configured main workspace. Return to the main workspace to pair.');
+    if (!bound) disconnect('This frame is not attached to the configured main workspace. Return there to reconnect.');
   }, 10000);
   window.addEventListener('message', event => {
     if (event.source !== window.parent || event.origin !== parentOrigin || disposed) return;
@@ -42,8 +43,8 @@
     if (!bound && message.type === 'bind') {
       bound = true;
       clearInterval(helloTimer); clearTimeout(handshakeTimer);
-      $('pair-submit').disabled = false;
-      $('parent-status').textContent = `Isolated ${provider} view · paired only with ${parentOrigin}`;
+      if ($('pair-submit')) $('pair-submit').disabled = false;
+      $('parent-status').textContent = `Isolated ${provider} view${trustedLocal ? ' · trusted-local access' : ''} · linked only to ${parentOrigin}`;
       resolveReady();
     } else if (!bound || !['bind', 'lifecycle'].includes(message.type)) return;
     parentProbe = message.probe;
@@ -54,7 +55,7 @@
   });
 
   async function request(path, body = {}, keepalive = false) {
-    if (!capability || disposed) throw new Error('Pair this operator frame again.');
+    if (!capability || disposed) throw new Error(trustedLocal ? 'Reconnect this operator view.' : 'Pair this operator frame again.');
     return fetch(prefix + path, {
       method: 'POST', credentials: 'omit', cache: 'no-store', redirect: 'error',
       headers: {'Content-Type': 'application/json', 'X-Operator-Embed': capability},
@@ -66,7 +67,9 @@
     const route = path === '/api/operator/stop' ? '/stop'
       : ['/api/draft', '/api/settings'].includes(path) && body === undefined ? path.slice(4) + '/read' : path.slice(4);
     const response = await request(route, body);
-    if (response.status === 401) disconnect('Pairing expired. Pair this frame again; no command was retried.');
+    if (response.status === 401) disconnect(trustedLocal
+      ? 'Local view access expired. Reconnect; no command was retried.'
+      : 'Pairing expired. Pair this frame again; no command was retried.');
     const value = await response.json();
     if (!response.ok) {
       const error = new Error(value.error?.message || 'Operator request failed.');
@@ -79,14 +82,16 @@
     if (capability) request('/logout', {}, true).catch(() => {});
     capability = '';
     connected = false; state = 'disconnected';
-    error = 'Operator view disconnected. Pair again inside the isolated view.';
+    error = trustedLocal ? 'Operator view disconnected. Reconnect inside the isolated view.'
+      : 'Operator view disconnected. Pair again inside the isolated view.';
     publish();
     disposed = true;
     viewHandlers?.visibility?.(false);
     clearInterval(helloTimer); clearTimeout(handshakeTimer);
     controller?.abort();
     $('paired-view').hidden = true; $('pairing-view').hidden = false;
-    $('pair-form').hidden = true; $('pair-retry').hidden = false;
+    if ($('pair-form')) $('pair-form').hidden = true;
+    $('pair-retry').hidden = false;
     $('pair-error').textContent = message;
   }
   async function connect(handlers) {
@@ -101,7 +106,7 @@
         headers: {'Content-Type': 'application/json', 'X-Operator-Embed': capability},
         body: JSON.stringify({since: 0}), signal: controller.signal,
       });
-      if (!response.ok) throw new Error('Pairing or stream connection failed.');
+      if (!response.ok) throw new Error('View access or stream connection failed.');
       const reader = response.body.getReader(), decoder = new TextDecoder();
       let buffered = '', opened = false, previousStatus;
       while (!disposed) {
@@ -136,24 +141,29 @@
         if (buffered.length > 2 * 1024 * 1024) throw new Error('Operator output exceeded the frame limit.');
       }
     } catch {
-      if (!disposed) disconnect('Output disconnected. Pair again to replay recorded output. No command is resent.');
+      if (!disposed) disconnect(trustedLocal
+        ? 'Output disconnected. Reconnect to replay recorded output. No command is resent.'
+        : 'Output disconnected. Pair again to replay recorded output. No command is resent.');
     } finally {
       handlers.close();
     }
   }
   $('pair-retry').href = `/embed?provider=${provider}`;
-  $('pair-form').addEventListener('submit', event => {
+  $('pair-form')?.addEventListener('submit', event => {
     if (!bound || disposed) event.preventDefault();
     else $('pair-submit').disabled = true;
   });
   $('pairing-view').hidden = Boolean(capability);
   $('paired-view').hidden = !capability;
-  $('pair-provider').value = provider;
-  $('pair-title').textContent = `Pair ${provider === 'codex' ? 'Codex' : 'Copilot'} inside this workspace`;
+  if ($('pair-provider')) $('pair-provider').value = provider;
+  $('pair-title').textContent = trustedLocal ? 'Operator view disconnected'
+    : `Pair ${provider === 'codex' ? 'Codex' : 'Copilot'} inside this workspace`;
   window.operatorEmbed = Object.freeze({
-    provider, paired: Boolean(capability), api, connect,
-    close: () => disconnect('This frame is unpaired. Its durable transcript and draft are retained.'),
+    provider, accessMode, authorized: Boolean(capability), paired: !trustedLocal && Boolean(capability), api, connect,
+    close: () => disconnect(trustedLocal
+      ? 'This local view is disconnected. Its durable transcript and draft are retained.'
+      : 'This frame is unpaired. Its durable transcript and draft are retained.'),
   });
-  window.addEventListener('pagehide', () => disconnect('Frame closed. Pair again to reconnect.'));
+  window.addEventListener('pagehide', () => disconnect('Frame closed. Reconnect to read recorded output.'));
   emitHello();
 })();

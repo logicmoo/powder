@@ -51,6 +51,8 @@ def main() -> None:
     parser.add_argument("--codex-model", help="Optional operator-only native Codex model identifier")
     parser.add_argument("--offline", action="store_true", help="Recovery view only; disable both native adapters")
     pairing = parser.add_mutually_exclusive_group()
+    pairing.add_argument("--trusted-local", action="store_true",
+                         help="Explicit passwordless local access; retains Origin/frame guards and native permissions")
     pairing.add_argument("--pairing-stdin", action="store_true",
                          help="Read the local phrase from an inherited private UTF-8 pipe")
     pairing.add_argument("--pairing-file", type=Path,
@@ -63,7 +65,7 @@ def main() -> None:
     from .journal import Journal
     from .hub import OperatorHub
     from .monitor import ApplicationMonitor
-    from .security import Auth, HOST, InstanceLock, private_directory
+    from .security import Auth, HOST, InstanceLock, private_directory, check_private_directory
     from .server import create_app
     from .service import OperatorService
     from .workspace import Workspace
@@ -84,16 +86,22 @@ def main() -> None:
         except BridgeError as error:
             parser.error(error.message)
     # A provisioned root was checked, not repaired. Do not rewrite its healthy ACL.
-    if args.pairing_file is None or state != state_root:
+    if args.trusted_local and state.exists():
+        check_private_directory(args.state_dir.absolute())
+    elif args.pairing_file is None or state != state_root:
         private_directory(state)
     lock = InstanceLock(state)
     try:
-        try:
-            phrase = file_phrase if file_phrase is not None else read_pairing_phrase(from_stdin=args.pairing_stdin)
-        except ValueError as error:
-            parser.error(str(error))
-        auth = Auth(phrase)
-        del phrase, file_phrase
+        if args.trusted_local:
+            auth = Auth(trusted_local=True)
+        else:
+            try:
+                phrase = file_phrase if file_phrase is not None else read_pairing_phrase(from_stdin=args.pairing_stdin)
+            except ValueError as error:
+                parser.error(str(error))
+            auth = Auth(phrase)
+            del phrase
+        del file_phrase
         services = {}
         for provider, filename in (("copilot", "operator.sqlite3"), ("codex", "codex.sqlite3")):
             journal = Journal(state / filename, workspace, provider=provider)
@@ -104,6 +112,7 @@ def main() -> None:
                                                  adapter_factory=adapter_factory)
         service = OperatorHub(services)
         print(f"Recovery view: http://{HOST}:{args.port}/")
+        print("Access: trusted-local (no pairing phrase)." if args.trusted_local else "Access: local phrase pairing.")
         print("Native providers start only after explicit human Start, Send or supported Branch. No automatic sessions or prompts.")
         app = create_app(service, auth, args.port, allowed_parent=args.parent_origin)
         if args.application_status_url:

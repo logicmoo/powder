@@ -91,11 +91,33 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
 
     async def document(request):
         name = "recovery.html"
+        token = None
         try:
             auth.require(request.cookies.get(COOKIE))
         except BridgeError:
-            name = "login.html"
-        return web.FileResponse(STATIC / name)
+            if auth.trusted_local:
+                token = auth.local_login()
+            else:
+                name = "login.html"
+        if auth.trusted_local:
+            page = (STATIC / name).read_text(encoding="utf-8")
+            page = page.replace('<body>', '<body data-access-mode="trusted-local">')
+            page = page.replace('Unpair browser', 'Disconnect local view')
+            response = web.Response(text=page, content_type="text/html")
+        else:
+            response = web.FileResponse(STATIC / name)
+        if token:
+            local_cookie(response, token)
+        return response
+
+    async def disconnected(request):
+        if not auth.trusted_local:
+            raise web.HTTPNotFound()
+        return web.FileResponse(STATIC / "disconnected.html")
+
+    def local_cookie(response, token):
+        response.set_cookie(COOKIE, token, httponly=True, samesite="Strict", path="/",
+                            max_age=int(auth.lifetime))
 
     async def asset(request):
         name = request.match_info["name"]
@@ -104,13 +126,14 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
         return web.FileResponse(STATIC / name)
 
     async def login(request):
+        if auth.trusted_local:
+            raise BridgeError("pairing_disabled", "Reconnect the trusted-local view; no phrase is used.", 403)
         if request.content_type != "application/x-www-form-urlencoded":
             raise BridgeError("invalid_content_type", "Use the local pairing form.", 415)
         values = await request.post()
         token = auth.login(values.get("phrase", ""))
         response = web.Response(status=303, headers={"Location": "/"})
-        response.set_cookie(COOKIE, token, httponly=True, samesite="Strict", path="/",
-                            max_age=int(auth.lifetime))
+        local_cookie(response, token)
         return response
 
     def embed_document(provider, token="", error=""):
@@ -118,17 +141,34 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
             raise BridgeError("unknown_provider", "Select copilot or codex.", 400)
         # Configuration/capability is parsed and removed by operator-origin JS before use.
         page = (STATIC / "embed.html").read_text(encoding="utf-8")
+        if auth.trusted_local:
+            first = page.index('<section id="pairing-view"')
+            last = page.index('</section>', first) + len('</section>')
+            page = page[:first] + (
+                '<section id="pairing-view" aria-labelledby="pair-title" hidden>'
+                '<h1 id="pair-title">Operator view disconnected</h1>'
+                '<p id="pair-error" role="status"></p>'
+                '<a id="pair-retry" hidden>Reconnect</a></section>') + page[last:]
+            page = page.replace('<div id="paired-view" hidden>', '<div id="paired-view">')
+            page = page.replace('Unpair this frame', 'Disconnect local view')
         for key, value in {"PARENT": allowed_parent, "PROVIDER": provider,
-                           "CAPABILITY": token, "ERROR": error}.items():
+                           "CAPABILITY": token, "ERROR": error,
+                           "ACCESS_MODE": "trusted-local" if auth.trusted_local else "pairing"}.items():
             page = page.replace("{{" + key + "}}", html.escape(value, quote=True))
         return web.Response(text=page, content_type="text/html")
 
     async def embedded(request):
         if set(request.query) - {"provider"}:
             raise BridgeError("invalid_request", "Embed accepts only a provider selection.", 400)
-        return embed_document(request.query.get("provider", "copilot"))
+        provider = request.query.get("provider", "copilot")
+        if provider not in ("copilot", "codex"):
+            raise BridgeError("unknown_provider", "Select copilot or codex.", 400)
+        token = embed_auth.local_document(provider) if auth.trusted_local else ""
+        return embed_document(provider, token)
 
     async def embedded_login(request):
+        if auth.trusted_local:
+            raise BridgeError("pairing_disabled", "Reconnect the trusted-local view; no phrase is used.", 403)
         if request.content_type != "application/x-www-form-urlencoded":
             raise BridgeError("invalid_content_type", "Use the frame's native pairing form.", 415)
         values = await request.post()
@@ -372,6 +412,7 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
                                for ws in list(sockets)), return_exceptions=True)
 
     app.router.add_get("/", document)
+    app.router.add_get("/disconnected", disconnected)
     app.router.add_get("/assets/{name}", asset)
     app.router.add_post("/login", login)
     app.router.add_get("/embed", embedded)

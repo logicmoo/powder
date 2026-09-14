@@ -11,8 +11,9 @@ const python = fileURLToPath(new URL('../.venv/Scripts/python.exe', import.meta.
 const executable = process.env.LOGOS_CHROME || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
-async function startFixture() {
-  const child = spawn(python, ['-m', 'prolog.ow_dr.operator_bridge.tests.fixture_embed'],
+async function startFixture({trustedLocal = false} = {}) {
+  const child = spawn(python, ['-m', 'prolog.ow_dr.operator_bridge.tests.fixture_embed',
+    ...(trustedLocal ? ['--trusted-local'] : [])],
     {cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
   let stderr = '', output = '';
   child.stderr.on('data', chunk => { stderr += chunk; });
@@ -515,29 +516,30 @@ test('chat-first operators keep real native conversations, drafts, settings and 
   } finally { await browser.close(); await fixture.close(); }
 });
 
-test('cross-site embedded native adapters: pairing, typed handshake, isolation, permissions and replay', {
+for (const trustedLocal of [false, true]) test(`${trustedLocal ? 'trusted-local' : 'paired'} cross-site native adapters: handshake, isolation, permissions and replay`, {
   timeout: 120000, skip: !existsSync(executable) || !existsSync(python),
 }, async () => {
-  const fixture = await startFixture();
+  const fixture = await startFixture({trustedLocal});
   const browser = await launchChromium(executable);
   const {send, evaluate, wait} = browser;
   const stats = async () => (await fetch(fixture.parentURL + '/fixture/stats')).json();
   const frame = provider => attachFrame(browser, provider);
-  const pair = pairFrame;
+  const pair = trustedLocal ? child => child.until('document.querySelector("#bridge")?.textContent === "Online"') : pairFrame;
+  const initial = trustedLocal ? 'offline' : 'pairing';
   try {
     await send('Network.enable');
     await send('Network.setCookie', {name: 'powder_operator_session', value: 'synthetic-cookie-not-an-embed-capability',
       url: fixture.bridgeURL, httpOnly: true, sameSite: 'Strict'});
     await send('Emulation.setDeviceMetricsOverride', {width: 1200, height: 900, deviceScaleFactor: 1, mobile: false});
     await send('Page.navigate', {url: fixture.parentURL});
-    await wait('window.states?.copilot?.status === "pairing" && window.framesByProvider?.codex');
+    await wait(`window.states?.copilot?.status === "${initial}" && window.framesByProvider?.codex`);
     assert.deepEqual(await evaluate('framesByProvider.codex.getState()'), {
       provider:'codex', status:'not_loaded', conversationId:null, sequence:0, error:null, connected:false, unread:0,
     });
     assert.equal(await evaluate('document.querySelectorAll(".operator-agent-frame")[1].getAttribute("src")'), null,
       'inactive controller does not navigate an iframe before chip selection');
     await evaluate('document.getElementById("codex").click()');
-    await wait('window.states?.codex?.status === "pairing"');
+    await wait(`window.states?.codex?.status === "${initial}"`);
     let copilot = await frame('copilot');
     const codex = await frame('codex');
     await evaluate('document.getElementById("copilot").click()');
@@ -545,6 +547,28 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
     assert.equal((await stats()).codexStarts, 0);
     await pair(copilot);
     await pair(codex);
+    if (trustedLocal) {
+      for (const child of [copilot, codex]) {
+        assert.equal(await child.run('document.querySelector("#phrase")'), null);
+        assert.equal(await child.run('document.querySelector("#pair-form")'), null);
+        assert.equal(await child.run('operatorEmbed.paired'), false);
+        assert.equal(await child.run('document.querySelector("#logout").textContent'), 'Disconnect local view');
+      }
+      await copilot.run('document.querySelector("#logout").click()');
+      await copilot.until('!document.querySelector("#pair-retry").hidden');
+      assert.equal(await copilot.run('document.querySelector("#pair-retry").textContent'), 'Reconnect');
+      await copilot.run('document.querySelector("#pair-retry").click()');
+      await pair(copilot);
+      assert.equal((await stats()).copilotPrompts, 0, 'passwordless reconnect does not send a prompt');
+      assert.ok((await evaluate('window.messages')).every(message=>message.status !== 'pairing'));
+      for (const [name,width,height,mobile] of [['desktop',1200,900,false],['mobile',390,844,true]]) {
+        await send('Emulation.setDeviceMetricsOverride', {width,height,deviceScaleFactor:1,mobile});
+        assert.ok(await copilot.run('document.documentElement.scrollWidth <= document.documentElement.clientWidth'));
+        const image = await send('Page.captureScreenshot', {format:'png'});
+        writeFileSync(fileURLToPath(new URL(`./.artifacts/trusted-local-${name}.png`, import.meta.url)), Buffer.from(image.data,'base64'));
+      }
+      await send('Emulation.setDeviceMetricsOverride', {width:1200,height:900,deviceScaleFactor:1,mobile:false});
+    }
     assert.equal((await stats()).copilotStarts, 0, 'pairing cannot start native Copilot');
     assert.equal((await stats()).codexStarts, 0, 'pairing cannot start native Codex');
     assert.equal((await stats()).embedCookiesReceived, false, 'cross-site requests are cookie-independent');
@@ -686,13 +710,25 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
     assert.equal(await blockedFrame.run('document.querySelector("#pair-form")'), null,
       'CSP blocks the pairing document under a wrong parent');
     await send('Page.navigate', {url: fixture.bridgeURL + '/'});
-    await wait('document.getElementById("phrase")');
-    await evaluate(`document.getElementById('phrase').value='isolated fixture pairing phrase'; document.querySelector('form button').click()`);
+    if (!trustedLocal) {
+      await wait('document.getElementById("phrase")');
+      await evaluate(`document.getElementById('phrase').value='isolated fixture pairing phrase'; document.querySelector('form button').click()`);
+    }
     await wait('document.getElementById("bridge")?.textContent === "Online"');
     const {cookies} = await send('Network.getCookies', {urls:[fixture.bridgeURL]});
     assert.ok(cookies.some(cookie => cookie.name === 'powder_operator_session'
       && cookie.httpOnly && cookie.sameSite === 'Strict'));
     assert.equal((await stats()).copilotPrompts, counts.copilotPrompts, 'standalone recovery also only replays');
+    if (trustedLocal) {
+      assert.equal(await evaluate('document.querySelector("#phrase")'), null);
+      await evaluate('document.querySelector("#logout").click()');
+      await wait('location.pathname === "/disconnected"');
+      const disconnected = await send('Network.getCookies', {urls:[fixture.bridgeURL]});
+      assert.ok(!disconnected.cookies.some(cookie=>cookie.name === 'powder_operator_session'));
+      await evaluate('document.querySelector("a[href=\'/?provider=copilot\']").click()');
+      await wait('document.querySelector("#bridge")?.textContent === "Online"');
+      assert.equal((await stats()).copilotPrompts, counts.copilotPrompts);
+    }
   } finally {
     await browser.close();
     await fixture.close();

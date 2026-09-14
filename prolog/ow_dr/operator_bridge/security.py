@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 from .workspace import BridgeError
@@ -68,11 +69,15 @@ class InstanceLock:
 
 
 class Auth:
-    def __init__(self, phrase: str, *, lifetime: float = 12 * 60 * 60):
-        if len(phrase) < 16:
+    def __init__(self, phrase: str | None = None, *, lifetime: float = 12 * 60 * 60,
+                 trusted_local: bool = False):
+        if type(trusted_local) is not bool or (trusted_local and phrase is not None):
+            raise BridgeError("invalid_access_mode", "Select trusted-local access or phrase pairing, not both.")
+        if not trusted_local and (not isinstance(phrase, str) or len(phrase) < 16):
             raise BridgeError("weak_pairing_phrase", "Use at least 16 characters for local pairing.")
+        self.trusted_local = trusted_local
         self.salt = secrets.token_bytes(32)
-        self.digest = self._derive(phrase)
+        self.digest = None if trusted_local else self._derive(phrase)
         self.sessions: dict[str, float] = {}
         self.attempts: list[float] = []
         self.lifetime = lifetime
@@ -81,6 +86,8 @@ class Auth:
         return hashlib.pbkdf2_hmac("sha256", phrase.encode(), self.salt, 600_000)
 
     def verify_pairing(self, phrase: str) -> None:
+        if self.trusted_local:
+            raise BridgeError("pairing_disabled", "Trusted-local access does not use a pairing phrase.", 403)
         now = time.monotonic()
         self.attempts = [t for t in self.attempts if now - t < 60]
         if len(self.attempts) >= 5:
@@ -91,6 +98,14 @@ class Auth:
 
     def login(self, phrase: str) -> str:
         self.verify_pairing(phrase)
+        return self._issue()
+
+    def local_login(self) -> str:
+        if not self.trusted_local:
+            raise BridgeError("authentication_required", "Local access was not enabled by the host.", 403)
+        return self._issue()
+
+    def _issue(self) -> str:
         now = time.monotonic()
         self.sessions = {key: expiry for key, expiry in self.sessions.items() if expiry > now}
         if len(self.sessions) >= 16:
@@ -102,11 +117,34 @@ class Auth:
     def require(self, token: str | None) -> str:
         key = hashlib.sha256((token or "").encode()).hexdigest()
         if self.sessions.get(key, 0) <= time.monotonic():
-            raise BridgeError("authentication_required", "Pair this browser with the local bridge.", 401)
+            message = ("Reconnect this local operator view." if self.trusted_local
+                       else "Pair this browser with the local bridge.")
+            raise BridgeError("authentication_required", message, 401)
         return key
 
     def logout(self, token: str | None) -> None:
         self.sessions.pop(hashlib.sha256((token or "").encode()).hexdigest(), None)
+
+
+def check_private_directory(path: Path) -> None:
+    """Validate an existing state directory without repairing ACLs or reading files."""
+    try:
+        candidate = Path(os.path.abspath(path))
+        for component in (*reversed(candidate.parents), candidate):
+            info = component.lstat()
+            if component.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+                raise OSError("linked state path")
+        if not candidate.is_dir():
+            raise OSError("state is not a directory")
+        if os.name == "nt":
+            from .pairing_file import _WindowsFiles
+            with ExitStack() as stack:
+                _WindowsFiles().open(candidate, stack)
+        elif candidate.stat().st_uid != os.getuid() or candidate.stat().st_mode & 0o077:
+            raise OSError("state is not owner-private")
+    except (OSError, BridgeError):
+        raise BridgeError("unsafe_state_directory",
+                          "Existing trusted-local state must be owner-private and non-linked; it was not repaired.") from None
 
 
 _TOKENS = re.compile(

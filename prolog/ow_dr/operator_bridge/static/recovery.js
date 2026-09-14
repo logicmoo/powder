@@ -2,6 +2,7 @@
 (() => {
 const $ = id => document.getElementById(id);
 const embed = window.operatorEmbed;
+const trustedLocal = (embed?.accessMode || document.body.dataset.accessMode) === 'trusted-local';
 const selectedProvider = new URLSearchParams(location.search).get('provider');
 const provider = embed?.provider || (['copilot', 'codex'].includes(selectedProvider) ? selectedProvider : 'copilot');
 const providerName = provider === 'codex' ? 'Codex operator' : 'Copilot operator';
@@ -91,7 +92,10 @@ async function api(path, body) {
   const response = await fetch(scopedPath, body === undefined ? {cache: 'no-store'} : {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
   });
-  if (response.status === 401) { location.assign('/'); throw new Error('Browser pairing expired.'); }
+  if (response.status === 401) {
+    location.assign(trustedLocal ? '/disconnected' : '/');
+    throw new Error(trustedLocal ? 'Local view access expired.' : 'Browser pairing expired.');
+  }
   const value = await response.json();
   if (!response.ok) {
     const error = new Error(value.error?.message || 'Bridge request failed.');
@@ -351,7 +355,7 @@ $('stop').addEventListener('click', async () => {
 });
 $('logout').addEventListener('click', async () => {
   if (embed) { embed.close(); return; }
-  try { await api('/api/logout', {}); location.assign('/'); }
+  try { await api('/api/logout', {}); location.assign(trustedLocal ? '/disconnected' : '/'); }
   catch (error) { notice(error.message, true); }
 });
 $('settings-toggle').addEventListener('click', () => {
@@ -429,7 +433,7 @@ document.querySelectorAll('.provider-chip').forEach(link => {
     } catch (error) { notice(`Provider switch paused: draft was not saved. ${error.message}`, true); }
   });
 });
-if (!embed || embed.paired) {
+if (!embed || embed.authorized || embed.paired) {
   connect();
 }
 })();

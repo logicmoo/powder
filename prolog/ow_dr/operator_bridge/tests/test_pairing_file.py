@@ -11,7 +11,7 @@ from unittest.mock import patch
 from ..__main__ import main
 from ..embed import EmbedAuth
 from ..pairing_file import read_pairing_file
-from ..security import Auth, InstanceLock, private_directory
+from ..security import Auth, InstanceLock, private_directory, check_private_directory
 from ..workspace import BridgeError
 from .support import remove
 
@@ -44,6 +44,14 @@ class PairingFileTests(unittest.TestCase):
         token = embedded.login(self.phrase, "copilot")
         self.assertTrue(embedded.require(token, "copilot"))
         self.assertEqual(auth.sessions, {}, "File phrase does not create a standalone cookie session.")
+
+    def test_trusted_local_state_validation_never_reads_pairing_files_or_repairs_acl(self):
+        with patch("prolog.ow_dr.operator_bridge.pairing_file._WindowsFiles.read") as read:
+            with patch("prolog.ow_dr.operator_bridge.security.private_directory") as repair:
+                check_private_directory(self.root)
+                read.assert_not_called()
+                repair.assert_not_called()
+        self.assertEqual(self.path.read_text(encoding="utf-8"), self.phrase + "\n")
 
     def test_existing_native_owner_is_preserved(self):
         before = self.path.read_bytes()

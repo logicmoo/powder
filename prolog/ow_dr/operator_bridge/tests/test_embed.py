@@ -20,10 +20,12 @@ PHRASE = "isolated fixture pairing phrase"
 
 
 class EmbedTests(unittest.IsolatedAsyncioTestCase):
+    trusted_local = False
+
     async def asyncSetUp(self):
         asyncio.get_running_loop().slow_callback_duration = 2
         self.directory, self.hub = dual_fixture()
-        self.auth = Auth(PHRASE)
+        self.auth = Auth(trusted_local=True) if self.trusted_local else Auth(PHRASE)
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         self.port = sock.getsockname()[1]
@@ -45,8 +47,11 @@ class EmbedTests(unittest.IsolatedAsyncioTestCase):
         remove(self.directory)
 
     async def pair(self, provider="copilot"):
-        response = await self.client.post(self.base + "/embed/login", headers=self.headers,
-                                         data={"provider": provider, "phrase": PHRASE})
+        if self.trusted_local:
+            response = await self.client.get(self.base + "/embed?provider=" + provider, headers=self.headers)
+        else:
+            response = await self.client.post(self.base + "/embed/login", headers=self.headers,
+                                             data={"provider": provider, "phrase": PHRASE})
         self.assertEqual(response.status, 200)
         self.assertFalse(response.cookies)
         body = await response.text()
@@ -147,7 +152,7 @@ class EmbedTests(unittest.IsolatedAsyncioTestCase):
         paired = await self.pair()
         response = await self.client.get(self.base + "/api/status", headers=paired)
         self.assertEqual(response.status, 401)
-        cookie = self.auth.login(PHRASE)
+        cookie = self.auth.local_login() if self.trusted_local else self.auth.login(PHRASE)
         response = await self.post("copilot", "/status",
                                   {**self.headers, "Cookie": f"{COOKIE}={cookie}"})
         self.assertEqual(response.status, 401)
@@ -243,11 +248,61 @@ class EmbedTests(unittest.IsolatedAsyncioTestCase):
 
     def test_unclaimed_capability_expires_and_is_never_a_cookie_session(self):
         auth = EmbedAuth(self.auth)
-        token = auth.login(PHRASE, "copilot")
+        token = auth.local_document("copilot") if self.trusted_local else auth.login(PHRASE, "copilot")
         self.assertEqual(self.auth.sessions, {})
         auth.sessions[auth.key(token)]["connectBy"] = 0
         with self.assertRaises(BridgeError):
             auth.require(token, "copilot")
+
+
+class TrustedLocalEmbedTests(EmbedTests):
+    trusted_local = True
+
+    async def test_local_documents_need_no_phrase_but_do_not_authorize_unconnected_commands(self):
+        first, second = await self.pair(), await self.pair()
+        self.assertNotEqual(first[EMBED_HEADER], second[EMBED_HEADER])
+        response = await self.post("copilot", "/commands", first,
+                                   {"id": "no-stream", "kind": "start_session"})
+        self.assertEqual(response.status, 409)
+        page = await self.client.get(self.base + "/embed", headers=self.headers)
+        body = await page.text()
+        self.assertIn('data-access-mode="trusted-local"', body)
+        self.assertNotIn('id="phrase"', body)
+        self.assertNotIn('id="pair-form"', body)
+        for route in ("/login", "/embed/login"):
+            response = await self.client.post(self.base + route, headers=self.headers,
+                                             data={"phrase": PHRASE, "provider": "copilot"})
+            self.assertEqual(response.status, 403)
+        self.assertFalse(self.hub.get("copilot").adapter.starts)
+
+    async def test_standalone_local_cookie_is_strict_and_disconnect_does_not_reissue_it(self):
+        response = await self.client.get(self.base + "/", headers=self.headers)
+        cookie = response.cookies[COOKIE]
+        self.assertTrue(cookie["httponly"])
+        self.assertEqual(cookie["samesite"], "Strict")
+        self.assertEqual(cookie["domain"], "")
+        body = await response.text()
+        self.assertNotIn('id="phrase"', body)
+        self.assertNotIn(cookie.value, body)
+        headers = {**self.headers, "Cookie": f"{COOKIE}={cookie.value}"}
+        self.assertEqual((await self.client.get(self.base + "/api/status", headers=headers)).status, 200)
+        await self.client.post(self.base + "/api/logout", headers=headers, json={})
+        self.assertEqual((await self.client.get(self.base + "/api/status", headers=headers)).status, 401)
+        response = await self.client.get(self.base + "/disconnected", headers=self.headers)
+        self.assertFalse(response.cookies)
+        self.assertIn("Reconnect Copilot", await response.text())
+        self.assertFalse(self.hub.get("copilot").adapter.starts)
+
+    async def test_foreign_documents_and_client_mode_switches_are_rejected(self):
+        for route in ("/", "/embed"):
+            for change in ({"Origin": "http://localhost:3050"}, {"Origin": "null"},
+                           {"Host": f"localhost:{self.port}"}):
+                response = await self.client.get(self.base + route, headers={**self.headers, **change})
+                self.assertEqual(response.status, 403)
+                self.assertFalse(response.cookies)
+                self.assertNotIn('data-capability=', await response.text())
+        response = await self.client.get(self.base + "/embed?trusted-local=true", headers=self.headers)
+        self.assertEqual(response.status, 400)
 
 
 if __name__ == "__main__":

@@ -57,7 +57,7 @@ class BrowserClient(FakeClient):
         return self.session
 
 
-async def main():
+async def main(*, trusted_local=False):
     directory, journal, _, first = fixture()
     clients, rpc_calls, cookies = [], [], []
     store = {}
@@ -97,7 +97,7 @@ async def main():
     bridge_port, parent_port = [sock.getsockname()[1] for sock in sockets]
     bridge_url = f"http://{HOST}:{bridge_port}"
     parent_url = f"http://localhost:{parent_port}"
-    auth = Auth("isolated fixture pairing phrase")
+    auth = Auth(trusted_local=True) if trusted_local else Auth("isolated fixture pairing phrase")
     app = create_app(hub, auth, bridge_port, allowed_parent=parent_url)
 
     @web.middleware
@@ -169,4 +169,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(trusted_local="--trusted-local" in sys.argv))

@@ -5,7 +5,8 @@ standalone recovery view, **not a Prolog job**.
 It does not alter the existing pools, loader, application server, Teacher,
 Symbolic agent, source corpus, or shared registries.
 
-**Current state:** authenticated transport, durable journals, embedded/recovery views and
+**Current state:** isolated transport with explicit trusted-local or phrase-paired access,
+durable journals, embedded/recovery views and
 separate native adapters are implemented. Real **protocol health only** passed for
 Copilot CLI **1.0.82** with Python SDK **1.0.13**, and Codex CLI **0.149.0**.
 Native session/turn/permission behavior is covered with explicit fake SDK/protocol
@@ -20,6 +21,55 @@ Python 3.11+, project-local `aiohttp` and the pinned official Copilot SDK:
 python -m venv prolog\ow_dr\operator_bridge\.venv
 prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m pip install -r prolog\ow_dr\operator_bridge\requirements.txt
 ```
+
+### Trusted local installation — no pairing screen
+
+The authorized local installation can enable passwordless access with:
+
+```powershell
+prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m prolog.ow_dr.operator_bridge --trusted-local
+```
+
+Keep the existing `--state-dir`, provider executable/model, port and parent-origin
+options. **Replace** `--pairing-file PATH` / `--pairing-stdin` with
+`--trusted-local`; the three modes are mutually exclusive. This is a host CLI
+choice, never a browser query parameter or administrative API. Without it, the
+existing phrase-pairing mode remains the default.
+
+Trusted-local startup does not read, create, rotate or delete a pairing file.
+Existing state is checked for private ownership/non-linked paths without ACL
+repair. It reuses the same original journals, conversation UUIDs, native IDs and
+catalog; no migration or transcript deletion is involved.
+
+* A fresh `/embed?provider=copilot|codex` document gets its own provider-scoped
+  capability (30 seconds to connect; 12-hour maximum lifetime). It stays in that operator document's memory—not
+  parent messages, URLs, cookies, browser storage or logs. No password form is
+  rendered. Output initialization still waits for the exact configured parent,
+  source window and nonce/probe handshake.
+* The standalone `/` document issues a host-only HttpOnly SameSite Strict cookie,
+  without a password screen. Cookie sessions and frame capabilities remain
+  separate. Authenticated APIs do **not** become anonymous endpoints.
+* **Disconnect local view** revokes access. Embedded **Reconnect** obtains a new
+  document capability; standalone disconnect stays on a read-only reconnect page
+  without silently issuing another cookie. Neither path starts/resumes native
+  sessions, sends prompts, replays commands or approves permissions.
+* Binding stays `127.0.0.1`. Exact `operator.localhost:PORT`, own-Origin/CSRF and
+  fetch-site checks, standalone `frame-ancestors 'none'`, the single allowed embed
+  parent and no-CORS policy remain enforced. Teacher/Cyc gain no operator tool,
+  token or browser API access. Native permission decisions and Start anyway
+  remain explicit, and disconnected principals cannot authorize queued work.
+
+This deliberately trusts local host access rather than requiring a human phrase.
+It is **not** a defense against hostile local software capable of making its own
+HTTP requests/headers. Do not select it on an untrusted/shared installation.
+It does not authenticate either native provider account or expand native
+permission policy.
+
+Publication requires a coordinator-owned, authorized idle bridge replacement
+with `--trusted-local` and a view refresh. Do not start a second owner, alter
+the existing phrase or stop active native work to switch modes.
+
+### Default phrase-paired installation
 
 Only after the coordinator freezes the integrated release and the user
 authorizes this specific start:
@@ -77,7 +127,7 @@ prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m prolog.ow_dr.operator_b
 ```
 
 Only the path enters argv, never the phrase. Console `getpass` remains the default;
-`--pairing-file` and `--pairing-stdin` are mutually exclusive. The file is an
+`--pairing-file`, `--pairing-stdin` and `--trusted-local` are mutually exclusive. The file is an
 explicit exception to non-persistent phrase provisioning, **not** permission to
 persist browser/session capabilities.
 
@@ -110,7 +160,7 @@ default `.state` ACL is not rewritten during this startup path. The existing
 native instance lock still prevents a second owner. Before any provisioning or
 launch, the coordinator must preserve an already healthy bridge/state; do not
 replace its phrase or rotate its credentials merely to start another process.
-An authorized unattended start is possible only after valid private provisioning.
+In phrase-pairing mode, an authorized unattended start requires valid private provisioning.
 Authentication/native availability must still be observed, never inferred.
 No operator/model Start is performed by this mode.
 
@@ -134,8 +184,8 @@ permissions and cancellation routing. The old `.state/operator.sqlite3`
 remains the Copilot journal; `.state/codex.sqlite3` is separate. A provider cannot
 open another provider's journal or be assigned its native adapter. Native
 authentication is provider-owned: there is no sharing of Copilot credentials,
-models or protocol assumptions with Codex. The common local pairing cookie
-authenticates the **human to the bridge**, not either native provider account.
+models or protocol assumptions with Codex. The local cookie grants browser access
+under the selected host mode, not authentication to either native provider account.
 
 ### Chat-first, multiple durable conversations
 
@@ -302,7 +352,7 @@ and processor were checked as well. Copilot capability was checked against the
 installed public SDK interface; no unsupported RPC is guessed.
 
 **Publication:** this revision requires an authorized Python bridge restart and
-fresh pairing inside the operator view. Old clients without conversation IDs
+a fresh view connection (phrase pairing only in the default mode). Old clients without conversation IDs
 fail closed. A browser refresh cannot reload Python modules. Do not restart a
 live bridge with active work just to publish UI files; the coordinator owns
 publication. This work did not inspect a production pairing file, restart the
@@ -310,12 +360,16 @@ existing 8063 bridge, or perform real native/model turns.
 
 Validation for this stage: native SDK/stdio fixture tests exercise distinct
 native IDs, New/Previous, restart/resume, draft/model persistence, idempotency,
-cancel/permission routing, native forks and cancelled detach. Ten real Chromium scenarios
+cancel/permission routing, native forks and cancelled detach. Eleven real Chromium scenarios
 cover standalone and embedded chat, stale/delayed responses, Unicode replay,
 permissions outside Settings, origin/window isolation, liveness recovery,
 branch acknowledgement/provenance, FIFO Enqueue/Interrupt, and disabled styles
 including hover/active, durable local clocks with visibility pause/resume, and
-explicit native first replies with draft preservation and busy FIFO handling.
+explicit native first replies with draft preservation and busy FIFO handling,
+and actual cross-site passwordless local initialization/reconnect. Trusted-local
+CLI tests prove phrase readers and ACL repair are not called; native Windows ACL
+validation and both authentication modes share the HTTP/provider/conversation
+and fail-closed permission tests.
 These are synthetic conversations, not evidence of a logged-in account or
 successful real model inference.
 

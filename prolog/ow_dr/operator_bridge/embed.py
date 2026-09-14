@@ -39,12 +39,20 @@ class EmbedAuth:
 
     def login(self, phrase: str, provider: str) -> str:
         self.auth.verify_pairing(phrase)
+        return self._issue(provider)
+
+    def local_document(self, provider: str) -> str:
+        if not self.auth.trusted_local:
+            raise BridgeError("authentication_required", "Local access was not enabled by the host.", 403)
+        return self._issue(provider)
+
+    def _issue(self, provider: str) -> str:
         now = time.monotonic()
         self.sessions = {key: value for key, value in self.sessions.items()
                          if value["expires"] > now
                          and (value["connected"] or value["connectBy"] > now)}
         if len(self.sessions) >= 16:
-            raise BridgeError("session_limit", "Too many paired operator frames.", 429)
+            raise BridgeError("session_limit", "Too many operator views. Close unused views and retry.", 429)
         token = secrets.token_urlsafe(48)
         self.sessions[self.key(token)] = {
             "provider": provider, "expires": now + self.auth.lifetime,
@@ -59,9 +67,10 @@ class EmbedAuth:
         if (not session or session["expires"] <= now
                 or (not session["connected"] and session["connectBy"] <= now)):
             self.revoke(token)
-            raise BridgeError("authentication_required", "Pair this operator frame again.", 401)
+            message = "Reconnect this operator frame." if self.auth.trusted_local else "Pair this operator frame again."
+            raise BridgeError("authentication_required", message, 401)
         if session["provider"] != provider:
-            raise BridgeError("provider_mismatch", "Frame pairing belongs to another provider.", 403)
+            raise BridgeError("provider_mismatch", "Frame access belongs to another provider.", 403)
         return key
 
     def connect(self, token: str, provider: str) -> str:

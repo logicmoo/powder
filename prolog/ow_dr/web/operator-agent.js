@@ -1,5 +1,5 @@
 const CHANNEL = 'powder.operator.embed.v1';
-const STATES = new Set(['pairing', 'disconnected', 'offline', 'idle', 'busy', 'awaiting_permission']);
+const STATES = new Set(['connecting', 'pairing', 'disconnected', 'offline', 'idle', 'busy', 'awaiting_permission']);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join(',') === keys.sort().join(',');
@@ -65,7 +65,8 @@ export function createOperatorAgent(host, {
         || !(message.conversationId === null || (typeof message.conversationId === 'string' && UUID.test(message.conversationId)))
         || !Number.isSafeInteger(message.sequence) || message.sequence < 0
         || (message.conversationId === null && message.sequence !== 0)
-        || !(message.error === null || message.error === 'Operator view disconnected. Pair again inside the isolated view.')
+        || ![null, 'Operator view disconnected. Pair again inside the isolated view.',
+          'Operator view disconnected. Reconnect inside the isolated view.'].includes(message.error)
         || !Number.isInteger(message.unread) || message.unread < 0 || message.unread > 999) return;
     if (message.conversationId !== null && message.conversationId === state.conversationId
         && message.sequence < state.sequence) return;
@@ -79,7 +80,7 @@ export function createOperatorAgent(host, {
   function load() {
     loaded = true; nonce = undefined; revision = 0; retry.hidden = true;
     status.hidden = false; status.textContent = 'Connecting the view only. No operator starts automatically.';
-    setState({...state, status: 'pairing', connected: false, error: null});
+    setState({...state, status: 'connecting', connected: false, error: null});
     armTimeout(); iframe.src = url.href;
   }
   function activate() {
