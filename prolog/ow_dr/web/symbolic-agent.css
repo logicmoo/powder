@@ -17,6 +17,7 @@
 .cyc-message pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 75ch; }
 .cyc-composer { display: grid; gap: 12px; padding: 18px; border-top: 1px solid var(--line); }
 .cyc-profile-summary { font-size: .875rem; line-height: 1.5; overflow-wrap: anywhere; }
+.cyc-control-reason { margin: 0; overflow-wrap: anywhere; }
 .symbolic-agent .field { display: grid; gap: 6px; min-width: 0; }
 .cyc-loaded-config { display: grid; gap: 14px; }
 .symbolic-agent select { min-width: 0; max-width: 100%; }

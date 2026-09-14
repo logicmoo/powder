@@ -93,7 +93,7 @@ export function createSymbolicAgent(host, {
   const panel = el('section', { className: 'symbolic-agent', hidden: !active, 'data-agent': 'symbolic' },
     heading('Cyc', 'Knowledge-defined text dialogue and workflows. No model, network fallback or operator access.'));
   const feedback = el('p', { className: 'cyc-feedback', role: 'status', 'aria-live': 'polite' },
-    'Send a message or choose Say something. Nothing starts until you ask.');
+    'Write a message, then Send. Nothing starts on conversation selection.');
   const identity = el('p', { className: 'cyc-identity' });
   const transcript = el('section', { className: 'cyc-transcript', 'aria-label': 'Cyc conversation history' });
   const picker = el('select', { 'aria-label': 'Cyc conversations', onchange: selectConversation });
@@ -106,8 +106,9 @@ export function createSymbolicAgent(host, {
   })) controls[action] = button(label, () => perform(action), action === 'send' ? 'button' : 'button secondary');
   const refresh = button('Refresh state', refreshState, 'button secondary');
   const recover = button('Inspect uncertain request', recoverRequest, 'button secondary');
-  const saySomething = button('Say something', () => perform('send', { text: 'hello' }), 'button secondary');
-  saySomething.title = 'Send “hello” through the selected symbolic interpreter; no model is used.';
+  const controlReason = el('p', { id: `${viewId}-control-reason`, className: 'muted cyc-control-reason',
+    role: 'status', 'aria-live': 'polite' });
+  for (const control of Object.values(controls)) control.setAttribute('aria-describedby', controlReason.id);
   const settingsToggle = button('Settings', () => showSettings(!settingsOpen), 'button secondary');
   settingsToggle.setAttribute('aria-controls', `${viewId}-settings`);
   settingsToggle.setAttribute('aria-expanded', 'false');
@@ -118,8 +119,8 @@ export function createSymbolicAgent(host, {
     identity, transcript, requests,
     el('form', { className: 'cyc-composer', onsubmit: event => { event.preventDefault(); perform('send'); } },
       el('label', { className: 'field' }, 'Message to Cyc', text),
-      el('div', { className: 'cyc-actions' }, controls.send, saySomething, controls.continue, controls.interrupt, controls.resume, controls.stop),
-      profileSummary),
+      el('div', { className: 'cyc-actions' }, controls.send, controls.continue, controls.interrupt, controls.resume, controls.stop),
+      controlReason, profileSummary),
     feedback);
   const inspector = el('aside', { className: 'cyc-inspector', id: `${viewId}-settings`, hidden: true,
     'aria-label': 'Cyc settings and inspection', onkeydown: event => {
@@ -244,6 +245,25 @@ export function createSymbolicAgent(host, {
     for (let pending = unknown; pending && count < 4; pending = pending.previous) count++;
     return count;
   }
+  function controlExplanation(profileReady) {
+    if (busy) return operation?.kind === 'write'
+      ? 'A bounded step is running. Cyc has no enqueue queue or mid-step cancellation. Wait for the response before sending or interrupting; your draft is retained.'
+      : 'Reading durable state. Execution controls are unavailable until the read completes; no work is queued.';
+    if (pendingCount() >= 4) return 'Four uncertain requests need inspection before another control request. No action will be replayed.';
+    if (unknown) return 'A request outcome is unknown. Inspect its durable receipt before sending or continuing; nothing is replayed automatically.';
+    if (run?.pending?.kind === 'action' && run.pending.stage !== 'planned')
+      return 'The action outcome is unresolved. Inspect Actions in Settings; Continue and Resume cannot replay it.';
+    if (run?.phase === 'interrupted') return 'Resume returns to the saved boundary without replaying an action. Send is unavailable while interrupted.';
+    if (['stopped', 'failed'].includes(run?.phase)) return 'This run has ended. Choose New conversation to start a separate run.';
+    if (run?.pending?.kind === 'form') return 'Complete the visible form before sending another message. No messages are queued.';
+    if (run?.pending?.kind === 'approval') return 'A trusted approval adapter is unavailable. This request cannot proceed here.';
+    if (run?.pending?.kind === 'action') return 'Continue dispatches the planned action; Interrupt pauses before dispatch. New messages are not queued.';
+    if (['running', 'compensating'].includes(run?.phase))
+      return 'Continue advances one bounded step. Send is unavailable until the workflow returns to input; nothing runs between requests.';
+    if (currentId && !run) return 'Saved state is unavailable. Use Refresh state in Settings before requesting execution.';
+    if (!currentId && !profileReady) return 'Choose an available knowledge profile in Settings before sending.';
+    return text.value.trim() ? '' : 'Write a message to enable Send.';
+  }
   function update() {
     const allowed = controlAvailability(run, busy, !!unknown);
     for (const [name, control] of Object.entries(controls)) control.disabled = !allowed[name];
@@ -252,10 +272,16 @@ export function createSymbolicAgent(host, {
     const newReady = !currentId && profileReady && !busy && !unknown;
     controls.start.disabled = !newReady;
     controls.send.disabled = !(allowed.send || newReady) || !text.value.trim();
-    saySomething.disabled = !(allowed.send || newReady);
     const visible = controlAvailability(run, false, !!unknown);
     for (const name of ['continue', 'interrupt', 'resume', 'stop']) controls[name].hidden = !visible[name];
+    if (currentId && operation?.kind === 'write') controls.interrupt.hidden = false;
     if (pendingCount() >= 4) { controls.stop.disabled = true; controls.interrupt.disabled = true; }
+    const explanation = controlExplanation(profileReady);
+    controlReason.textContent = explanation; controlReason.hidden = !explanation;
+    for (const control of Object.values(controls)) control.title = control.disabled ? explanation : '';
+    if (!controls.interrupt.disabled) controls.interrupt.title = 'Pause at a completed request boundary; an in-flight step cannot be cancelled.';
+    if (!controls.continue.disabled) controls.continue.title = run.pending?.kind === 'action'
+      ? 'Dispatch the inspected planned action once.' : 'Advance the saved continuation by one bounded step.';
     loadedConfig.hidden = profile.value !== 'loaded';
     profileNotice.textContent = selectedProfile
       ? `${selectedProfile.description} Try: ${(selectedProfile.examples ?? []).join(', ')}. Read as an isolated program only after Start; never added to the live KB.`
@@ -272,10 +298,10 @@ export function createSymbolicAgent(host, {
       : currentId ? lastError ? 'Cyc · saved conversation unavailable' : 'Cyc · opening saved conversation' : 'New conversation';
     if (unknown) identity.textContent += ' · request outcome unknown — refresh and inspect; never automatically retried';
     profileSummary.textContent = currentId
-      ? `Profile: ${run?.source?.knowledgeAgent ?? history.find(item => item.id === currentId)?.agent ?? 'loading'}. “Say something” sends “hello” through its knowledge; it never calls a model.`
+      ? `Profile: ${run?.source?.knowledgeAgent ?? history.find(item => item.id === currentId)?.agent ?? 'loading'}. Messages use its defined language; no model is called.`
       : profile.value === 'loaded'
         ? `New uses your loaded profile${agent.value.trim() ? ` ${agent.value.trim()}` : ''}. Configure its agent and MTs in Settings. Send starts it; selecting a conversation does not.`
-        : `New uses ${selectedProfile?.label ?? (profile.value ? `saved profile ${profile.value}` : 'the limited app-owned Cyc starter')}. Send or “Say something” starts it; nothing starts on selection.`;
+        : `New uses ${selectedProfile?.label ?? (profile.value ? `saved profile ${profile.value}` : 'the limited app-owned Cyc starter')}. Send starts it; nothing starts on selection.${selectedProfile?.examples?.length ? ` Examples: ${selectedProfile.examples.join(', ')}.` : ''}`;
     emit();
   }
   function selectTab(name) {
@@ -298,7 +324,7 @@ export function createSymbolicAgent(host, {
     if (!events.length) transcript.append(el('div', { className: 'cyc-empty' },
       el('h2', {}, currentId ? 'Conversation' : 'What would you like to say?'),
       el('p', {}, currentId ? 'Use the selected knowledge-defined language. Missing coverage is a gap, never a model fallback.'
-        : 'Write a message, or choose Say something to send “hello.” Change the profile and inspect evidence in Settings.')));
+        : 'Write a message. Choose a knowledge profile and inspect evidence in Settings.')));
     for (const event of events) {
       const input = event.request?.input?.term;
       if (input?.type === 'compound' && input.functor === 'text' && input.args[0]?.type === 'string')

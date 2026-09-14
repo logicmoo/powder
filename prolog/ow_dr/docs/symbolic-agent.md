@@ -424,7 +424,7 @@ increment it or unread. In-flight results arriving while hidden count only new
 events. Reactivation clears the view's unread count without resetting sequence.
 The default view is chat-first: the conversation selector contains **New
 conversation** and saved runs, followed by the transcript, composer, **Send** and
-**Say something**. **Settings** toggles the profile/state/proof/action/gap/TODO/audit
+applicable workflow controls. **Settings** toggles the profile/state/proof/action/gap/TODO/audit
 inspector with `aria-expanded`/`aria-controls`; Escape closes it. Settings starts
 collapsed on controller creation and never navigates the main route. Pending
 typed forms, unavailable approval notices and applicable Continue/Interrupt/
@@ -432,15 +432,22 @@ Resume/Stop controls remain in the chat view, not behind Settings.
 Disabled buttons have a muted filled surface, dashed border and unavailable
 cursor, not just reduced opacity. Labels remain readable; hover does not restore
 an active appearance, and the border cue survives forced-color modes.
+An adjacent accessible explanation states why controls are unavailable. Cyc
+has no asynchronous enqueue queue or mid-step cancellation: while a synchronous
+bounded request is active, Send/Continue/Interrupt cannot submit another request.
+After the response, Continue advances a saved step and Interrupt pauses at that
+completed request boundary. Reads, typed forms, unknown outcomes and ended runs
+have their own reasons and recovery guidance. No ambiguous greeting shortcut or
+fake Enqueue action is exposed; users enter their own message.
 
 New is a local draft, not a durable run. Its first explicit Send creates the
 selected profile run and, only after a verified creation response, sends that
 message with the returned run identity and revision. There is no Resume detour.
 With no authored profile configured, the UI clearly selects the limited
 app-owned Cyc starter; the server still receives an explicit `profile` selector.
-**Say something** explicitly sends the text `hello` through the same interpreter,
-preserving an unsent composer draft. No greeting response is synthesized in the
-UI, and a custom profile's missing language remains a genuine gap. Merely loading
+Sending `hello` is an ordinary explicit message through the same interpreter,
+not a mandatory greeting. No response is synthesized in the UI, and a custom
+profile's missing language remains a genuine gap. Merely loading
 the page, choosing New, selecting a profile or switching chips starts nothing.
 
 Choosing a previous conversation immediately opens its cached transcript/draft
@@ -561,7 +568,7 @@ offers New/Previous rather than an unsafe or misleading Branch button.
 
 ## Explicit app-owned starter
 
-Choose **New conversation**, then Send or **Say something**. The default choice is
+Choose **New conversation**, write a message, then Send. The default choice is
 clearly labeled as the limited app-owned Cyc starter. To choose another profile,
 open **Settings → Knowledge**; the advanced **Start** button is optional.
 Discovery/selection alone executes no program. The fixed file
