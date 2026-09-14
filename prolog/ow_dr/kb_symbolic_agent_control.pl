@@ -1,7 +1,9 @@
 :- module(kb_symbolic_agent_control,
-          [open_control/2,close_control/1,create_prepared/6,get/3,advance_prepared/7,
+          [open_control/2,close_control/1,create_prepared/6,create_prepared/7,
+           get/3,advance_prepared/7,advance_request/8,mark_dispatched/4,mark_dispatched/5,
            record_outcome/6,events/5]).
 :- use_module(kb_kee,[]).
+:- use_module(kb_kee_schema,[]).
 :- use_module(kb_symbolic_agent_kee,[]).
 :- use_module(kb_symbolic_agent_program,[]).
 :- use_module(kb_symbolic_agent_engine,[]).
@@ -29,6 +31,9 @@ close_control(control(Token,_,_)) :- kb_kee:close_context(Token).
 % Program is a host-verified immutable semantic snapshot, not client JSON.
 % This prepared interface is also the explicit isolated-fixture boundary.
 create_prepared(Control,Program,Generation,Options,CallId,Reply) :-
+    create_prepared(Control,Program,Generation,Options,CallId,json{},Reply).
+create_prepared(Control,Program,Generation,Options,CallId,Host,Reply) :-
+    must_be(dict,Host),must_be(ground,Host),
     must_be(integer,Generation),(Generation>=0->true;domain_error(kb_generation,Generation)),
     kb_symbolic_agent_engine:limits(Options,Limits),
     kb_symbolic_agent_program:initial_state(Program,Engine),
@@ -39,11 +44,12 @@ create_prepared(Control,Program,Generation,Options,CallId,Reply) :-
     Source=json{schema:"powder.symbolic-source.v1",knowledgeAgent:AgentKey,
       definitionMt:DefinitionKey,kbGeneration:Generation,programVersion:Program.version,
       hostVersion:"powder.symbolic-control.v1",ceilingVersion:"powder.symbolic-ceiling.v2",
-      limits:json{steps:Limits.steps,actions:Limits.actions,seconds:Limits.seconds}},
+      limits:json{steps:Limits.steps,actions:Limits.actions,seconds:Limits.seconds},host:Host},
     json_text(Source,SourceJSON,16384),
     kb_symbolic_agent_state:encode_cursor(Frame,StateJSON),
     control_call(Control,"kee_ledger_status",json{},"symbolic-control/status",Status),
-    Args=json{revision:Status.result.revision,mt:StateText,sourceJson:SourceJSON,stateJson:StateJSON},
+    Args=json{revision:Status.result.domainRevisions.agent_control,
+      mt:StateText,sourceJson:SourceJSON,stateJson:StateJSON},
     control_call(Control,"kee_agent_run_create",Args,CallId,Created),
     get(Control,Created.result.result.id,Reply).
 
@@ -57,32 +63,50 @@ get(Control,Id,Reply) :-
     phase_status(Frame.engine.phase,ExpectedStatus),
     (((R.data.status=="created",Frame.engine.phase==awaiting_input);
       R.data.status==ExpectedStatus)->
-        Reply=run{id:Id,revision:Raw.result.revision,resource:R,source:Source,frame:Frame};
+        Reply=run{id:Id,revision:Raw.result.domainRevision,resource:R,source:Source,frame:Frame};
         throw(error(symbolic_cursor_status_mismatch,_))).
 
 advance_prepared(Control,Program,Id,Input,CallId,Reply,Effects) :-
+    advance_request(Control,Program,Id,Input,CallId,json{},Reply,Effects).
+advance_request(Control,Program,Id,Input,CallId,Request,Reply,Effects) :-
     must_be(nonvar,Input),
+    must_be(dict,Request),must_be(ground,Request),
     ((Input=action_result(_,_);Input=host_approval(_,_,_))->
       throw(error(symbolic_host_receipt_required,_));
-      advance_checked(Control,Program,Id,Input,CallId,Reply,Effects)).
-advance_checked(Control,Program,Id,Input,CallId,Reply,Effects) :-
+      advance_checked(Control,Program,Id,Input,CallId,Request,Reply,Effects)).
+advance_checked(Control,Program,Id,Input,CallId,Request,Reply,Effects) :-
     get(Control,Id,Before),verify_program(Program,Before),
     limits_options(Before.source.limits,Options),
     ((Before.frame.turns<1000;memberchk(Input,[stop,interrupt]))->
-      advance_bounded(Control,Program,Before,Input,Options,CallId,Reply,Effects);
+      advance_bounded(Control,Program,Before,Input,Options,CallId,Request,Reply,Effects);
       throw(error(symbolic_turn_limit,_))).
-advance_bounded(Control,Program,Before,Input,Options,CallId,Reply,Effects) :-
+advance_bounded(Control,Program,Before,Input,Options,CallId,Request,Reply,Effects) :-
     (Input==resume,Before.resource.data.status=="created"->
       Engine=Before.frame.engine,Step=step_result{state:Engine,effects:[],events:[control(started)]}
     ;kb_symbolic_agent_engine:step(Program,Before.frame.engine,Input,Options,Step)),
     Turns is Before.frame.turns+1,
     pending_frame(Control,Before,Step,Pending,Kind,Action),
     Next=Before.frame.put(_{engine:Step.state,pending:Pending,turns:Turns}),
-    event_data(Step.events,Event),
+    event_data(Step.events,SemanticEvent),Event=SemanticEvent.put(request,Request),
     phase_status(Step.state.phase,Status),
     (Input==stop->EventKind="stop";EventKind=Kind),
     persist(Control,Before,Next,Status,EventKind,Event,Action,CallId,Reply),
     Effects=Step.effects.
+
+% Persist the boundary before any host dispatch. A crash after this record is
+% explicitly unresolved, never an invitation to execute the intent again.
+mark_dispatched(Control,Id,CallId,Reply) :-
+    mark_dispatched(Control,Id,CallId,json{},Reply).
+mark_dispatched(Control,Id,CallId,Request,Reply) :-
+    get(Control,Id,Before),Pending=Before.frame.pending,
+    (is_dict(Pending),Pending.stage=="planned",
+     Before.frame.engine.phase==awaiting_action->true;
+       throw(error(symbolic_action_not_planned,_))),
+    Next=Before.frame.put(pending,Pending.put(stage,"dispatched")),
+    Action=json{tool:Pending.intent.capability,callId:Pending.callId,
+      status:"dispatched",commitRevision:null},
+    Event=json{kind:"dispatch",callId:Pending.callId,request:Request},
+    persist(Control,Before,Next,"running","action_intent",Event,Action,CallId,Reply).
 
 pending_frame(Control,Before,Step,Pending,"action_intent",Action) :-
     Step.effects=[Intent],!,
@@ -167,7 +191,7 @@ phase_status(_,"running").
 event_data(Events,json{kind:"semantic",cursor:Wire}) :-
     kb_symbolic_agent_state:encode_cursor(event{items:Events},Wire).
 json_text(Value,Text,Maximum) :-
-    with_output_to(string(Text),json_write_dict(current_output,Value,[width(0)])),
+    kb_kee_schema:json_text(Value,Text),
     string_length(Text,N),(N=<Maximum->true;domain_error(symbolic_event_characters,N)).
 
 control_name("kee_agent_run_create").

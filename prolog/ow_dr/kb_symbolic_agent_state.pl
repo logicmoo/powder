@@ -1,5 +1,6 @@
 :- module(kb_symbolic_agent_state,[encode_cursor/2,decode_cursor/2]).
 :- use_module(kb_symbolic_agent_wire,[]).
+:- use_module(kb_kee_schema,[]).
 :- use_module(library(http/json)).
 :- use_module(library(assoc)).
 :- use_module(library(error)).
@@ -12,7 +13,7 @@ encode_cursor(Cursor,JSON) :-
     phrase(flat_node(Wire.term,0,Count,Root),Nodes),
     (Count=<8192->true;domain_error(symbolic_cursor_nodes,Count)),
     Data=json{schema:"powder.symbolic-cursor.v1",root:Root,nodes:Nodes},
-    with_output_to(string(JSON),json_write_dict(current_output,Data,[width(0)])),
+    kb_kee_schema:json_text(Data,JSON),
     string_length(JSON,Size),
     (Size=<65536->true;domain_error(symbolic_cursor_characters,Size)).
 

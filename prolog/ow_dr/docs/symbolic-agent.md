@@ -314,10 +314,11 @@ invocation proves the adapter, not a publicly available capability.
 Persistent agent runs/state, events, actions, cases and todos must use the shared
 KEE ledger. Its `agent_run` domain is now available and the prepared-state client
 below uses it. No parallel mutable run authority or disguised todo resource exists.
-The automatic source-capture/execution worker, authenticated human approval receipts,
-knowledge-changing teaching transactions and app/server/UI wiring are still
-**not available**; callers must report `dependency_unavailable`, not bootstrap
-examples, execute a hidden fallback, or expose host-control inputs directly.
+The HTTP host now captures and compiles bounded loaded knowledge, and the
+independently mounted Cyc UI operates its durable lifecycle (see below).
+Authenticated human approval receipts and knowledge-changing teaching transactions
+remain **unavailable**. The host never bootstraps examples, executes a hidden
+fallback, or exposes raw host-control inputs.
 No source-load operation is currently permitted, so load A/B selection cannot be
 invented or treated as automatically approved.
 
@@ -378,19 +379,99 @@ and exponential DAG expansion are rejected. No Prolog term strings, credentials,
 native handles, whole program copies or accumulated conversation arrays are stored.
 Semantic event deltas and compact action links live in the same ledger history.
 
-**Known protocol blocker, reproduced against the actual shared API:** logging a
-cursor/outcome/intent advances the global ledger revision. Consequently a TODO
-revision read by the previous step becomes stale before its write can be
-dispatched. A published domain-revision or atomic protocol is needed. The client
-does not silently rebase an agent's planned arguments, and does not claim that
-automatic durable TODO workflows currently work across these cursor commits.
-The earlier standalone TODO workflow tests have no cursor commits between actions;
-the dedicated control regression exposes the difference explicitly.
+The shared ledger now publishes `domainRevisions.application_todo` and
+`domainRevisions.agent_control` in `kee_ledger_status`. Control commits use the
+agent-control token. A knowledge-authored TODO workflow must explicitly select
+`("domainRevisions" "application_todo")` into its write's revision argument.
+The host **does not rewrite/rebase planned arguments**. Legacy workflows selecting
+the global `revision` still conflict after a cursor commit; the regression retains
+that behavior. The HTTP integration fixture uses the actual domain token and
+successfully creates a durable, audited TODO across all control commits.
+
+## HTTP lifecycle and Cyc UI
+
+`kb_symbolic_agent_http.pl` registers routes when imported by the main server.
+`web/symbolic-agent.js` exports:
+
+```javascript
+createSymbolicAgent(host, {signal, active, onStateChange, storage})
+// => {element, activate, deactivate, getState, destroy}
+// host = {api, element, button, heading}
+// api(path, query, {method, body, signal}) uses the application's API base.
+```
+
+The controller owns no main navigation and edits no shared shell. It loads its
+scoped CSS, preserves separate Cyc settings/drafts/history, and hides without
+submitting, cancelling or replaying work when deactivated. No timer/provider is
+started. GET recovery reads durable state; only explicit POSTs execute steps.
+Storage keys are `powder.cyc.{settings,drafts,history,pending}.v1`, separate from
+Teacher and operators. Browser history is a bounded local index/cache (20 runs,
+200 events per view); authoritative history/state remains in KEE. There is no
+server-wide conversation enumeration. Losing the browser index does not delete
+ledger runs: the run ID and conversation ID can still retrieve them.
+
+| Route under `api/symbolic/` | Request |
+|---|---|
+| GET `status` | No arguments; unconfigured status and host bounds, no source reads |
+| POST `start` | `{agent,definitionMt,linkedMts,conversation,callId}` |
+| GET `conversation` | `{id,conversation,offset?,limit?}`; latest 50 by default |
+| POST `send` | `{id,conversation,revision,callId,text}` |
+| POST `continue`, `interrupt`, `resume`, `stop` | `{id,conversation,revision,callId}` |
+| POST `form` | Above identity/revision fields plus `values` |
+| GET `todos`, `audit` | `{id,conversation,offset?,limit?}`; real selected goals-MT KEE records |
+| GET `receipt` | `{id,conversation,actionCallId}`; current pending action only |
+| GET `request-status` | `{conversation,callId}`; durable HTTP request receipt, never a replay |
+
+POST `revision` is the **run resource revision**, not the global ledger revision.
+Every write takes a fresh call ID (up to 80 characters); repeated identical
+committed requests are read back, and changed payloads under the same identity
+conflict. Unknown browser responses retain the request identity for inspection.
+Responses contain `{run,events,eventTotal,offset,limit,replayed}`. `run` exposes
+the semantic wire state, fixed cumulative counters, source manifest, phase and
+typed pending request. Event deltas preserve input text and source assertion-ID
+proofs. No credentials or native clause handles are returned.
+
+Authorization reuses `kb_llm_http:authorize/1`: loopback peer and exact server
+Origin (or same-origin GET Referer). No cross-origin writes, browser-provided
+principal/grants, model/operator destinations, arbitrary source loads or general
+Prolog calls are accepted. The host's trusted snapshot path calls the real native
+snapshot adapter directly; this does **not** advertise an unregistered KEE tool.
+Start is explicit, has no default agent/MT, and fails actionably when loaded
+definition knowledge is absent. The immutable manifest retains selected MTs,
+coverage, program version, source generation and snapshot hash. Continuations
+re-read and verify the complete snapshot; changes conflict rather than substituting
+knowledge. Stop/Interrupt remain available even if source knowledge has changed.
+
+Each request performs **one bounded synchronous step**, not a daemon or background
+worker. A yielded intent is durable and inspectable; the next explicit Continue
+records a dispatch claim *before* the fixed KEE gateway runs it. Another Continue
+advances the post-action continuation. Stop/Interrupt serialize at the request
+boundary; they do not forcibly cancel an already executing bounded native query.
+Counters persist across requests (128 instructions, 16 actions, 1,000 user turns;
+2 seconds per interpreter/query step). Different browsers use resource CAS;
+the KEE ledger supplies cross-process locking, durable commits and idempotence.
+
+A crash after dispatch, denied capability or lost action response remains
+`dispatched`/`unknown`: no automatic action retry, compensation or Resume is
+allowed. Receipt inspection never executes the tool. This release intentionally
+does not reconcile unresolved action state automatically, even when a receipt
+is found; Stop preserves that evidence. Create a separately reviewed new run
+only when appropriate, never as an implicit retry of the unresolved action.
+
+Typed forms use the pending knowledge-defined field set. Term fields take
+`powder.symbolic-term.v1` JSON and must decode to ground data. Approval requests
+are displayed but have **no approval button or POST approval route**: an actual
+trusted human-receipt adapter is not installed. TODO inspection uses real KEE
+reads; knowledge-authored workflows may create/update only permitted application
+TODOs with actual revisions. No source knowledge or production sidecar is mutated.
 
 ## Focused validation
 
 ```powershell
 swipl -q -s prolog\ow_dr\tests\test_symbolic_agent_language.pl -s prolog\ow_dr\tests\test_symbolic_agent_engine.pl -s prolog\ow_dr\tests\test_symbolic_agent_kee.pl -s prolog\ow_dr\tests\test_symbolic_agent_todos.pl -s prolog\ow_dr\tests\test_symbolic_agent_control.pl -s prolog\ow_dr\tests\test_symbolic_agent_snapshot.pl -g "run_tests([symbolic_agent_language,symbolic_agent_engine,symbolic_agent_kee,symbolic_agent_todos,symbolic_agent_control,symbolic_agent_snapshot])" -t halt
+swipl -q -s prolog\ow_dr\tests\test_symbolic_agent_http.pl -g "run_tests([symbolic_agent_http])" -t halt
+$env:LOGOS_CHROME = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+node --test prolog\ow_dr\tests\symbolic-agent-ui.test.mjs
 ```
 
 The existing grammar tests demonstrate one learned production and held-out
