@@ -27,31 +27,31 @@ data/templates, not ready agent execution.
 | Central typed KEE registry and persistent TODO/agent-run changesets | Implemented. TODO mutations have audit/undo. **General managed KB CRUD and native annotation mutation are still unavailable.** |
 | General workflow applications and held-out symbolic learning pipeline | **PLANNED.** The finite symbolic interpreter is not general language understanding. |
 
-The dated material below retains the original requirements and research
-provenance. Its future-tense sections are a design contract, **not the current
-runtime inventory**. The matrix and linked implementation guides above take
-precedence for availability; inspect actual routes and grants before acting.
+The dated research provenance below is retained. Sections marked planned cover
+the remaining general KB-editing, teaching and workflow requirements, not the
+delivered four-role UI. Inspect actual routes, grants and provider availability
+before acting; implementation does not imply an authenticated running operator.
 
-The coordinator's read-only probe and emullm owner verified 61 models, including
+The earlier coordinator read-only probe and emullm owner verified 61 models, including
 `emullm/default` as a previous catalog example, and supplied the verified transport/tool
 [emullm provider contract](kee-tools.md#verified-emullm-provider-contract).
-This establishes provider behavior, **not an installed application integration**
-or a configuration default. No model or network call was made to write these
-documents. The loopback address is not a privacy guarantee: request/reply logs
+That discovery established provider behavior, not application readiness or a
+configuration default. The implemented integration is documented above.
+The loopback address is not a privacy guarantee: request/reply logs
 are durable, worker contexts can be reused, and external fallback is possible.
 
-**Initial application-agent model choice — configuration planned**
+**Initial application-agent model choice — implemented configuration**
 
 The user selected the verified exact model **`gpt-5.6-sol`** at
-`http://127.0.0.1:8801/v1`. The future host must initially send that explicit
-model for the LLM teacher application agent. `emullm/default` is only a previously verified
+`http://127.0.0.1:8801/v1`. Teacher initially saves that exact model and sends
+the explicit saved selection on requests. `emullm/default` is only a previously verified
 catalog example, **not the selected model**. If `gpt-5.6-sol` is unavailable,
 stop and report it; do not substitute `emullm/default`, Gemma or another GPT model.
 
-A model Refresh/picker must use the actual `/models` response and persist an
-explicit user selection in revisioned registered-agent configuration **when
-implemented**. This configuration/picker is pending, not live or applied by
-these documents. This selection does **not** change the Copilot coding model.
+The implemented model Refresh/picker reads the actual `/models` response and
+persists explicit user selections in revisioned registered-agent configuration.
+Settings apply to new conversation snapshots. This selection does **not**
+change the Copilot coding model or either operator's model.
 No LLM request or user-data transfer was made as part of the choice. Explicit
 model selection does not remove the provider retention/context-reuse/external
 routing disclosure requirements.
@@ -66,18 +66,19 @@ and exact HTTP 200 lookup of unloaded `x_diplomaticState`: 6 definitions from
 **3966 ms**) and no KB change. This does not establish broad-search,
 provider/type-proof detail or incremental-maintenance readiness, nor general
 symbolic language ability. No source filename or assertion IDs were provided
-with that measurement; none are invented here. Registry and agent applications
-remain planned.
+with that measurement; none are invented here. The subsequently implemented
+registry and agent controls do not extend what this historical catalog sample proves.
 
-## Four distinct text roles — planned
+## Four distinct text roles — implemented controls and limits
 
 ### LLM teacher, explorer and comment writer
 
-The emullm-backed agent's mission is to learn the existing authorized KB, use
-the actual permissioned KEE, automatically apply allowed managed KB changes,
-and build reusable symbolic capabilities. It is not merely a chat summarizer.
-It can propose and teach lexical, grammar, semantic, dialogue and procedural
-knowledge, using existing verified ontology vocabulary wherever possible.
+The emullm-backed agent reads explicitly approved bounded KB projections through
+permissioned KEE and proposes knowledge or symbolic-capability improvements.
+Its automatic mutations currently cover only conversation-owned application
+TODOs with durable audit/undo. Applying lexical, grammar, semantic, dialogue or
+procedural knowledge changes remains part of the planned managed-KB-editing
+capability; generated comment proposals are not saved assertions.
 
 The host first supplies the actual registry version, available tool schemas,
 authenticated identity, permission/MT ceilings, budgets and current revisions.
@@ -127,8 +128,9 @@ Keep operator sessions, authentication, owned PIDs, histories, permission
 requests and cancellation isolated. Stop/cancel targets only the selected
 backend's owned session/process/thread, never the other operator.
 
-The planned bridge exposes an authenticated localhost WebSocket and a minimal,
-independently served authenticated recovery view. Loopback alone is not
+The implemented bridge serves isolated embedded operator controls and an
+independently authenticated recovery view, with output-only event replay.
+Standalone recovery also exposes the authenticated WebSocket. Loopback alone is not
 authentication: validate the browser/session and allowed origin; keep credential
 references private and secrets out of URLs, logs, chat, KB records and replay.
 Privileged operations remain subject to the native CLI's permission system and
@@ -136,7 +138,7 @@ real human decisions. **Human Start is not blanket edit/tool permission**:
 starting a session must not auto-approve edits or service actions. Permission
 requests fail closed when the human is
 disconnected or cannot respond; do not silently approve them or borrow a
-teacher's ordinary KB-mutation grants.
+Teacher's application-TODO mutation grants.
 
 If the other operator is active in the same checkout, show a concurrency
 warning and recommend one at a time, but **allow an explicit “Start anyway.”**
@@ -145,10 +147,11 @@ The warning does not make concurrent edits race-proof, waive native permissions
 or authorize overwriting user changes. Inspect relevant changes and surface
 conflicts rather than resetting or replacing another actor's edits.
 
-#### Verified adapter contracts; bridge implementation still planned
+#### Implemented adapters and verified interface contracts
 
-These interface/lifecycle details were verified by the coordinator. They do not
-mean an operator bridge has been delivered.
+The bridge implements these verified interface/lifecycle contracts. UI/bridge
+readiness does not establish native account or model access: pairing and an
+explicit human Start remain necessary.
 
 - **Copilot:** pin the tested official SDK version and verify that the installed
   version supports the intended explicit `cli_path` and
@@ -193,7 +196,7 @@ exactly-once command execution or persistence solely from an open WebSocket.
 
 ### Four chat chips, four independent contexts
 
-The planned chip labels are exactly **Teacher / Cyc / Copilot / Codex**:
+The implemented chip labels are exactly **Teacher / Cyc / Copilot / Codex**:
 the LLM teacher, LLM-free symbolic Cyc agent, Copilot operator and Codex operator.
 All four retain separate buffers,
 history, drafts, settings, status, unread indicators and TODO scope, as well as
@@ -207,10 +210,10 @@ No audio, microphone, STT, TTS, voice, captions or turn-silence UI is in scope.
 A speech-act ontology for **textual** questions, requests, assertions and
 dialogue transitions is compatible with this restriction.
 
-## Prompt and model lifecycle — planned
+## Prompt and model lifecycle — implemented
 
-`prompts/llm-knowledge-agent.md` is the editable prompt asset, not an implemented
-settings loader. The future host must:
+`prompts/llm-knowledge-agent.md` is the editable file-backed prompt asset.
+The implemented Teacher settings/snapshot loader preserves these invariants:
 
 1. Resolve a revisioned prompt selection only within an approved application-owned
    configuration root. Reject traversal, arbitrary paths/URLs and link escapes.
@@ -222,8 +225,9 @@ settings loader. The future host must:
 4. Keep credentials in private credential references, never in the prompt,
    browser storage, KB records, transcripts or this repository.
 5. Use a configured host proxy with destination/redirect/SSRF restrictions,
-   request and response limits, timeouts and cancellation. Streaming chunks,
-   structured errors and interrupted tool exchanges need an explicit contract.
+   request and response limits, timeouts and cancellation. The current transport
+   uses `stream:false`; structured errors and interrupted exchanges follow the
+   [Teacher contract](teacher-integration.md).
 
 Only an explicit **Chat** or **GenerateComment** action may send bounded,
 selected, authorized **nonsensitive** KB context through an approved route after
@@ -234,6 +238,9 @@ outputs are untrusted data, not instructions
 that can enlarge permissions, select secrets or alter the system prompt.
 
 ## Automatic changes, with durable accountability — planned
+
+This section concerns future KB assertion/annotation mutations. The delivered
+automatic mutation boundary is application TODOs, not general KB CRUD.
 
 Ordinary permitted assert/retract/edit/annotation operations do **not** require
 a per-change approval dialog. Permission comes from the authenticated host,
@@ -307,20 +314,23 @@ into memorized answers or hide LLM calls in a JavaScript/Python wrapper.
 Everything the LLM initially does is a **candidate** for symbolic encoding.
 This is an iterative engineering goal, not a claim that general natural-language
 understanding or an autonomous symbolic teacher is already complete.
-Until application todos exist, identify a case as a proposed record; do not
-claim it was saved merely because it appears in chat.
+Application TODOs can persist cases, but a saved TODO does not complete this
+teaching loop. Report a case as saved only after an actual durable tool result,
+not merely because it appears in chat.
 
-## Missing information and GenerateComment — planned
+## Missing-information policy and saved comments — planned
 
-Missing-information policies are configurable by type, term, MT and pattern,
+Planned missing-information policies are configurable by type, term, MT and pattern,
 with severity and explicit exemptions. A missing comment is not universally an
 error and does not imply that a term should be created, changed or annotated.
 
-GenerateComment is an explicit, bounded LLM operation over selected actual
-evidence. Preserve supporting assertion/source/MT references and distinguish
+The implemented Generate Comment action produces an **unsaved AI proposal**
+from explicit, bounded, approved evidence. Saving that proposal into the KB
+remains unavailable. Preserve supporting assertion/source/MT references and distinguish
 AI-generated/default provenance from genuine source authorship. Never invent
-an author, citation or supporting assertion. Recheck both the target revision
-and whether a comment appeared concurrently before committing. Do not overwrite
+an author, citation or supporting assertion. A future saved-comment operation
+must recheck both the target revision and whether a comment appeared concurrently
+before committing. Do not overwrite
 concurrent user text or generate comments automatically for millions of terms.
 Symbolic agents cannot invoke this operation, including through workflow actions.
 
