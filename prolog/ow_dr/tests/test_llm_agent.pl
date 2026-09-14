@@ -26,6 +26,14 @@ fixture_chat(Request) :-
     fixture_chat_body(Request,Body),assertz(fixture_request(chat,Body)),
     (fixture_mode(slow)->sleep(8);true),
     (fixture_mode(unicode)->unicode_fixture(Text),Message=_{role:"assistant",content:Text};
+     fixture_mode(selected),\+ (member(M,Body.messages),M.role=="tool")->
+       Message=_{role:"assistant",content:null,tool_calls:[
+         _{id:"selected-definitions",type:"function",function:_{name:"kee_definitions",
+           arguments:"{\"term\":\"x_p\",\"mt\":\"x_PublicMt\",\"scope\":\"all\",\"offset\":0,\"limit\":5}"}}]};
+     fixture_mode(scope_escape)->
+       Message=_{role:"assistant",content:null,tool_calls:[
+         _{id:"unselected-definitions",type:"function",function:_{name:"kee_definitions",
+           arguments:"{\"term\":\"x_p\",\"mt\":\"x_PrivateMt\",\"scope\":\"all\",\"offset\":0,\"limit\":5}"}}]};
      fixture_mode(managed)->fixture_managed_message(Body.messages,Message);
      fixture_mode(tools),\+ (member(M,Body.messages),M.role=="tool")->
        Message=_{role:"assistant",content:null,tool_calls:[
@@ -56,7 +64,7 @@ fixture_managed_message(Messages,Message) :-
          _{id:"managed-ledger",type:"function",function:_{name:"kee_ledger_status",arguments:"{}"}}]}).
 
 fixture_setup(State) :-
-    source_file(fixture_setup(_),Source),file_directory_name(Source,Tests),
+    kb_paths:app_dir(App),directory_file_path(App,tests,Tests),make_directory_path(Tests),
     uuid(Id),atom_concat('.llm-fixture-',Id,Name),directory_file_path(Tests,Name,Directory),
     make_directory(Directory),
     findall(Key-Value,(member(Key,['POWDER_AGENT_STATE','POWDER_LLM_BASE_URL','POWDER_KEE_STATE_DIR']),
@@ -310,7 +318,7 @@ test(real_kee_registry_discovery_no_knowledge_execution) :-
       (maplist(kb_llm_schema:tool_schema,Tools,Names),
        assertion(Names==[]),
        kb_llm_kee:registry_status(Status),assertion(Status.available==true),
-       assertion(Status.mutationAvailable==true),assertion(Status.exportGateReady==false)),
+       assertion(Status.mutationAvailable==true),assertion(Status.exportGateReady==true)),
       kb_llm_kee:close_turn(Handle)).
 schema_fixture(_{type:"object",properties:_{name:_{type:"string",maxLength:8},
                  count:_{type:"integer",minimum:1,maximum:3}},
@@ -584,3 +592,165 @@ test(safe_error_never_copies_backend_details) :-
     assertion(Error.code=="grounding_not_approved"),
     assertion(\+sub_string(Error.message,_,_,_,"Synthetic private detail")).
 :- end_tests(llm_export_hold).
+
+bound_preview(C,Text,Automatic,Requests,P) :-
+    kb_llm_kee:preview_grounding(_{conversation:C.id,revision:C.revision,
+      text:Text,mode:"chat",automaticTodos:Automatic,requests:Requests},P).
+bound_approve(P) :-
+    kb_llm_kee:approve_grounding(_{id:P.id,hash:P.hash,approvedNonsensitive:true},_).
+bound_chat(C,Text,P,A) :-
+    bound_approve(P),
+    start_chat(_{id:C.id,revision:C.revision,text:Text,grant:P.id,approvedNonsensitive:true},_),
+    wait_chat(C.id,A).
+
+:- begin_tests(llm_bound,[setup(fixture_setup(State)),cleanup(fixture_cleanup(State))]).
+test(exact_text_preview_binds_destination_prompt_settings_and_is_single_use) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    bound_preview(C,"Synthetic exact preview",false,[],P),
+    assertion(P.binding.conversation==C.id),assertion(P.binding.model=="gpt-5.6-sol"),
+    assertion(P.binding.promptHash==C.promptHash),assertion(P.binding.provider==C.baseURL),
+    assertion(P.binding.settingsRevision==C.settingsRevision),
+    assertion(P.tools==[]),assertion(P.status=="pending"),assertion(\+fixture_request(_,_)),
+    bound_chat(C,"Synthetic exact preview",P,A),assertion(A.status=="ready"),
+    catch(start_chat(_{id:C.id,revision:A.revision,text:"Synthetic exact preview",
+        grant:P.id,approvedNonsensitive:true},_),error(llm_grounding_conflict,_),Denied=true),
+    assertion(Denied==true).
+test(changed_text_and_cross_conversation_are_rejected_before_provider) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},Other),
+    bound_preview(C,"Synthetic approved text",false,[],P),bound_approve(P),
+    findall(B,fixture_request(chat,B),Before),
+    forall(member(Id-Text,[C.id-"Synthetic changed text",Other.id-"Synthetic approved text"]),
+      (catch(start_chat(_{id:Id,revision:0,text:Text,grant:P.id,approvedNonsensitive:true},_),
+        error(llm_grounding_conflict,_),Denied=true),assertion(Denied==true))),
+    findall(B,fixture_request(chat,B),After),assertion(Before==After).
+test(changed_settings_invalidate_approval) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    bound_preview(C,"Synthetic setting binding",false,[],P),
+    agent_settings(S),
+    setup_call_cleanup(save_agent_settings(_{model:"fixture-other",budgets:S.budgets},S.revision,_),
+      (catch(bound_approve(P),error(llm_grounding_conflict,_),Denied=true),assertion(Denied==true)),
+      (agent_settings(New),save_agent_settings(_{model:S.model,budgets:S.budgets},New.revision,_))).
+test(host_restart_never_restores_disclosure_consent) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    bound_preview(C,"Synthetic restart binding",false,[],P),bound_approve(P),
+    kb_llm_kee:init_disclosure_epoch,
+    catch(start_chat(_{id:C.id,revision:C.revision,text:"Synthetic restart binding",
+       grant:P.id,approvedNonsensitive:true},_),error(llm_grounding_conflict,_),Denied=true),
+    assertion(Denied==true).
+test(interrupt_revokes_native_commit_authority_without_replaying_work) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    kb_llm_agent:load_document(C.id,D),Config=D.config.put(_{conversation:C.id,run:"synthetic"}),
+    setup_call_cleanup(kb_llm_kee:open_turn(Config,D.prompt,D.scope,H,_),
+      (H=kee(Token,_,_,_,_),interrupt_chat(C.id,_),
+       catch(kb_kee:registry(Token,_),error(kee(invalid_context,_),_),Revoked=true),
+       assertion(Revoked==true)),
+      kb_llm_kee:close_turn(H)).
+test(expired_and_modified_grants_fail_closed) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    bound_preview(C,"Synthetic expiration",false,[],P),
+    kb_llm_kee:grant_file(P.id,File),read_json(File,D),
+    Modified=D.put(expiresAt,0),kb_llm_kee:grant_hash(Modified,Hash),atomic_json(File,Modified.put(hash,Hash)),
+    catch(kb_llm_kee:approve_grounding(_{id:P.id,hash:Hash,approvedNonsensitive:true},_),
+       error(llm_grounding_expired,_),Expired=true),assertion(Expired==true),
+    atomic_json(File,D.put(messages,[_{role:"user",content:"Synthetic unapproved change"}])),
+    catch(bound_approve(P),error(llm_grounding_corrupt,_),Corrupt=true),assertion(Corrupt==true).
+test(approved_read_results_are_exact_not_future_ledger_state) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    bound_preview(C,"Synthetic ledger snapshot",false,
+      [_{tool:"kee_ledger_status",arguments:_{}}],P),
+    setup_call_cleanup(kee_fixture_context(C.scope,H,_),fixture_create(H,"change-after-preview",_),kb_llm_kee:close_turn(H)),
+    catch(bound_approve(P),error(llm_grounding_stale,_),Stale=true),assertion(Stale==true).
+test(actual_automatic_todo_mutation_stops_before_receipt_export,
+     [setup(asserta(user:fixture_mode(managed))),cleanup(retractall(user:fixture_mode(_)))]) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    bound_preview(C,"Synthetic automatic task",true,
+      [_{tool:"kee_ledger_status",arguments:_{}}],P),
+    assertion((member(T,P.tools),get_dict(function,T,F),get_dict(name,F,"kee_todo_create"))),
+    assertion(\+ (member(T,P.tools),get_dict(function,T,F),get_dict(name,F,"kee_agent_run_create"))),
+    findall(B,fixture_request(chat,B),Before),length(Before,N),
+    bound_chat(C,"Synthetic automatic task",P,A),
+    assertion(A.status=="ready"),A.calls=[_,Created],
+    assertion(Created.result.result.committed==true),
+    assertion((member(E,A.events),get_dict(kind,E,"local_mutation_boundary"))),
+    findall(B,fixture_request(chat,B),After),length(After,Count),assertion(Count=:=N+2),
+    assertion(\+ (member(B,After),get_dict(messages,B,Messages),
+      member(M,Messages),get_dict(tool_call_id,M,"managed-create"))),
+    local_todos(C.id,Local),assertion(Local.total=:=1),assertion(Local.undoActions\=[]),
+    Local.undoActions=[Action|_],
+    undo_todo(Action.put(_{id:C.id,callId:"synthetic-local-undo"}),Undone),
+    assertion(Undone.committed==true),
+    local_todos(C.id,PostUndo),assertion((member(Redo,PostUndo.undoActions),get_dict(action,Redo,"kee_redo"))),
+    findall(B,fixture_request(chat,B),NoMore),assertion(NoMore=@=After).
+test(read_grant_cannot_escalate_to_todo_mutation,
+     [setup(asserta(user:fixture_mode(managed))),cleanup(retractall(user:fixture_mode(_)))]) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    bound_preview(C,"Synthetic read-only scope",false,
+      [_{tool:"kee_ledger_status",arguments:_{}}],P),
+    bound_chat(C,"Synthetic read-only scope",P,A),
+    A.calls=[_,Rejected],assertion(Rejected.result.ok==false),
+    assertion(Rejected.result.outcome=="rejected"),
+    local_todos(C.id,Local),assertion(Local.total=:=0).
+test(generate_comment_is_unsaved_and_has_no_mutation_tools) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    kb_llm_kee:preview_grounding(_{conversation:C.id,revision:C.revision,text:"Synthetic comment request",
+       mode:"generate_comment",automaticTodos:true,
+       requests:[_{tool:"kee_todo_list",arguments:_{mt:null}}]},P),
+    assertion(\+ (member(T,P.tools),get_dict(function,T,F),get_dict(name,F,Name),kb_llm_kee:mutation_name(Name))),
+    last(P.messages,Input),assertion(sub_string(Input.content,_,_,_,"UNSAVED")),
+    bound_chat(C,"Synthetic comment request",P,A),
+    assertion(A.status=="ready"),assertion(A.action=="generate_comment").
+test(history_is_paginated_local_only_and_orphaned_runs_are_honest) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    list_conversations(0,1,List),assertion(List.total>=1),assertion(List.items=[_]),
+    uuid(Run),Request=_{id:C.id,revision:0,text:"Synthetic orphan",approvedNonsensitive:true},
+    kb_llm_agent:update_document(C.id,kb_llm_agent:accept_chat(Request,Run)),
+    conversation(C.id,Unknown),assertion(Unknown.status=="outcome_unknown"),
+    catch(start_chat(Request,_),error(agent_conversation_conflict,_),Blocked=true),assertion(Blocked==true).
+:- end_tests(llm_bound).
+
+:- ensure_loaded(test_kee).
+synthetic_catalog_setup(state(Catalog,Transport)) :-
+    plunit_kee:fixture(Catalog),fixture_setup(Transport),
+    kb_paths:app_dir(App),directory_file_path(App,prompts,Prompts),make_directory_path(Prompts),
+    directory_file_path(Prompts,'llm-knowledge-agent.md',Prompt),
+    atomic_bytes(Prompt,[83,121,110,116,104,101,116,105,99]).
+synthetic_catalog_cleanup(state(Catalog,Transport)) :-
+    fixture_cleanup(Transport),plunit_kee:cleanup(Catalog).
+:- begin_tests(llm_selected_catalog,
+    [setup(synthetic_catalog_setup(S)),cleanup(synthetic_catalog_cleanup(S))]).
+test(real_catalog_projection_roundtrip_never_exports_unselected_context,
+     [setup(asserta(user:fixture_mode(selected))),cleanup(retractall(user:fixture_mode(_)))]) :-
+    plunit_kee:compiled('teacher.krf',
+      "(in-microtheory PublicMt)\n(arity p 1)\n(p SyntheticPublic)\n(in-microtheory PrivateMt)\n(p SyntheticPrivate)\n",Source),
+    kb_cache:file_digest(Source,Original),plunit_kee:build,
+    start_conversation(_{terms:["x_p"],readMts:["x_PublicMt"],writeMts:[]},C),
+    Req=_{tool:"kee_definitions",arguments:_{term:"x_p",mt:"x_PublicMt",limit:5}},
+    bound_preview(C,"Synthetic selected-context question",false,[Req],P),
+    P.entries=[E],assertion(E.material.total=:=1),assertion(E.evidence\=[]),
+    bound_chat(C,"Synthetic selected-context question",P,A),assertion(A.status=="ready"),
+    A.calls=[Call],assertion(Call.result.ok==true),
+    findall(B,fixture_request(chat,B),Bodies),length(Bodies,Count),assertion(Count=:=2),
+    forall(member(B,Bodies),
+      (kb_kee_schema:json_text(B,Text),
+       assertion(\+sub_string(Text,_,_,_,"SyntheticPrivate")),
+       assertion(\+sub_string(Text,_,_,_,"teacher.krf")))),
+    kb_cache:file_digest(Source,After),assertion(Original==After),
+    kb_store:status(Status),assertion(Status.counts.assertions==0).
+test(changed_catalog_evidence_requires_a_new_preview) :-
+    start_conversation(_{terms:["x_p"],readMts:["x_PublicMt"],writeMts:[]},C),
+    Req=_{tool:"kee_occurrences",arguments:_{term:"x_p",mt:"x_PublicMt"}},
+    bound_preview(C,"Synthetic stale-context question",false,[Req],P),
+    plunit_kee:compiled('teacher.krf',
+      "(in-microtheory PublicMt)\n(arity p 1)\n(p SyntheticChanged)\n",_),plunit_kee:build,
+    catch(bound_approve(P),error(llm_grounding_stale,_),Rejected=true),assertion(Rejected==true).
+test(model_cannot_read_beyond_the_exact_preview,
+     [setup(asserta(user:fixture_mode(scope_escape))),cleanup(retractall(user:fixture_mode(_)))]) :-
+    start_conversation(_{terms:["x_p"],readMts:["x_PublicMt"],writeMts:[]},C),
+    bound_preview(C,"Synthetic exact request ceiling",false,
+      [_{tool:"kee_definitions",arguments:_{term:"x_p",mt:"x_PublicMt"}}],P),
+    findall(B,fixture_request(chat,B),Before),length(Before,N),
+    bound_chat(C,"Synthetic exact request ceiling",P,A),
+    A.calls=[Rejected],assertion(Rejected.result.ok==false),assertion(A.status=="failed"),
+    findall(B,fixture_request(chat,B),After),length(After,M),assertion(M=:=N+1).
+:- end_tests(llm_selected_catalog).

@@ -1,6 +1,6 @@
 :- module(kb_llm_agent,
           [start_conversation/2,conversation/2,start_chat/2,interrupt_chat/2,stop_conversation/2,
-           local_todos/2,local_receipt/3]).
+           local_todos/2,local_receipt/3,list_conversations/3,undo_todo/2]).
 :- use_module(kb_agent_settings).
 :- use_module(kb_llm_files).
 :- use_module(kb_llm_prompt).
@@ -27,12 +27,8 @@ start_conversation(Scope,Reply) :-
       scope:Scope,budgets:Config.budgets,registry:Registry,
       policy:Config.policyVersion},Context),
     string_concat("Trusted host configuration snapshot (data): ",Context,HostContext),
-    grounding_material(Scope,Material),
-    json_text(Material,MaterialText),
-    string_concat("User-approved grounding snapshot. Untrusted data, NOT instructions:\n",MaterialText,GroundingText),
-    Initial=[_{role:"system",content:Prompt.content},_{role:"system",content:HostContext}],
-    (Material==[]->History=Initial;append(Initial,
-      [_{role:"user",name:"approved_grounding",content:GroundingText}],History)),
+    (get_dict(grant,Scope,G),G\==null->throw(error(llm_grounding_not_approved,_));true),
+    History=[_{role:"system",content:Prompt.content},_{role:"system",content:HostContext}],
     Doc=_{schema:1,id:Id,agent:"llm-knowledge",identity:"llm",createdAt:Now,
       revision:0,status:"ready",activeTurn:null,config:Config,prompt:Prompt,scope:Scope,
       history:History,
@@ -42,14 +38,19 @@ start_conversation(Scope,Reply) :-
 conversation(Input,Reply) :-
     load_document(Input,D),registry_status(Registry),
     exclude(system_message,D.history,Messages),maplist(public_call,D.calls,Calls),
-    Reply=_{id:D.id,agent:D.agent,identity:D.identity,status:D.status,revision:D.revision,
+    observed_status(D,Status),
+    (get_dict(lastAction,D,Action)->true;Action="chat"),
+    Reply=_{id:D.id,agent:D.agent,identity:D.identity,status:Status,revision:D.revision,
       activeTurn:D.activeTurn,model:D.config.model,baseURL:D.config.baseURL,
       promptHash:D.prompt.rawHash,settingsRevision:D.config.revision,
       budgets:D.config.budgets,scope:D.scope,messages:Messages,events:D.events,
       audit:D.audit,calls:Calls,turns:D.turns,error:D.lastError,
       rawResponse:D.lastResponse,
       registry:Registry,todos:_{available:Registry.available,reason:"Use Refresh local TODOs. This inspector never exports task text."},
-      notice:D.config.notice}.
+      notice:D.config.notice,disclosureRequired:true,action:Action}.
+observed_status(D,Status) :-
+    id_atom(D.id,Id),
+    (D.status=="running",\+owned_run(Id,_,_,_)->Status="outcome_unknown";Status=D.status).
 system_message(Message) :- Message.role=="system".
 public_call(Call,Public) :-
     (kb_llm_kee:mutation_name(Call.name)->Inspectable=true;Inspectable=false),
@@ -70,7 +71,8 @@ update_document(Id,Goal) :-
 next_revision(D,Next) :- N is D.revision+1,Next=D.put(revision,N).
 
 start_chat(Request,Reply) :-
-    strict_keys(Request,[approvedNonsensitive,id,revision,text]),
+    (get_dict(grant,Request,_)->strict_keys(Request,[approvedNonsensitive,grant,id,revision,text]);
+      strict_keys(Request,[approvedNonsensitive,id,revision,text])),
     (Request.approvedNonsensitive==true->true;permission_error(export,llm_input,approval_required)),
     must_be(string,Request.text),string_length(Request.text,N),
     must_be(integer,Request.revision),
@@ -95,12 +97,17 @@ accept_chat(Request,Run,D,After) :-
     (D.revision=:=Request.revision->true;throw(error(agent_conversation_conflict,_))),
     (D.status=="closed"->permission_error(chat,conversation,closed);true),
     (D.status=="running"->throw(error(agent_conversation_busy,_));true),
-    verify_provider_input(D.scope,D.history),
-    append(D.history,[_{role:"user",content:Request.text}],History),
+    (get_dict(grant,Request,Grant)->
+      consume_grounding(Grant,D,Request,Run),
+      kb_llm_kee:grant_file(Grant,GF),read_json(GF,GD),
+      History=GD.messages,TurnGrant=Grant,Action=GD.binding.mode;
+      verify_provider_input(D.scope,D.history),
+      append(D.history,[_{role:"user",content:Request.text}],History),TurnGrant=null,Action="chat"),
     bounded_json(History,D.config.budgets.historyBytes),
     Turns is D.turns+1,(Turns=<100->true;resource_error(llm_conversation_turns)),
     event(D,"turn_started",_{run:Run},E),
-    next_revision(E.put(_{status:"running",activeTurn:Run,history:History,turns:Turns,lastError:null}),After).
+    next_revision(E.put(_{status:"running",activeTurn:Run,history:History,
+      turnGrant:TurnGrant,lastAction:Action,turns:Turns,lastError:null}),After).
 run_wait(Id,Run) :-
     setup_call_cleanup(true,
       catch((thread_get_message(start),
@@ -111,8 +118,9 @@ run_wait(Id,Run) :-
        kb_activity:release_application(Run))).
 run_turn(Id,Run) :-
     load_document(Id,D),ensure_current(Id,Run),
-    Config=D.config.put(conversation,D.id),
-    setup_call_cleanup(open_turn(Config,D.prompt,D.scope,Handle,Tools),
+    Config=D.config.put(_{conversation:D.id,run:Run}),
+    (get_dict(turnGrant,D,G),G\==null->Scope=D.scope.put(grant,G);Scope=D.scope),
+    setup_call_cleanup(open_turn(Config,D.prompt,Scope,Handle,Tools),
       call_with_time_limit(Config.budgets.seconds,
         rounds(Id,Run,Config,Handle,Tools,D.history,0,0)),
       close_turn(Handle)).
@@ -133,7 +141,9 @@ rounds(Id,Run,Config,Handle,Tools,History,Rounds,Calls) :-
       maplist(call_identifier,ToolCalls,Ids),sort(Ids,Unique),
       (same_length(Ids,Unique)->true;throw(error(llm_duplicate_call_ids,_))),
       execute_calls(ToolCalls,Id,Run,Handle,Config,WithAssistant,NextHistory),
-      NextRound is Rounds+1,rounds(Id,Run,Config,Handle,Tools,NextHistory,NextRound,NextCalls)
+      (member(C,ToolCalls),kb_llm_kee:mutation_name(C.function.name)->
+        update_document(Id,finish_local_mutations(Run));
+        NextRound is Rounds+1,rounds(Id,Run,Config,Handle,Tools,NextHistory,NextRound,NextCalls))
     ;update_document(Id,finish_success(Run))).
 response_message(Response,Message) :-
     (is_dict(Response),get_dict(choices,Response,[Choice|_]),get_dict(message,Choice,Message),
@@ -152,6 +162,11 @@ record_assistant(Run,Message,Response,History,D,After) :-
     next_revision(E.put(_{history:History,lastResponse:Response}),After).
 finish_success(Run,D,After) :-
     check_document_run(D,Run),event(D,"turn_completed",_{run:Run},E),
+    next_revision(E.put(_{status:"ready",activeTurn:null}),After).
+finish_local_mutations(Run,D,After) :-
+    check_document_run(D,Run),
+    event(D,"local_mutation_boundary",
+      _{notice:"Model continuation stopped. Inspect actual TODO outcomes and receipts locally. No future result export was approved."},E),
     next_revision(E.put(_{status:"ready",activeTurn:null}),After).
 
 execute_calls([],_,_,_,_,History,History).
@@ -213,6 +228,7 @@ cancel_chat(Input,Status,Reply) :-
     with_mutex(powder_llm_runs,
       (findall(Run-Thread-Phase,owned_run(Id,Run,Thread,Phase),Owned),
        forall(member(Run-_-_,Owned),(cancelled(Run)->true;assertz(cancelled(Run)))),
+       atom_string(Id,Conversation),revoke_turn(Conversation),
        update_document(Id,record_cancel(Status)))),
     forall(member(_-Thread-http,Owned),catch(thread_signal(Thread,throw(llm_cancelled)),_,true)),
     conversation(Id,Reply).
@@ -243,7 +259,13 @@ safe_error(error(kee(Code,_),_),_{code:Code,
 safe_error(error(llm_call_rejected,Underlying),Safe) :- !,safe_error(Underlying,Safe).
 safe_error(error(llm_grounding_not_approved,_),
   _{code:"grounding_not_approved",
-    message:"Provider tools and KB/task grounding are withheld: complete bound disclosure approval is not implemented. Use an empty-scope text-only conversation; local inspectors remain available."}) :- !.
+    message:"An exact current disclosure grant is required. Preview this turn and approve its bounded nonsensitive material; no raw future tool result is authorized."}) :- !.
+safe_error(error(llm_grounding_expired,_),_{code:"disclosure_expired",
+    message:"The five-minute disclosure approval expired. Preview this turn again; no automatic resend occurred."}) :- !.
+safe_error(error(llm_grounding_stale,_),_{code:"disclosure_stale",
+    message:"Selected evidence changed. Read a fresh local preview and approve it before sending."}) :- !.
+safe_error(error(llm_grounding_conflict,_),_{code:"disclosure_conflict",
+    message:"The approved turn no longer matches its conversation, host, settings or material. Preview again; start a new conversation after changing model settings."}) :- !.
 safe_error(error(llm_mutation_unconfirmed,_),_{code:"mutation_unconfirmed",
   message:"A mutation outcome is unconfirmed. This conversation is blocked to prevent accidental repetition; inspect its durable call receipt locally."}) :- !.
 safe_error(error(llm_conversation_policy_upgrade_required,_),
@@ -268,3 +290,24 @@ local_receipt(Input,CallId,Reply) :-
     read_json(File,D),
     (member(Record,D.calls),Record.id==CallId->true;throw(error(llm_recorded_call_not_found,_))),
     Config=D.config.put(conversation,D.id),inspect_receipt(Config,D.prompt,D.scope,Record,Reply).
+
+list_conversations(Offset,Limit,Reply) :-
+    must_be(integer,Offset),must_be(integer,Limit),between(0,100000,Offset),between(1,50,Limit),
+    agent_state_dir(Dir),directory_files(Dir,Names),
+    findall(Time-File,(member(Name,Names),atom_concat('conversation-',Tail,Name),
+      atom_concat(Id,'.json',Tail),catch(id_atom(Id,_),_,fail),
+      directory_file_path(Dir,Name,File),time_file(File,Time)),Files),
+    sort(0,@>=,Files,Sorted),length(Sorted,Total),
+    findall(Item,(nth0(N,Sorted,_-File),N>=Offset,N<Offset+Limit,
+      catch((read_json(File,D),observed_status(D,Status),
+        Item=_{id:D.id,createdAt:D.createdAt,model:D.config.model,status:Status,
+               revision:D.revision,turns:D.turns,promptHash:D.prompt.rawHash}),
+        _,Item=_{status:"unavailable"})),Items),
+    Reply=_{items:Items,total:Total,offset:Offset,limit:Limit}.
+undo_todo(R,Reply) :-
+    strict_keys(R,[action,callId,changeset,id,revision]),
+    load_document(R.id,D),
+    (D.status=="running"->throw(error(agent_conversation_busy,_));true),
+    Config=D.config.put(conversation,D.id),
+    del_dict(id,R,_,Request),
+    kb_activity:with_application(kb_llm_kee:local_undo(Config,D.prompt,D.scope,Request,Reply)).

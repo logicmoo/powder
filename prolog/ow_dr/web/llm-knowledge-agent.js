@@ -7,7 +7,7 @@ let nextViewId = 0;
  * pauses view polling only; it never aborts a turn or changes another agent.
  */
 export async function createLLMKnowledgeAgent(host, {
-  route = { params: new URLSearchParams() }, signal, active = true, onConversationChange,
+  route = { params: new URLSearchParams() }, signal, active = true, onConversationChange, onStateChange, storage,
 } = {}) {
   const lifecycle = new AbortController();
   const abort = () => lifecycle.abort();
@@ -16,7 +16,7 @@ export async function createLLMKnowledgeAgent(host, {
   let controls;
   const element = await renderLLMKnowledgeAgent({
     ...host,
-    llmContainer: { active, updateLocation: false, onConversationChange,
+    llmContainer: { active, updateLocation: false, onConversationChange, onStateChange, storage,
       register: value => { controls = value; } },
   }, route, lifecycle.signal);
   return {
@@ -32,6 +32,22 @@ export async function createLLMKnowledgeAgent(host, {
   };
 }
 
+export function teacherDrafts(storage) {
+  const key = id => `powder.teacher.draft.v1:${id || 'new'}`;
+  return {
+    read(id) {
+      try {
+        const value = JSON.parse(storage?.getItem(key(id)) || 'null');
+        return typeof value?.text === 'string' ? value.text.slice(0, 8192) : '';
+      } catch { return ''; }
+    },
+    write(id, text) {
+      try { storage?.setItem(key(id), JSON.stringify({ text: text.slice(0, 8192) })); return true; }
+      catch { return false; }
+    },
+  };
+}
+
 export function modelOptions(items, selected) {
   return [...new Set([selected, ...items])].map(id => ({
     id, label: items.includes(id) ? id : `${id} — availability not confirmed`,
@@ -41,11 +57,7 @@ export function selectedKeys(text) {
   return [...new Set(text.split(/\r?\n/u).map(value => value.trim()).filter(Boolean))];
 }
 export function canChat({ conversation, text, approved, pending }) {
-  const scope = conversation?.scope;
-  if (scope && (['terms', 'readMts', 'writeMts'].some(key => !Array.isArray(scope[key]) || scope[key].length)
-      || scope.grant != null)) return false;
-  if (conversation?.messages?.some(message => message.role === 'tool' || message.name === 'approved_grounding')) return false;
-  return !!conversation && !pending && !['running', 'closed'].includes(conversation.status)
+  return !!conversation && !pending && !['running', 'closed', 'outcome_unknown'].includes(conversation.status)
     && !conversation.calls?.some(call => ['reserved', 'unknown'].includes(call.state))
     && !!text.trim() && approved;
 }
@@ -53,6 +65,9 @@ export function canChat({ conversation, text, approved, pending }) {
 export async function renderLLMKnowledgeAgent(host, route, signal) {
   const { api, element: el, button, heading } = host;
   const container = host.llmContainer;
+  let storage = container?.storage;
+  if (storage === undefined) { try { storage = globalThis.localStorage; } catch { storage = null; } }
+  const drafts = teacherDrafts(storage);
   const viewId = `llm-view-${++nextViewId}`;
   let active = container?.active !== false;
   if (!document.querySelector('link[data-llm-agent-style]')) {
@@ -68,19 +83,38 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   const transcript = el('section', { className: 'llm-transcript', 'aria-label': 'LLM text conversation' });
   const text = el('textarea', { rows: 4, maxLength: 8192, name: 'llm-message',
     placeholder: 'Ask a knowledge question or describe a symbolic capability to teach.',
-    oninput: () => { consent.checked = false; updateControls(); } });
+    oninput: () => { invalidatePreview(); persistDraft(); updateControls(); } });
   const consent = el('input', { type: 'checkbox', name: 'llm-export-consent', onchange: updateControls });
   const send = button('Chat', sendChat);
+  const mode = el('select', { name: 'llm-purpose', 'aria-label': 'Explicit Teacher action', onchange: () => {
+    invalidatePreview(); updateControls();
+  } }, el('option', { value: 'chat' }, 'Chat'),
+  el('option', { value: 'generate_comment' }, 'Generate Comment — unsaved proposal'));
+  const allowTodos = el('input', { type: 'checkbox', name: 'llm-automatic-todos', onchange: () => {
+    invalidatePreview(); updateControls();
+  } });
   const start = button('Start new conversation', startConversation, 'button secondary');
   const interrupt = button('Interrupt turn', () => control('interrupt'), 'button secondary');
   const stop = button('Stop conversation', () => control('stop'), 'button secondary');
   const composer = el('form', { className: 'llm-composer', onsubmit: event => { event.preventDefault(); sendChat(); } },
     el('label', { className: 'field' }, 'Message (text only)', text),
     el('label', { className: 'llm-consent' }, consent,
-      'I approve sending this nonsensitive text conversation under the provider notice. No KB or task grounding is enabled.'),
+      'I reviewed every preview message, evidence field and tool schema. This exact material is authorized and nonsensitive under the provider notice.'),
+    el('label', { className: 'field' }, 'Action', mode),
+    el('label', { className: 'llm-consent' }, allowTodos,
+      'Allow automatic audited changes to this conversation’s TODOs only. Receipts stay local; no general KB edits.'),
+    button('Preview this turn locally', previewGrounding, 'button secondary'),
     el('div', { className: 'form-actions' }, send, interrupt, stop),
     el('p', { className: 'muted' }, 'Responses arrive after completion, not incrementally. Interrupt is best effort; provider logs and processing may remain.'));
-  const main = el('section', { className: 'llm-chat' }, identity, transcript, composer, feedback);
+  const historyPicker = el('select', { 'aria-label': 'Teacher conversation history', name: 'llm-history' });
+  const historyState = el('p', { className: 'muted' });
+  const main = el('section', { className: 'llm-chat' }, identity,
+    el('div', { className: 'llm-history' }, historyPicker,
+      button('Open conversation', openSelectedConversation, 'button secondary'),
+      button('Refresh history', refreshHistory, 'button secondary'),
+      button('More history', moreHistory, 'button secondary'),
+      button('Reconnect status', reconnect, 'button secondary'), historyState),
+    transcript, composer, feedback);
   const inspector = el('aside', { className: 'llm-inspector', 'aria-label': 'LLM agent inspector' });
   const tabs = el('div', { className: 'llm-tabs', role: 'tablist', 'aria-label': 'Agent inspector tabs' });
   const pages = new Map(), tabButtons = new Map();
@@ -117,8 +151,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   const writeMts = el('textarea', { rows: 2, name: 'llm-write-mts', placeholder: 'Writable TODO MT keys; empty means application-global tasks only' });
   const groundingPreview = el('section', { className: 'llm-grounding-preview', 'aria-label': 'Local grounding preview' });
   const previewButton = button('Preview grounding locally', previewGrounding, 'button secondary');
-  const approveButton = el('button', { type: 'button', className: 'button secondary', disabled: true },
-    'Disclosure approval unavailable');
+  const approveButton = button('Approve exact preview', approvePreview, 'button secondary');
   const budgetInputs = {};
   const budgets = el('fieldset', { className: 'llm-budgets' }, el('legend', {}, 'Per-turn budgets'));
   for (const [key, label, max] of [['rounds', 'Model rounds', 8], ['calls', 'Tool calls', 32],
@@ -140,20 +173,23 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     el('label', { className: 'field' }, 'Explicit model', model),
     button('Refresh models', refreshModels, 'button secondary'), modelState, budgets,
     button('Save agent settings', saveSettings, 'button secondary'),
-    el('h2', {}, 'Local-only grounding preview'),
-    el('p', { className: 'muted' }, 'Grounding export is disabled: complete bound disclosure approval is not implemented. Previews and existing TODO/receipt inspectors stay local. The backend supports audited TODO edits, but this chat exposes no KEE tools. Clear all selectors to start text-only Chat.'),
+    el('h2', {}, 'Selected context'),
+    el('p', { className: 'muted' }, 'Set the scope before starting a conversation. Preview and approve each exact turn before Chat or Generate. A preview is local; it is not permission for future raw KEE reads. TODO/audit/receipt inspection stays local.'),
     el('label', { className: 'field' }, 'Preview term selectors', termKeys),
     el('label', { className: 'field' }, 'Preview read-MT selectors', readMts),
     el('label', { className: 'field' }, 'TODO write-MT ceiling', writeMts),
-    previewButton, groundingPreview, approveButton, start, promptEditor);
+    previewButton, start, promptEditor);
+  composer.insertBefore(groundingPreview, composer.firstChild);
+  composer.append(approveButton);
   let settings, promptRevision, conversation = null, pending = false, timer, polling = false, disposed = false;
   let preview = null;
+  let grant = null, connection = 'connected', historyOffset = 0, historyTotal = 0, historyLoading = false;
   let receiptPending = false;
   for (const input of [termKeys, readMts, writeMts]) input.addEventListener('input', () => {
-    preview = null;
-    groundingPreview.replaceChildren(el('p', { className: 'muted' }, 'Selectors changed. Preview again locally; disclosure approval remains unavailable.'));
+    invalidatePreview();
+    groundingPreview.replaceChildren(el('p', { className: 'muted' }, 'Selectors changed. Start a new conversation to apply a different scope.'));
   });
-  signal.addEventListener('abort', () => { disposed = true; clearTimeout(timer); }, { once: true });
+  signal.addEventListener('abort', () => { persistDraft(); disposed = true; clearTimeout(timer); notifyState(); }, { once: true });
   if (signal.aborted) disposed = true;
   container?.register({
     setActive(value) {
@@ -161,14 +197,25 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       active = !!value; panel.hidden = !active;
       clearTimeout(timer); timer = null;
       if (active && conversation?.status === 'running' && !polling) timer = setTimeout(poll, 0);
+      notifyState();
     },
-    getState: () => ({
-      agent: 'llm-knowledge', identity: 'llm', active, disposed,
-      conversationId: conversation?.id ?? null, status: conversation?.status ?? 'not_started',
-      model: conversation?.model ?? settings?.model ?? null,
-      pending,
-    }),
+    getState,
   });
+  function getState() { return {
+      agent: 'llm-knowledge', identity: 'llm', active, disposed,
+      conversationId: conversation?.id ?? null,
+      revision: conversation?.revision ?? null, turns: conversation?.turns ?? 0,
+      status: connection === 'disconnected' ? 'disconnected' : conversation?.status ?? 'not_started',
+      backendStatus: conversation?.status ?? 'not_started', connection,
+      model: conversation?.model ?? settings?.model ?? null,
+      pending, draft: text.value,
+    }; }
+  function notifyState() { container?.onStateChange?.(getState()); }
+  function persistDraft() {
+    if (!drafts.write(conversation?.id, text.value)) feedback.textContent = 'Draft storage unavailable; keep this tab open or copy your draft.';
+    notifyState();
+  }
+  function invalidatePreview() { preview = null; grant = null; consent.checked = false; }
   function selectTab(name) {
     for (const [key, page] of pages) {
       const selected = key === name; page.hidden = !selected;
@@ -177,27 +224,40 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     }
   }
   function updateControls() {
+    if (preview && preview.expiresAt * 1000 <= Date.now()) invalidatePreview();
     previewButton.disabled = pending;
-    approveButton.disabled = true;
-    send.disabled = !canChat({ conversation, text: text.value, approved: consent.checked, pending });
+    approveButton.disabled = pending || !preview || !consent.checked || !!grant;
+    send.disabled = connection !== 'connected' || !grant
+      || !canChat({ conversation, text: text.value, approved: consent.checked, pending });
+    send.textContent = mode.value === 'generate_comment' ? 'Generate Comment (unsaved)' : 'Chat';
+    allowTodos.disabled = mode.value === 'generate_comment';
     start.disabled = pending || !settings || conversation?.status === 'running';
-    interrupt.disabled = !conversation || conversation.status !== 'running';
+    interrupt.disabled = !conversation || !['running', 'outcome_unknown'].includes(conversation.status);
     stop.disabled = !conversation || conversation.status === 'closed';
+    notifyState();
   }
   function drawConversation(data) {
     if (conversation?.id === data.id && data.revision < conversation.revision) return;
     if (conversation?.id !== data.id) {
+      persistDraft(); invalidatePreview();
+      text.value = drafts.read(data.id);
+      for (const [input, key] of [[termKeys, 'terms'], [readMts, 'readMts'], [writeMts, 'writeMts']])
+        input.value = (data.scope?.[key] || []).join('\n');
       localTodoContent.replaceChildren(); localReceiptContent.replaceChildren();
       receiptCall.value = '';
     }
+    if (conversation?.id === data.id && conversation.revision !== data.revision) invalidatePreview();
     conversation = data;
+    connection = 'connected';
     identity.textContent = `LLM · ${data.model} · ${data.status} · prompt ${data.promptHash.slice(0, 12)}`;
     transcript.replaceChildren();
     if (!data.messages.length) transcript.append(el('p', { className: 'llm-empty' },
       'Conversation started. The prompt is frozen; no message has been sent to the model.'));
     for (const message of data.messages) {
       const label = message.role === 'user' ? (message.name === 'approved_grounding' ? 'Approved grounding (untrusted data)' : 'You')
-        : message.role === 'assistant' ? `LLM · ${data.model}` : 'KEE tool result';
+        : message.role === 'assistant'
+          ? `${data.action === 'generate_comment' && message === data.messages.at(-1) ? 'Unsaved AI comment proposal' : 'LLM'} · ${data.model}`
+          : 'KEE tool result';
       const content = typeof message.content === 'string' ? message.content : '';
       transcript.append(el('article', { className: `llm-message llm-message-${message.role}` },
         el('h3', {}, label), el('pre', {}, content),
@@ -233,16 +293,15 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     if (pending || disposed) return;
     pending = true; updateControls();
     try { await operation(); }
-    catch (error) { if (!disposed) feedback.textContent = `Not completed: ${error.message}. No automatic retry.`; }
+    catch (error) { if (!disposed) {
+      grant = null; consent.checked = false; connection = 'disconnected';
+      feedback.textContent = `Not completed: ${error.message}. Reconnect to inspect status; no automatic mutation retry.`;
+    } }
     finally { pending = false; if (!disposed) updateControls(); }
   }
   async function startConversation() {
     await action(async () => {
       const scope = selectedScope();
-      if (Object.values(scope).some(keys => keys.length)) {
-        feedback.textContent = 'Grounding export is disabled. Clear all scope selectors to start text-only Chat. No provider request was sent.';
-        return;
-      }
       feedback.textContent = 'Capturing model settings and exact prompt bytes…';
       const data = await request('start', { scope: { ...scope, grant: null } });
       drawConversation(data);
@@ -251,7 +310,8 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
         history.replaceState(null, '', `#/llm-knowledge?${params}`);
       }
       container?.onConversationChange?.({ agent: 'llm-knowledge', identity: 'llm', id: data.id });
-      feedback.textContent = 'Conversation started. Chat is the only action that sends your message to the model.';
+      feedback.textContent = 'Conversation started. Preview and approve an explicit turn; nothing has been sent to the model.';
+      await refreshHistory();
     });
   }
   function selectedScope() {
@@ -260,25 +320,61 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   }
   async function previewGrounding() {
     await action(async () => {
-      const scope = selectedScope();
-      if (!scope.terms.length || !scope.readMts.length || scope.terms.length * scope.readMts.length > 4) {
-        feedback.textContent = 'Choose one to four term/MT pairs for a bounded local preview.';
+      if (!conversation || !text.value.trim()) {
+        feedback.textContent = 'Start a conversation and enter your message before previewing.';
         return;
+      }
+      const scope = selectedScope(), frozen = conversation.scope;
+      if (['terms', 'readMts', 'writeMts'].some(key => JSON.stringify(scope[key]) !== JSON.stringify(frozen[key]))) {
+        feedback.textContent = 'Scope differs from this conversation. Start a new conversation first.'; return;
+      }
+      const count = scope.terms.length * scope.readMts.length;
+      if (count > 3 || (scope.terms.length && !scope.readMts.length)) {
+        feedback.textContent = 'Choose at most three term/MT pairs, with an explicit MT for each term.'; return;
       }
       const requests = scope.terms.flatMap(term => scope.readMts.flatMap(mt =>
         ['kee_definitions', 'kee_occurrences'].map(tool => ({
           tool, arguments: { term, mt, scope: 'all', offset: 0, limit: 5 },
         }))));
-      const result = await request('grounding/preview', { scope, requests });
-      if (JSON.stringify(scope) !== JSON.stringify(selectedScope())) {
-        feedback.textContent = 'Scope changed during the local preview. Preview again.';
+      if (allowTodos.checked && mode.value === 'chat') requests.push({ tool: 'kee_ledger_status', arguments: {} });
+      const captured = { conversation: conversation.id, revision: conversation.revision, text: text.value,
+        mode: mode.value, automaticTodos: allowTodos.checked && mode.value === 'chat', requests };
+      invalidatePreview();
+      const result = await request('grounding/preview', captured);
+      if (captured.conversation !== conversation?.id || captured.revision !== conversation.revision
+          || captured.text !== text.value || captured.mode !== mode.value
+          || captured.automaticTodos !== (allowTodos.checked && mode.value === 'chat')
+          || JSON.stringify(scope) !== JSON.stringify(selectedScope())) {
+        feedback.textContent = 'The turn changed during preview. Preview again.';
         return;
       }
       preview = result;
       groundingPreview.replaceChildren(el('h3', {}, 'Local preview — not sent to the provider'),
-        el('p', {}, 'For local inspection only. This preview cannot authorize disclosure to a provider.'),
-        json(preview.entries), el('p', { className: 'muted' }, `Exact preview hash: ${preview.hash}`));
-      feedback.textContent = 'Local preview ready. Disclosure approval remains unavailable; nothing was sent to the provider.';
+        el('p', {}, result.notice), json(preview.binding),
+        el('details', {}, el('summary', {}, 'Exact outgoing messages — review before approval'), json(preview.messages)),
+        el('details', {}, el('summary', {}, 'Exact selected evidence and permitted tools'), json(preview.entries), json(preview.tools)),
+        el('p', { className: 'muted' }, `SHA-256: ${preview.hash} · expires ${new Date(preview.expiresAt * 1000).toLocaleTimeString()}`));
+      feedback.textContent = 'Local preview ready. Review all fields, check the disclosure box, then Approve exact preview.';
+    });
+  }
+  async function approvePreview() {
+    if (!preview || !consent.checked) return;
+    const captured = preview;
+    await action(async () => {
+      const result = await request('grounding/approve', { id: captured.id, hash: captured.hash, approvedNonsensitive: true });
+      if (preview === captured && consent.checked) grant = result.id;
+      feedback.textContent = 'Exact preview approved for one turn. Chat/Generate is still required; no provider request has occurred.';
+    });
+  }
+  async function undoTodo(item) {
+    if (!conversation) return;
+    await action(async () => {
+      const id = conversation.id;
+      const result = await request('todos/undo', { id, ...item, callId: crypto.randomUUID() });
+      if (conversation?.id !== id) return;
+      invalidatePreview(); localTodoContent.replaceChildren(json(result));
+      feedback.textContent = 'Local changeset committed. No result was sent to the provider.';
+      await refreshTodos();
     });
   }
   async function refreshTodos() {
@@ -286,8 +382,14 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     const id = conversation.id;
     try {
       const result = await api('llm/todos', { id }, { signal });
-      if (!disposed && conversation?.id === id) localTodoContent.replaceChildren(json(result));
-    } catch (error) { feedback.textContent = `Local TODOs unavailable: ${error.message}`; }
+      if (!disposed && conversation?.id === id) {
+        localTodoContent.replaceChildren(json(result));
+        for (const item of result.undoActions || []) {
+          localTodoContent.append(button(`${item.action === 'kee_redo' ? 'Redo' : 'Undo'} ${item.changeset.slice(0, 12)}`,
+            () => undoTodo(item), 'button secondary'));
+        }
+      }
+    } catch (error) { if (!disposed && conversation?.id === id) feedback.textContent = `Local TODOs unavailable: ${error.message}`; }
   }
   async function inspectReceipt() {
     if (!conversation || !receiptCall.value || receiptPending || disposed) return;
@@ -306,32 +408,96 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     }
   }
   async function sendChat() {
-    if (!canChat({ conversation, text: text.value, approved: consent.checked, pending })) return;
+    if (!grant || connection !== 'connected'
+        || !canChat({ conversation, text: text.value, approved: consent.checked, pending })) return;
+    const id = conversation.id, sent = text.value, authorized = grant;
+    grant = null; consent.checked = false;
     await action(async () => {
-      const data = await request('chat', { id: conversation.id, revision: conversation.revision,
-        text: text.value, approvedNonsensitive: consent.checked });
-      text.value = ''; consent.checked = false; drawConversation(data);
+      const data = await request('chat', { id, revision: conversation.revision,
+        text: sent, grant: authorized, approvedNonsensitive: true });
+      if (conversation?.id !== id) return;
+      if (text.value === sent) text.value = '';
+      persistDraft(); invalidatePreview(); drawConversation(data);
       feedback.textContent = 'Turn accepted. Waiting for the complete response…';
     });
   }
   async function control(kind) {
     if (!conversation || disposed) return;
+    const id = conversation.id;
     try {
-      drawConversation(await request(kind, { id: conversation.id }));
+      const result = await request(kind, { id });
+      if (disposed || conversation?.id !== id) return;
+      invalidatePreview(); drawConversation(result);
       feedback.textContent = `${kind === 'stop' ? 'Conversation stopped' : 'Interruption requested'}. No provider cancellation or log erasure is promised.`;
-    } catch (error) { feedback.textContent = `Control failed: ${error.message}`; }
+    } catch (error) { if (!disposed && conversation?.id === id) {
+      connection = 'disconnected'; updateControls();
+      feedback.textContent = `Control outcome unknown: ${error.message}. Reconnect to inspect; no automatic retry.`;
+    } }
   }
   async function poll() {
     timer = null;
     if (disposed || !active || conversation?.status !== 'running') return;
     if (document.hidden || polling) { timer = setTimeout(poll, 2000); return; }
     polling = true;
-    try { drawConversation(await api('llm/conversation', { id: conversation.id }, { signal })); }
-    catch (error) { if (!disposed) feedback.textContent = `Status unavailable: ${error.message}`; }
+    const id = conversation.id;
+    try {
+      const result = await api('llm/conversation', { id }, { signal });
+      if (!disposed && conversation?.id === id) drawConversation(result);
+    }
+    catch (error) { if (!disposed && conversation?.id === id) {
+      connection = 'disconnected'; updateControls();
+      feedback.textContent = `Status unavailable: ${error.message}. Reconnect only reads status; it never retries a mutation.`;
+    } }
     finally {
       polling = false;
       if (!disposed && active && conversation?.status === 'running' && !timer) timer = setTimeout(poll, 2000);
     }
+  }
+  async function reconnect() {
+    if (disposed) return;
+    if (!conversation) { await loadInitial(); return; }
+    const id = conversation.id;
+    try {
+      const result = await api('llm/conversation', { id }, { signal });
+      if (!disposed && conversation?.id === id) {
+        invalidatePreview(); drawConversation(result);
+        feedback.textContent = `Status reconnected: ${result.status}. No work was resubmitted.`;
+      }
+    } catch (error) {
+      if (!disposed) { connection = 'disconnected'; updateControls(); feedback.textContent = `Reconnect failed: ${error.message}`; }
+    }
+  }
+  async function refreshHistory() {
+    await loadHistory(false, 0);
+  }
+  async function moreHistory() {
+    if (historyOffset + 25 >= historyTotal) return;
+    await loadHistory(true, historyOffset + 25);
+  }
+  async function loadHistory(append, offset) {
+    if (historyLoading || disposed) return;
+    historyLoading = true;
+    try {
+      const data = await api('llm/conversations', { offset, limit: 25 }, { signal });
+      if (disposed) return;
+      historyTotal = data.total; historyOffset = offset;
+      const options = data.items.filter(item => item.id).map(item => el('option', { value: item.id },
+        `${new Date(item.createdAt * 1000).toLocaleString()} · ${item.model} · ${item.status}`));
+      if (append) historyPicker.append(...options); else historyPicker.replaceChildren(...options);
+      if ([...historyPicker.options].some(item => item.value === conversation?.id)) historyPicker.value = conversation.id;
+      historyState.textContent = `${historyPicker.options.length} of ${data.total} conversations. Opening never submits work.`;
+    } catch (error) { if (!disposed) historyState.textContent = `History unavailable: ${error.message}`; }
+    finally { historyLoading = false; }
+  }
+  async function openSelectedConversation() {
+    if (!historyPicker.value) return;
+    await action(async () => {
+      persistDraft();
+      const data = await api('llm/conversation', { id: historyPicker.value }, { signal });
+      drawConversation(data);
+      container?.onConversationChange?.({ agent: 'llm-knowledge', identity: 'llm', id: data.id });
+      feedback.textContent = 'History opened. Disclosure approval was not restored; no work was submitted.';
+    });
   }
   async function refreshModels() {
     await action(async () => {
@@ -348,6 +514,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       settings = await request('settings/save', { revision: settings.revision, settings: {
         model: model.value, budgets: Object.fromEntries(Object.entries(budgetInputs).map(([key, input]) => [key, input.valueAsNumber])),
       } });
+      invalidatePreview();
       feedback.textContent = 'Agent settings saved. Start a new conversation to use them; existing snapshots are unchanged.';
     });
   }
@@ -360,20 +527,29 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   }
   updateControls();
   if (disposed) return panel;
-  try {
+  async function loadInitial() {
+   try {
     const [saved, document] = await Promise.all([api('llm/settings', {}, { signal }), api('llm/prompt', {}, { signal })]);
     if (disposed) return panel;
     settings = saved; base.textContent = saved.baseURL;
-    model.append(el('option', { value: saved.model, selected: true }, saved.model));
+    connection = 'connected';
+    model.replaceChildren(el('option', { value: saved.model, selected: true }, saved.model));
     for (const [key, input] of Object.entries(budgetInputs)) input.value = saved.budgets[key];
     prompt.value = document.content; promptRevision = document.revision;
     promptState.textContent = `Raw SHA-256: ${document.rawHash}`;
     identity.textContent = `LLM · saved model ${saved.model} · no conversation started`;
-    transcript.append(el('div', { className: 'llm-empty' },
-      el('h2', {}, 'Start a text-only conversation'),
-      el('p', {}, 'Review the provider notice and settings. Leave scope selectors empty; KB and task grounding are disabled. Nothing is sent until you choose Chat.')));
+    transcript.replaceChildren(el('div', { className: 'llm-empty' },
+      el('h2', {}, 'Start a Teacher conversation'),
+      el('p', {}, 'Review the provider notice and settings. Select bounded context or leave selectors empty for text-only Chat. Every turn has a local disclosure preview.')));
+    text.value = drafts.read(null);
     if (route.params.has('conversation')) drawConversation(await api('llm/conversation', { id: route.params.get('conversation') }, { signal }));
+    await refreshHistory();
     updateControls();
-  } catch (error) { feedback.textContent = `Agent unavailable: ${error.message}. No model request was sent.`; }
+   } catch (error) { if (!disposed) {
+     connection = 'disconnected'; updateControls();
+     feedback.textContent = `Agent unavailable: ${error.message}. Reconnect status retries only these reads; no model request was sent.`;
+   } }
+  }
+  await loadInitial();
   return panel;
 }

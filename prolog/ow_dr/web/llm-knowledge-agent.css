@@ -29,6 +29,11 @@
 .llm-inspector details { border-top: 1px solid var(--line); padding-top: 14px; }
 .llm-inspector details[open] { display: grid; gap: 12px; }
 .llm-agent .form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.llm-history { padding: 12px 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+.llm-history select { min-width: 0; max-width: 100%; flex: 1 1 220px; }
+.llm-history p { flex-basis: 100%; }
+.llm-grounding-preview { min-width: 0; overflow-wrap: anywhere; }
+.llm-grounding-preview details { margin-block: 12px; }
 @media (max-width: 850px) {
   .llm-workspace { grid-template-columns: minmax(0, 1fr); }
   .llm-inspector { border-left: 0; border-top: 1px solid var(--line); }

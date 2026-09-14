@@ -1,12 +1,13 @@
 :- module(kb_llm_prompt,[prompt_document/1,save_prompt_document/3,prompt_snapshot/1]).
 :- use_module(kb_llm_files).
 :- use_module(kb_activity,[with_application/1]).
+:- use_module(kb_paths,[app_dir/1]).
 :- use_module(library(error)).
 :- use_module(library(filesex)).
 :- use_module(library(utf8)).
 
 prompt_file(File) :-
-    source_file(kb_llm_prompt:prompt_snapshot(_),Source),file_directory_name(Source,App),
+    app_dir(App),
     directory_file_path(App,'prompts/llm-knowledge-agent.md',File).
 prompt_document(Document) :- prompt_file(File),snapshot_file(File,Document).
 snapshot_file(File,Document) :-

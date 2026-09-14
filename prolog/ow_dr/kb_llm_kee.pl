@@ -1,6 +1,7 @@
 :- module(kb_llm_kee,[validate_scope/1,registry_status/1,open_turn/5,close_turn/1,run_call/4,
                      preview_grounding/2,approve_grounding/2,verify_outgoing/1,verify_provider_input/2,
-                     grounding_material/2,conversation_todos/4,inspect_receipt/5]).
+                     grounding_material/2,conversation_todos/4,inspect_receipt/5,
+                     consume_grounding/4,local_undo/5,revoke_turn/1]).
 :- use_module(kb_agent_settings,[strict_keys/2]).
 :- use_module(kb_llm_schema).
 :- use_module(library(error)).
@@ -12,6 +13,15 @@
 :- use_module(library(uuid),[]).
 :- use_module(library(crypto),[]).
 :- use_module(library(utf8),[]).
+:- dynamic disclosure_epoch/1.
+:- volatile disclosure_epoch/1.
+:- dynamic live_turn_context/2.
+:- volatile live_turn_context/2.
+:- initialization(init_disclosure_epoch).
+
+init_disclosure_epoch :-
+    uuid:uuid(U,[version(4)]),atom_string(U,Epoch),
+    retractall(disclosure_epoch(_)),assertz(disclosure_epoch(Epoch)).
 
 validate_scope(S) :-
     (get_dict(grant,S,G)->strict_keys(S,[grant,readMts,terms,writeMts]),
@@ -30,10 +40,10 @@ registry_status(Status) :-
        findall(Name,(member(C,Registry.tools),C.available==true,
                      get_dict(name,C,Name),mutation_name(Name)),Mutations),
        (length(Mutations,5)->MutationsAvailable=true;MutationsAvailable=false),
-       Status=_{available:true,adapter:"local KEE inspection; provider tools withheld",
+       Status=_{available:true,adapter:"exact selected-material Teacher projection",
          mutationAvailable:MutationsAvailable,mutationTools:Mutations,managedKbAssertions:false,
-         providerTools:[],exportGateReady:false,
-         limitation:"The TODO backend is available, but no KEE tools are exposed to this chat. Grounding export is disabled pending authenticated, conversation/destination/model/logging/expiry-bound exact-material consent. Local previews and TODO/receipt inspection remain local."}
+         providerTools:[],exportGateReady:true,
+         limitation:"Only exact, expiring, one-turn approved projections are exportable. Automatic changes are limited to this conversation's audited TODOs. Mutation receipts stop the model loop and stay local. General KB CRUD, symbolic delegation and operators are unavailable."}
     ;Status=_{available:false,mutationAvailable:false,
        limitation:"Typed KEE discovery is unavailable. No tools are advertised."}).
 registry_context(Token) :-
@@ -56,8 +66,10 @@ open_turn(Config,Prompt,Scope,Handle,Tools) :-
      json_normalize(Principal,CheckedPrincipal),
      setup_call_catcher_cleanup(kb_kee:open_context(CheckedPrincipal,Token),
        (kb_kee:registry(Token,Raw),json_normalize(Raw,Registry),
-        % Local preview v2 is not the bound export grant required by KEE.
-        Tools=[],Handle=kee(Token,Registry.revision,Scope,Tools,Config.conversation)),
+        turn_tools(Scope,Registry,Tools),
+        Handle=kee(Token,Registry.revision,Scope,Tools,Config.conversation),
+        (get_dict(run,Config,_)->with_mutex(powder_llm_contexts,
+           assertz(live_turn_context(Config.conversation,Token)));true)),
        Catcher,(Catcher==exit->true;kb_kee:close_context(Token)))).
 policy(Config,Policy) :-
     (get_dict(policyVersion,Config,Policy),Policy=="llm-exact-grounding-v2"->true;
@@ -101,15 +113,48 @@ snapshot_matches(Identity,Actor) :-
     forall(member(K,[actor,kind,agent,conversation,policyVersion,model,promptVersion,promptHash]),
       (get_dict(K,Identity,V),get_dict(K,Actor,V))).
 close_turn(none).
-close_turn(kee(Token,_,_,_,_)) :- kb_kee:close_context(Token).
+close_turn(kee(Token,_,_,_,_)) :-
+    with_mutex(powder_llm_contexts,retractall(live_turn_context(_,Token))),
+    kb_kee:close_context(Token).
+revoke_turn(Conversation) :-
+    with_mutex(powder_llm_contexts,
+      (findall(Token,retract(live_turn_context(Conversation,Token)),Tokens),
+       maplist(kb_kee:close_context,Tokens))).
 
-run_call(_,_,_,_) :-
-    throw(error(llm_call_rejected,error(llm_grounding_not_approved,_))).
+turn_tools(Scope,Registry,Tools) :-
+    (get_dict(grant,Scope,Id),Id\==null->
+      grant_file(Id,F),kb_llm_files:read_json(F,Stored),
+      (get_dict(schema,Stored,3)->approved_document(Scope,D),
+        (D.binding.registryRevision==Registry.revision->Tools=D.tools;throw(error(llm_grounding_conflict,_)));
+        Tools=[]);
+      Tools=[]).
+
+run_call(Handle,Call,Safe,Audit) :-
+    catch((once(validate_dispatch(Handle,Call,Args,Mutation))->true;
+           throw(error(llm_grounding_not_approved,_))),
+          Error,throw(error(llm_call_rejected,Error))),
+    Handle=kee(Token,_,Scope,_,Conversation),Name=Call.function.name,
+    (Mutation==true->
+      kb_kee:invoke(Token,_{tool:Name,schemaVersion:1,callId:Call.id,arguments:Args},Raw),
+      json_normalize(Raw,Reply),mutation_receipt(Token,Conversation,Reply.result,Safe),
+      Audit=_{tool:Name,mutation:true,providerExport:false,receipt:Safe};
+      approved_entry(Scope,_{tool:Name,arguments:Args},Entry),
+      % Read results are the approved snapshot, never an unconstrained fresh result.
+      Safe=Entry.material,Audit=_{tool:Name,mutation:false,projectionHash:Entry.hash}).
+validate_dispatch(Handle,Call,Args,Mutation) :-
+    Handle=kee(_,_,Scope,Tools,Conversation),verify_outgoing(Handle),
+    validate_call(Call,Tools),member(T,Tools),T.function.name==Call.function.name,
+    validate_arguments(T.function.parameters,Call.function.arguments,Args),
+    (mutation_name(Call.function.name)->
+      check_owned_mutation(Conversation,Call.function.name,Args),Mutation=true;
+      approved_entry(Scope,_{tool:Call.function.name,arguments:Args},_),Mutation=false).
 
 mutation_name(Name) :-
     memberchk(Name,["kee_todo_create","kee_todo_update","kee_todo_delete","kee_undo","kee_redo"]).
 
 % These endpoints are local host UI actions, never model-callable KEE functions.
+preview_grounding(Request,Reply) :-
+    get_dict(conversation,Request,_),!,preview_bound(Request,Reply).
 preview_grounding(Request,Reply) :-
     strict_keys(Request,[requests,scope]),validate_scope(Request.scope),
     must_be(list,Request.requests),length(Request.requests,N),between(1,8,N),
@@ -129,7 +174,7 @@ validate_preview_selection(Scope,R) :-
       (memberchk(R.arguments.term,Scope.terms),memberchk(R.arguments.mt,Scope.readMts)->true;
        throw(error(llm_export_scope_denied,_)));
      true).
-approve_grounding(Request,_) :-
+approve_grounding(Request,Reply) :-
     strict_keys(Request,[approvedNonsensitive,hash,id]),
     (Request.approvedNonsensitive==true->true;permission_error(export,grounding,approval_required)),
     grant_file(Request.id,File),
@@ -137,7 +182,12 @@ approve_grounding(Request,_) :-
       (kb_llm_files:read_json(File,D),
        validate_grant(D),
        (D.hash==Request.hash->true;throw(error(llm_grounding_conflict,_))),
-       throw(error(llm_grounding_not_approved,_)))).
+       (get_dict(schema,D,3)->
+         current_binding(D),revalidate_entries(D),
+         (D.status=="pending"->true;throw(error(llm_grounding_conflict,_))),
+         kb_llm_files:atomic_json(File,D.put(status,"approved")),
+         Reply=_{id:D.id,hash:D.hash,expiresAt:D.expiresAt,status:"approved"};
+         throw(error(llm_grounding_not_approved,_))))).
 grant_file(Id,File) :- state_file('grounding-',Id,File).
 state_file(Prefix,Id0,File) :-
     (string(Id0)->atom_string(Id,Id0);Id=Id0),must_be(atom,Id),
@@ -148,8 +198,15 @@ state_file(Prefix,Id0,File) :-
 approved_document(Scope,D) :-
     get_dict(grant,Scope,Id),Id\==null,grant_file(Id,File),kb_llm_files:read_json(File,D),
     validate_grant(D),D.id==Id,
-    D.status=="approved",
-    D.scope.terms==Scope.terms,D.scope.readMts==Scope.readMts,D.scope.writeMts==Scope.writeMts.
+    (get_dict(schema,D,3)->
+      memberchk(D.status,["approved","consumed"]),current_binding(D),Base=D.binding.scope;
+      (D.status=="approved"->throw(error(llm_grounding_not_approved,_));fail)),
+    Base.terms==Scope.terms,Base.readMts==Scope.readMts,Base.writeMts==Scope.writeMts.
+validate_grant(D) :-
+    get_dict(schema,D,3),!,
+    strict_keys(D,[schema,id,status,binding,entries,tools,messages,hash,expiresAt,run]),
+    (forall(member(E,D.entries),valid_entry_hash(E)),grant_hash(D,D.hash)->true;
+     throw(error(llm_grounding_corrupt,_))).
 validate_grant(D) :-
     strict_keys(D,[entries,hash,id,scope,status]),validate_scope(D.scope),
     (memberchk(D.status,["pending","approved"]),is_list(D.entries),D.entries\=[],
@@ -173,7 +230,7 @@ normalize_request(Request,Normalized) :-
 preview_entry(Token,Request,Entry) :-
     strict_keys(Request,[arguments,tool]),
     (memberchk(Request.tool,["kee_catalog_status","kee_definitions","kee_occurrences",
-                           "kee_todo_get","kee_todo_list","kee_audit"])->true;
+                           "kee_todo_get","kee_todo_list","kee_audit","kee_ledger_status"])->true;
      permission_error(preview,llm_tool,unsupported)),
     (get_dict(limit,Request.arguments,Limit),Limit>5->resource_error(llm_preview_limit);true),
     normalize_request(Request,Normalized),
@@ -193,7 +250,7 @@ identity_evidence(Value,Pairs) :-
 evidence_field(D,Key,Value) :-
     is_dict(D),dict_pairs(D,_,Pairs),member(K-V,Pairs),
     (memberchk(K,[id,source,sourceId,sourceHash,contentRevision,resourceRevision,revision,generation,mt])->
-       Key=K,Value=V;
+       (K==source->Key=sourceIdentity,digest_json(V,Value);Key=K,Value=V);
      evidence_field(V,Key,Value)).
 evidence_field(List,Key,Value) :-
     is_list(List),member(D,List),evidence_field(D,Key,Value).
@@ -208,9 +265,17 @@ local_context(Scope,Conversation,Token) :-
       expiresAt:Expires,budgets:_{calls:32,mutations:0,resultBytes:65536,seconds:15}},Principal),
     kb_kee:open_context(Principal,Token).
 verify_outgoing(none) :- throw(error(llm_registry_unavailable,_)).
-verify_outgoing(kee(Token,_,Scope,_,_)) :-
-    kb_kee:registry(Token,_),
-    verify_provider_input(Scope,[]).
+verify_outgoing(kee(Token,Revision,Scope,_,Conversation)) :-
+    kb_kee:registry(Token,Raw),json_normalize(Raw,Registry),
+    (Registry.revision==Revision->true;throw(error(llm_grounding_conflict,_))),
+    (get_dict(grant,Scope,G),G\==null->
+      (approved_document(Scope,D),D.binding.conversation==Conversation->
+        revalidate_entries(D);throw(error(llm_grounding_not_approved,_)));
+      verify_provider_input(Scope,[])).
+verify_provider_input(Scope,History) :-
+    get_dict(grant,Scope,G),G\==null,!,
+    (approved_document(Scope,D),append(D.messages,Tail,History),
+     safe_continuation(Tail,D)->true;throw(error(llm_grounding_not_approved,_))).
 verify_provider_input(Scope,History) :-
     validate_scope(Scope),must_be(list,History),
     (Scope.terms==[],Scope.readMts==[],Scope.writeMts==[],
@@ -221,8 +286,109 @@ verify_provider_input(Scope,History) :-
        \+get_dict(name,Message,"approved_grounding")))
      ->true;throw(error(llm_grounding_not_approved,_))).
 grounding_material(Scope,Material) :-
+    get_dict(grant,Scope,G),G\==null,!,
+    (approved_document(Scope,D)->Material=D.entries;throw(error(llm_grounding_not_approved,_))).
+grounding_material(Scope,Material) :-
     (Scope.terms==[],\+ (get_dict(grant,Scope,G),G\==null)->Material=[];
      throw(error(llm_grounding_not_approved,_))).
+
+preview_bound(R,Reply) :-
+    strict_keys(R,[automaticTodos,conversation,mode,requests,revision,text]),
+    memberchk(R.mode,["chat","generate_comment"]),memberchk(R.automaticTodos,[true,false]),
+    must_be(string,R.text),string_length(R.text,L),between(1,8192,L),
+    must_be(list,R.requests),length(R.requests,N),between(0,8,N),
+    kb_llm_agent:load_document(R.conversation,C),
+    (C.revision=:=R.revision,\+memberchk(C.status,["running","closed"])->true;
+     throw(error(agent_conversation_conflict,_))),
+    Scope=C.scope,validate_scope(Scope),
+    forall(member(Request,R.requests),validate_preview_selection(Scope,Request)),
+    (R.mode=="generate_comment",R.requests==[]->throw(error(llm_grounding_required,_));true),
+    uuid:uuid(UUID,[version(4)]),atom_string(UUID,Id),
+    kb_activity:with_application(kb_llm_kee:
+     setup_call_cleanup(local_context(Scope,C.id,Token),
+       (maplist(preview_entry(Token),R.requests,Entries),
+        kb_kee:registry(Token,Raw),json_normalize(Raw,ReadRegistry)),kb_kee:close_context(Token))),
+    Config=C.config.put(conversation,C.id),
+    setup_call_cleanup(open_turn(Config,C.prompt,Scope,H,_),
+     (H=kee(T,_,_,_,_),kb_kee:registry(T,Reg0),json_normalize(Reg0,Registry),
+      approved_tools(Registry,Entries,R,Tools)),close_turn(H)),
+    Registry.revision==ReadRegistry.revision,
+    digest_json(C.config,ConfigHash),get_time(Now),Expires is Now+300,
+    kb_agent_settings:provider_notice(Notice),
+    disclosure_epoch(Epoch),
+    Binding=_{conversation:C.id,revision:C.revision,configHash:ConfigHash,hostSession:Epoch,
+      actor:"local-user",agent:"llm-knowledge",policyVersion:C.config.policyVersion,
+     provider:C.config.baseURL,model:C.config.model,settingsRevision:C.config.revision,
+     budgets:C.config.budgets,
+     promptHash:C.prompt.rawHash,scope:Scope,text:R.text,mode:R.mode,
+     automaticTodos:R.automaticTodos,notice:Notice,registryRevision:Registry.revision},
+    grounding_messages(C.history,Entries,R,Messages),
+    D0=_{schema:3,id:Id,status:"pending",binding:Binding,entries:Entries,
+     tools:Tools,messages:Messages,expiresAt:Expires,run:null},
+    grant_hash(D0,Hash),Document=D0.put(hash,Hash),
+    kb_llm_agent:bounded_json(Messages,C.config.budgets.historyBytes),
+    kb_llm_agent:bounded_json(Document,524288),
+    grant_file(Id,File),kb_llm_files:locked_file(File,kb_llm_files:atomic_json(File,Document)),
+    Reply=Document.put(notice,"LOCAL ONLY. Review all messages, exact evidence and tool schemas. Approval applies to one explicit turn, expires in five minutes, and grants no raw future reads/results. TODO results remain local; Generate Comment is an unsaved proposal.").
+approved_tools(Registry,Entries,R,Tools) :-
+    findall(Tool,
+     (member(C,Registry.tools),C.available==true,
+      (member(E,Entries),E.request.tool==C.name;
+       R.mode=="chat",R.automaticTodos==true,mutation_name(C.name)),
+      Tool=_{type:"function",function:_{name:C.name,description:C.description,parameters:C.inputSchema}}),Raw),
+    sort(Raw,Tools),validate_tools(Tools).
+grounding_messages(History,Entries,R,Messages) :-
+    (Entries==[]->Base=History;
+     json_text(Entries,Text),append(History,
+       [_{role:"user",name:"approved_grounding",content:Text}],Base)),
+    (R.mode=="generate_comment"->
+     string_concat("Generate an UNSAVED AI comment proposal from only the approved evidence. Do not write or claim a saved comment. Request: ",R.text,Input);
+     Input=R.text),
+    append(Base,[_{role:"user",content:Input}],Messages).
+grant_hash(D,Hash) :-
+    digest_json(_{schema:D.schema,id:D.id,binding:D.binding,entries:D.entries,
+                 tools:D.tools,messages:D.messages,expiresAt:D.expiresAt},Hash).
+current_binding(D) :-
+    get_time(Now),(Now<D.expiresAt->true;throw(error(llm_grounding_expired,_))),
+    kb_llm_agent:load_document(D.binding.conversation,C),
+    digest_json(C.config,Hash),kb_agent_settings:agent_settings(Current0),json_normalize(Current0,Current),
+    kb_agent_settings:provider_notice(Notice),
+    (disclosure_epoch(D.binding.hostSession),
+     Hash==D.binding.configHash,C.prompt.rawHash==D.binding.promptHash,
+     Current.baseURL==D.binding.provider,Current.model==D.binding.model,
+     Current.revision==D.binding.settingsRevision,Notice==D.binding.notice,
+     (D.status=="consumed"->C.activeTurn==D.run;C.revision=:=D.binding.revision)
+     ->true;throw(error(llm_grounding_conflict,_))).
+revalidate_entries(D) :-
+    setup_call_cleanup(local_context(D.binding.scope,D.binding.conversation,T),
+     forall(member(E,D.entries),
+       (preview_entry(T,E.request,Current),
+        (Current.hash==E.hash->true;throw(error(llm_grounding_stale,_))))),
+     kb_kee:close_context(T)).
+consume_grounding(Id,C,Request,Run) :-
+    grant_file(Id,File),kb_llm_files:locked_file(File,kb_llm_kee:
+     (kb_llm_files:read_json(File,D),validate_grant(D),current_binding(D),
+      (D.status=="approved",D.binding.conversation==C.id,
+       D.binding.revision=:=C.revision,D.binding.text==Request.text->true;
+       throw(error(llm_grounding_conflict,_))),
+      revalidate_entries(D),atom_string(Run,RunText),
+      kb_llm_files:atomic_json(File,D.put(_{status:"consumed",run:RunText})))).
+safe_continuation([], _).
+safe_continuation([M|Rest],D) :-
+    (M.role=="assistant"->true;
+     M.role=="tool",atom_json_dict(M.content,R,[]),R.ok==true,
+     member(E,D.entries),digest_json(E.material,H),digest_json(R.result,H)),
+    safe_continuation(Rest,D).
+
+local_undo(Config,Prompt,Scope,R,Reply) :-
+    strict_keys(R,[changeset,revision,action,callId]),
+    (memberchk(R.action,["kee_undo","kee_redo"])->true;domain_error(local_undo_action,R.action)),
+    setup_call_cleanup(open_turn(Config,Prompt,Scope,H,_),
+     (H=kee(Token,_,_,_,Conversation),Args=_{changeset:R.changeset,revision:R.revision},
+      check_owned_mutation(Conversation,R.action,Args),
+      kb_kee:invoke(Token,_{tool:R.action,schemaVersion:1,callId:R.callId,arguments:Args},Raw),
+      json_normalize(Raw,Result),mutation_receipt(Token,Conversation,Result.result,Reply)),
+     close_turn(H)).
 
 % Ordinary automatic mutations are limited to this conversation's own TODOs.
 ownership_file(Conversation,File) :- state_file('todo-ownership-',Conversation,File).
@@ -263,8 +429,21 @@ local_todos(kee(Token,_,_,_,Conversation),Reply) :-
       catch((kb_kee:invoke(Token,_{tool:"kee_todo_get",schemaVersion:1,callId:Id,
                                  arguments:_{id:Id}},Raw),json_normalize(Raw,Item)),
             _,Item=_{id:Id,unavailable:true})),Items),
-    Reply=_{available:true,items:Items,total:Total,limit:25,
+    local_undo_actions(Token,Own,Actions),
+    Reply=_{available:true,items:Items,total:Total,limit:25,undoActions:Actions,
       note:"Local application TODOs with durable audit/undo; not KB assertions and not exported by this inspector."}.
+local_undo_actions(Token,Own,Actions) :-
+    kb_kee_auth:principal(Token,P),
+    findall(MT,(MT=null;member(A,P.readMts),atom_string(A,MT)),Mts),
+    findall(Seq-Action,
+      (member(MT,Mts),
+       kb_kee:invoke(Token,_{tool:"kee_audit",schemaVersion:1,callId:"local-undo-options",
+         arguments:_{mt:MT,offset:0,limit:25}},Raw),json_normalize(Raw,R),
+       member(E,R.result.items),memberchk(E.id,Own.changesets),
+       (E.tool=="kee_undo"->Name="kee_redo";mutation_name(E.tool),Name="kee_undo"),
+       Seq=E.sequence,Action=_{action:Name,changeset:E.id,revision:R.result.revision}),Rows),
+    sort(0,@>=,Rows,Sorted),
+    findall(A,(nth0(N,Sorted,_-A),N<5),Actions).
 
 % Source paths and arbitrary metadata are not exportable merely because KEE can read them.
 project(Input,Output) :-

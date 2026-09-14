@@ -23,6 +23,8 @@
 :- http_handler(openworld_dr(api/llm/receipt),llm_endpoint(receipt),[method(get)]).
 :- http_handler(openworld_dr(api/llm/start),llm_endpoint(start),[method(post)]).
 :- http_handler(openworld_dr(api/llm/conversation),llm_endpoint(conversation),[method(get)]).
+:- http_handler(openworld_dr(api/llm/conversations),llm_endpoint(conversations),[method(get)]).
+:- http_handler(openworld_dr(api/llm/todos/undo),llm_endpoint(todo_undo),[method(post)]).
 :- http_handler(openworld_dr(api/llm/chat),llm_endpoint(chat),[method(post)]).
 :- http_handler(openworld_dr(api/llm/interrupt),llm_endpoint(interrupt),[method(post)]).
 :- http_handler(openworld_dr(api/llm/stop),llm_endpoint(stop),[method(post)]).
@@ -64,6 +66,11 @@ action(start,R,Reply) :-
     body(R,B),strict_keys(B,[scope]),start_conversation(B.scope,Reply).
 action(conversation,R,Reply) :-
     http_parameters(R,[id(Id,[atom])]),conversation(Id,Reply).
+action(conversations,R,Reply) :-
+    http_parameters(R,[offset(Offset,[integer,default(0),between(0,100000)]),
+                       limit(Limit,[integer,default(25),between(1,50)])]),
+    list_conversations(Offset,Limit,Reply).
+action(todo_undo,R,Reply) :- body(R,B),undo_todo(B,Reply).
 action(chat,R,Reply) :- body(R,B),start_chat(B,Reply).
 action(interrupt,R,Reply) :- body(R,B),strict_keys(B,[id]),interrupt_chat(B.id,Reply).
 action(stop,R,Reply) :- body(R,B),strict_keys(B,[id]),stop_conversation(B.id,Reply).

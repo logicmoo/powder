@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchChromium } from './chromium.mjs';
-import { modelOptions, selectedKeys, canChat } from '../web/llm-knowledge-agent.js';
+import { modelOptions, selectedKeys, canChat, teacherDrafts } from '../web/llm-knowledge-agent.js';
 const here = dirname(fileURLToPath(import.meta.url));
 test('model choice never falls back and scope keys are concrete', () => {
   assert.deepEqual(modelOptions(['other'], 'missing').map(x => x.id), ['missing', 'other']);
@@ -17,18 +17,33 @@ test('model choice never falls back and scope keys are concrete', () => {
     text: 'Hi', approved: true }), false);
   assert.equal(canChat({ conversation: { status: 'ready', scope: {
     terms: [], readMts: ['x_UnapprovedMt'], writeMts: [], grant: null,
-  } }, text: 'Hi', approved: true }), false);
-  assert.equal(canChat({ conversation: { status: 'ready', messages: [
-    { role: 'tool', content: 'Synthetic legacy data' },
-  ] }, text: 'Hi', approved: true }), false);
+  } }, text: 'Hi', approved: false }), false);
+  assert.equal(canChat({ conversation: { status: 'outcome_unknown' }, text: 'Hi', approved: true }), false);
 });
-test('isolated browser: explicit model refresh, consent, snapshots and text-only controls', {
+test('draft persistence isolates conversations and cannot restore consent or malformed data', () => {
+  const store = new Map(), storage = { getItem: key => store.get(key), setItem: (key, value) => store.set(key, value) };
+  const drafts = teacherDrafts(storage);
+  drafts.write('one', 'First 😀'); drafts.write('two', 'Second');
+  assert.equal(drafts.read('one'), 'First 😀');
+  assert.equal(drafts.read('two'), 'Second');
+  assert.deepEqual(JSON.parse(store.get('powder.teacher.draft.v1:one')), { text: 'First 😀' });
+  storage.setItem('powder.teacher.draft.v1:one', '{"text":"Restored","approved":true,"grant":"old"}');
+  assert.equal(drafts.read('one'), 'Restored');
+  storage.setItem('powder.teacher.draft.v1:one', 'invalid');
+  assert.equal(drafts.read('one'), '');
+  assert.equal(teacherDrafts({ getItem() { throw Error('blocked'); } }).read('one'), '');
+  assert.equal(teacherDrafts({ setItem() { throw Error('quota'); } }).write('one', 'a'), false);
+});
+test('isolated browser: exact consent, model selection, drafts, history and local controls', {
   skip: !process.env.LOGOS_CHROME, timeout: 60000,
 }, async () => {
   const requests = [];
   let settings = { model: 'gpt-5.6-sol', baseURL: 'http://127.0.0.1:8801/v1', revision: 'r1',
     budgets: { rounds: 4, calls: 8, tokens: 2048, seconds: 60, historyBytes: 65536, outputBytes: 32768 } };
   let conversation;
+  let failReads = false;
+  let failSettings = false;
+  const conversations = new Map();
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/') {
@@ -49,7 +64,8 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
           button:(text,click,className='button')=>element('button',{type:'button',className,onclick:click},text),
           heading:(title,body)=>element('header',{className:'page-heading'},element('div',{},element('h1',{},title),element('p',{},body)))};
         window.teacher=await createLLMKnowledgeAgent(host,{signal:controller.signal,
-          onConversationChange:value=>{window.lastConversation=value}});
+          onConversationChange:value=>{window.lastConversation=value},
+          onStateChange:value=>{window.lastState=value}});
         window.createTeacher=options=>createLLMKnowledgeAgent(host,options);
         document.querySelector('main').append(teacher.element);
         </script></html>`);
@@ -65,23 +81,32 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     const action = url.pathname.slice('/api/llm/'.length);
     requests.push({ action, body, params: Object.fromEntries(url.searchParams) });
     let result;
-    if (action === 'settings') result = settings;
+    if (action === 'settings') {
+      if (failSettings) { res.statusCode = 503; result = { error: { message: 'Synthetic initial disconnection' } }; }
+      else result = settings;
+    }
     else if (action === 'prompt') result = { content: 'Synthetic fixture prompt', revision: 'p1', rawHash: 'p1' };
     else if (action === 'models') result = { items: ['gpt-5.6-sol', 'fixture-other'], selected: settings.model, selectedAvailable: true };
     else if (action === 'settings/save') { settings = { ...settings, ...body.settings, revision: 'r2' }; result = settings; }
     else if (action === 'grounding/preview') result = { id: 'fixture-grant', hash: 'fixture-hash',
+      binding: { ...body, model: settings.model, promptHash: 'p1', settingsRevision: settings.revision,
+        provider: settings.baseURL }, messages: [{ role: 'user', content: body.text }], tools: [],
+      expiresAt: Date.now() / 1000 + 300, notice: 'Synthetic exact local preview.',
       entries: [{ material: { term: 'x_Synthetic', text: 'Synthetic approved evidence' }, evidence: [{ id: 'a-fixture', revision: 'r-fixture' }] }] };
-    else if (action === 'grounding/approve') {
-      res.statusCode = 400; result = { error: { code: 'grounding_not_approved', message: 'Disclosure approval is unavailable.' } };
-    }
-    else if (action === 'todos') result = { available: true, items: [{ title: 'Synthetic local task' }] };
+    else if (action === 'grounding/approve') result = { id: 'fixture-grant', status: 'approved' };
+    else if (action === 'conversations') result = { items: [...conversations.values()], total: conversations.size };
+    else if (action === 'todos') result = { available: true, items: [{ title: 'Synthetic local task' }],
+      undoActions: [{ action: 'kee_undo', changeset: 'fixture-change', revision: 'fixture-revision' }] };
+    else if (action === 'todos/undo') result = { committed: true, changeset: 'fixture-undo' };
     else if (action === 'receipt') result = { status: 'unknown', callId: url.searchParams.get('callId'),
       localState: 'unknown', commit: null, notice: 'Unknown may still commit. No retry or unblocking.' };
     else if (action === 'start') {
-      conversation = { id: 'c-fixture', identity: 'llm', status: 'ready', revision: 0, model: settings.model,
+      conversation = { id: `c-fixture${conversations.size ? `-${conversations.size}` : ''}`,
+        createdAt: Date.now() / 1000, identity: 'llm', status: 'ready', revision: 0, model: settings.model,
         promptHash: 'p1', messages: [], scope: body.scope, events: [], audit: [], calls: [],
         registry: { available: false, limitation: 'No fixture registry' }, todos: { available: false, reason: 'Unavailable' } };
       result = conversation;
+      conversations.set(conversation.id, conversation);
     } else if (action === 'chat') {
       conversation = { ...conversation, status: 'running', revision: 1,
         calls: [{ id: 'synthetic-recorded-call', name: 'kee_todo_create', state: 'unknown', receiptInspectable: true }],
@@ -89,7 +114,11 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
       result = conversation;
     } else if (action === 'interrupt') { conversation = { ...conversation, status: 'interrupted' }; result = conversation; }
     else if (action === 'stop') { conversation = { ...conversation, status: 'closed' }; result = conversation; }
-    else if (action === 'conversation') result = conversation;
+    else if (action === 'conversation') {
+      if (failReads) { res.statusCode = 503; result = { error: { message: 'Synthetic disconnected transport' } }; }
+      else result = conversations.get(url.searchParams.get('id'))?.id === conversation.id
+        ? conversation : conversations.get(url.searchParams.get('id'));
+    }
     else { res.statusCode = 400; result = { error: { message: 'Fixture action not implemented' } }; }
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(result));
   });
@@ -99,7 +128,8 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
   try {
     await browser.send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
     await browser.wait(`document.querySelector('[name="llm-model"]')?.value==='gpt-5.6-sol'`);
-    assert.deepEqual(requests.map(r => r.action).sort(), ['prompt', 'settings']);
+    await browser.wait(`document.querySelector('.llm-history p').textContent.includes('0 of 0')`);
+    assert.deepEqual(requests.map(r => r.action).sort(), ['conversations', 'prompt', 'settings']);
     await click('Refresh models');
     await browser.wait(`document.querySelector('[name="llm-model"]').options.length===2`);
     await browser.evaluate(`document.querySelector('[name="llm-model"]').value='fixture-other'`);
@@ -111,31 +141,36 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     await browser.evaluate(`for(const [name,value] of [['llm-term-keys','x_Synthetic'],['llm-read-mts','x_FixtureMt']]) {
       const input=document.querySelector('[name="'+name+'"]');input.value=value;input.dispatchEvent(new Event('input'));}`);
     await click('Start new conversation');
-    await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Grounding export is disabled')`);
-    assert.equal(requests.some(r => r.action === 'start'), false);
+    await browser.wait(`teacher.getState().conversationId==='c-fixture'`);
+    await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Conversation started')`);
+    await browser.evaluate(`const t=document.querySelector('[name="llm-message"]');t.value='Synthetic fixture';t.dispatchEvent(new Event('input'))`);
     await click('Preview grounding locally');
     await browser.wait(`document.querySelector('.llm-grounding-preview').textContent.includes('Synthetic approved evidence')`);
-    assert.equal(requests.some(r => r.action === 'chat' || r.action === 'start'), false);
+    assert.equal(requests.some(r => r.action === 'chat'), false);
     assert.equal(requests.find(r => r.action === 'grounding/preview').body.requests.length, 2);
-    assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Disclosure approval unavailable').disabled`), true);
-    await click('Disclosure approval unavailable');
+    assert.equal(requests.find(r => r.action === 'grounding/preview').body.conversation, 'c-fixture');
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Approve exact preview').disabled`), true);
+    await click('Approve exact preview');
     assert.equal(requests.some(r => r.action === 'grounding/approve'), false);
     await browser.evaluate('teacher.deactivate();teacher.activate()');
     assert.equal(await browser.evaluate(`document.querySelector('.llm-grounding-preview').textContent.includes('Synthetic approved evidence')`), true);
-    await browser.evaluate(`for(const name of ['llm-term-keys','llm-read-mts','llm-write-mts']) {
-      const input=document.querySelector('[name="'+name+'"]');input.value='';input.dispatchEvent(new Event('input'));}`);
-    await click('Start new conversation');
-    await browser.wait(`document.body.textContent.includes('prompt p1')`);
     assert.deepEqual(requests.find(r => r.action === 'start').body.scope,
-      { terms: [], readMts: [], writeMts: [], grant: null });
+      { terms: ['x_Synthetic'], readMts: ['x_FixtureMt'], writeMts: [], grant: null });
     await click('Todos'); await click('Refresh local TODOs');
     await browser.wait(`document.querySelector('.llm-local-todos').textContent.includes('Synthetic local task')`);
     assert.equal(requests.some(r => r.action === 'chat'), false);
+    await browser.evaluate(`[...teacher.element.querySelectorAll('button')].find(b=>b.textContent.startsWith('Undo ')).click()`);
+    await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Local changeset committed')`);
+    assert.equal(requests.find(r => r.action === 'todos/undo').body.id, 'c-fixture');
+    assert.equal(requests.find(r => r.action === 'todos/undo').body.action, 'kee_undo');
+    await click('Preview this turn locally');
+    await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Local preview ready')`);
     assert.equal(await browser.evaluate('location.hash'), '#/agent-chips?active=teacher');
     assert.equal(await browser.evaluate('lastConversation.agent'), 'llm-knowledge');
-    await browser.evaluate(`const t=document.querySelector('[name="llm-message"]');t.value='Synthetic fixture';t.dispatchEvent(new Event('input'))`);
     assert.equal(await browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Chat').disabled`), true);
     await browser.evaluate(`const c=document.querySelector('[name="llm-export-consent"]');c.checked=true;c.dispatchEvent(new Event('change'))`);
+    await click('Approve exact preview');
+    await browser.wait(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Chat').disabled===false`);
     await click('Chat');
     await browser.wait(`document.body.textContent.includes('<img src=x onerror=alert(1)> fixture')`);
     assert.equal(await browser.evaluate(`document.querySelectorAll('.llm-message img').length`), 0);
@@ -143,8 +178,11 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
     await browser.wait(`document.querySelector('.llm-local-receipt').textContent.includes('Observed: unknown')`);
     assert.equal(requests.find(r => r.action === 'receipt').params.callId, 'synthetic-recorded-call');
     assert.equal(requests.filter(r => r.action === 'chat').length, 1);
+    assert.equal(requests.find(r => r.action === 'chat').body.grant, 'fixture-grant');
+    assert.equal(await browser.evaluate('lastState.status'), 'running');
     await click('Events');
     await browser.evaluate(`document.querySelector('[name="llm-message"]').value='Unsent teacher draft';
+      document.querySelector('[name="llm-message"]').dispatchEvent(new Event('input'));
       document.querySelector('[name="llm-prompt"]').value='Uncommitted prompt draft';
       document.querySelector('[name="llm-term-keys"]').value='x_UnsentScope';
       document.querySelector('[name="llm-rounds"]').value='6';
@@ -180,6 +218,42 @@ test('isolated browser: explicit model refresh, consent, snapshots and text-only
       assert.equal(await browser.evaluate(`document.documentElement.scrollWidth<=innerWidth`), true);
     }
     assert.equal(await browser.evaluate(`document.querySelectorAll('audio,video,[name*=voice],[name*=microphone]').length`), 0);
+    failReads = true;
+    await click('Reconnect status');
+    await browser.wait(`teacher.getState().status==='disconnected'`);
+    assert.equal(await browser.evaluate('lastState.connection'), 'disconnected');
+    failReads = false;
+    await click('Reconnect status');
+    await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Status reconnected')`);
+    assert.equal(requests.filter(r => r.action === 'chat').length, 1);
+    await browser.evaluate(`(async()=>{teacher.destroy();window.restored=await createTeacher({
+      route:{params:new URLSearchParams('conversation=c-fixture')},active:false});
+      document.querySelector('main').append(restored.element)})()`);
+    assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-message"]').value`), 'Unsent teacher draft');
+    assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-export-consent"]').checked`), false);
+    assert.equal(await browser.evaluate(`[...restored.element.querySelectorAll('button')].find(b=>b.textContent==='Chat').disabled`), true);
+    assert.equal(requests.filter(r => r.action === 'chat').length, 1);
+    await click('Start new conversation');
+    await browser.wait(`restored.getState().conversationId==='c-fixture-1'`);
+    await browser.wait(`document.querySelector('.llm-history p').textContent.includes('2 of 2')`);
+    assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-message"]').value`), '');
+    await browser.evaluate(`const input=restored.element.querySelector('[name="llm-message"]');
+      input.value='Second isolated draft';input.dispatchEvent(new Event('input'));
+      restored.element.querySelector('[name="llm-history"]').value='c-fixture'`);
+    await click('Open conversation');
+    await browser.wait(`restored.getState().conversationId==='c-fixture'`);
+    assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-message"]').value`), 'Unsent teacher draft');
+    assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-export-consent"]').checked`), false);
+    failSettings = true;
+    await browser.evaluate(`(async()=>{window.failedTeacher=await createTeacher({active:false});
+      document.querySelector('main').append(failedTeacher.element)})()`);
+    assert.equal(await browser.evaluate(`failedTeacher.getState().connection`), 'disconnected');
+    failSettings = false;
+    await browser.evaluate(`[...failedTeacher.element.querySelectorAll('button')].find(b=>b.textContent==='Reconnect status').click()`);
+    await browser.wait(`failedTeacher.getState().connection==='connected'`);
+    assert.equal(requests.filter(r => r.action === 'chat').length, 1);
+    await browser.evaluate('failedTeacher.destroy()');
     assert.deepEqual(browser.exceptions, []);
-  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+  } catch (error) { console.error(browser.exceptions); throw error; }
+  finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
