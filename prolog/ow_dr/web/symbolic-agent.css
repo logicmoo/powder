@@ -14,10 +14,12 @@
 .cyc-empty p { color: var(--muted); margin-top: 12px; }
 .cyc-message { padding: 18px 0; border-bottom: 1px solid var(--soft-line); }
 .cyc-message h3 { font-size: .85rem; color: var(--muted); margin-bottom: 8px; }
+.cyc-message-time { margin: 0 0 8px; color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
 .cyc-message pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 75ch; }
 .cyc-composer { display: grid; gap: 12px; padding: 18px; border-top: 1px solid var(--line); }
 .cyc-profile-summary { font-size: .875rem; line-height: 1.5; overflow-wrap: anywhere; }
 .cyc-control-reason { margin: 0; overflow-wrap: anywhere; }
+.cyc-elapsed { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .symbolic-agent .field { display: grid; gap: 6px; min-width: 0; }
 .cyc-loaded-config { display: grid; gap: 14px; }
 .symbolic-agent select { min-width: 0; max-width: 100%; }

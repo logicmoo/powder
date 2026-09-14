@@ -440,6 +440,23 @@ completed request boundary. Reads, typed forms, unknown outcomes and ended runs
 have their own reasons and recovery guidance. No ambiguous greeting shortcut or
 fake Enqueue action is exposed; users enter their own message.
 
+Message timestamps use the existing event `time` field: Unix seconds from the
+durable KEE ledger. They are labeled **Recorded**, with a local-date rendering
+and elapsed age; this is not the message's acceptance or execution time. Missing
+timestamps remain unavailable, and a future ledger timestamp reports a clock
+difference rather than a negative or fabricated duration. The page's most recent
+visible message has a recorded-age summary, not a guessed send-to-reply duration.
+
+While a message POST is pending, the UI captures its actual local submission
+timestamp and measures elapsed time using `performance.now()`. These are explicitly
+browser measurements, not evidence that the server accepted or completed it.
+The local timestamp accompanies the existing uncertain-request marker. A lost
+response says **outcome unknown**; after controller recreation its old monotonic
+clock cannot be recovered, so elapsed duration is unavailable rather than
+invented. Creating New first does not pretend the message was already sent.
+The one-second display timer makes no API calls, changes no event sequence or
+unread count, pauses while hidden/deactivated and is removed on destroy.
+
 New is a local draft, not a durable run. Its first explicit Send creates the
 selected profile run and, only after a verified creation response, sends that
 message with the returned run identity and revision. There is no Resume detour.

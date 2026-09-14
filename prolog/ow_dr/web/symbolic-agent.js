@@ -47,6 +47,20 @@ export function mergeEvents(before, after) {
   return [...new Map([...before, ...after].map(event => [event.sequence, event])).values()]
     .sort((a, b) => a.sequence - b.sequence).slice(-200);
 }
+export function eventTimeMillis(event) {
+  const seconds = event?.time;
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return null;
+  const millis = seconds * 1000;
+  return Number.isFinite(new Date(millis).getTime()) ? millis : null;
+}
+export function elapsedText(milliseconds) {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return 'unknown';
+  const seconds = Math.floor(milliseconds / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds / 60) % 60}m`;
+  return `${Math.floor(seconds / 86400)}d ${Math.floor(seconds / 3600) % 24}h`;
+}
 
 /**
  * host.api(path, query, {method, body, signal}) uses the application API base.
@@ -79,6 +93,8 @@ export function createSymbolicAgent(host, {
   let currentId = selected?.id ?? null, currentConversation = selected?.conversation ?? null;
   let inspection = 'State', eventTotal = 0, lastError = null, refreshWhenIdle = false;
   let settingsOpen = false, operation = null, selectionEpoch = 0;
+  let clockTimer = null, requestClock = null, timeNodes = [];
+  const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
   let profileCatalog = [], profilesLoaded = false, profilesLoading = false;
   let formDrafts = read(SYMBOLIC_STORAGE.forms, {});
   if (!formDrafts || typeof formDrafts !== 'object' || Array.isArray(formDrafts)) formDrafts = {};
@@ -113,6 +129,8 @@ export function createSymbolicAgent(host, {
   settingsToggle.setAttribute('aria-controls', `${viewId}-settings`);
   settingsToggle.setAttribute('aria-expanded', 'false');
   const profileSummary = el('p', { className: 'muted cyc-profile-summary' });
+  const elapsedStatus = el('p', { className: 'muted cyc-elapsed', role: 'timer', 'aria-live': 'off',
+    'aria-label': 'Message timing', hidden: true });
   const requests = el('section', { className: 'cyc-requests', 'aria-label': 'Cyc form or approval request' });
   const chat = el('section', { className: 'cyc-chat' },
     el('div', { className: 'cyc-history-bar' }, el('label', {}, 'Conversation ', picker), settingsToggle, recover),
@@ -120,7 +138,7 @@ export function createSymbolicAgent(host, {
     el('form', { className: 'cyc-composer', onsubmit: event => { event.preventDefault(); perform('send'); } },
       el('label', { className: 'field' }, 'Message to Cyc', text),
       el('div', { className: 'cyc-actions' }, controls.send, controls.continue, controls.interrupt, controls.resume, controls.stop),
-      controlReason, profileSummary),
+      controlReason, elapsedStatus, profileSummary),
     feedback);
   const inspector = el('aside', { className: 'cyc-inspector', id: `${viewId}-settings`, hidden: true,
     'aria-label': 'Cyc settings and inspection', onkeydown: event => {
@@ -264,6 +282,54 @@ export function createSymbolicAgent(host, {
     if (!currentId && !profileReady) return 'Choose an available knowledge profile in Settings before sending.';
     return text.value.trim() ? '' : 'Write a message to enable Send.';
   }
+  function pendingMessage() {
+    let depth = 0;
+    for (let pending = unknown; pending && depth++ < 4; pending = pending.previous)
+      if (pending.action === 'send' && pending.body?.conversation === currentConversation) return pending;
+    return null;
+  }
+  function recordedAge(millis, now) {
+    return now < millis ? 'elapsed unavailable (clock differs)' : `${elapsedText(now - millis)} ago`;
+  }
+  function matchingClock(pending) {
+    return pending && requestClock && requestClock.callId === pending.body.callId
+      && requestClock.conversation === pending.body.conversation ? requestClock : null;
+  }
+  function renderTiming() {
+    if (disposed) return;
+    const now = Date.now();
+    for (const item of timeNodes) {
+      const age = recordedAge(item.millis, now);
+      if (item.node.textContent !== age) item.node.textContent = age;
+    }
+    const pending = pendingMessage();
+    const lastMessage = [...events].reverse().find(event => event.request?.input?.term?.functor === 'text');
+    elapsedStatus.hidden = !pending && !lastMessage;
+    if (pending) {
+      const submitted = pending.localSubmittedAt;
+      const stamp = typeof submitted === 'number' && Number.isFinite(new Date(submitted).getTime())
+        ? dateFormat.format(submitted) : 'unavailable';
+      const clock = matchingClock(pending);
+      const elapsed = clock ? elapsedText(performance.now() - clock.monotonic) : null;
+      elapsedStatus.textContent = `Message request sent: ${stamp} (this browser). ${elapsed === null
+        ? 'Elapsed unavailable after reload.' : `Elapsed ${elapsed} since submission.`} ${busy && operation?.kind === 'write' && operation.callId === pending.body.callId
+        ? 'Awaiting response; this is not execution time.' : 'Outcome unknown; completion time unavailable.'}`;
+    } else if (lastMessage) {
+      const millis = eventTimeMillis(lastMessage);
+      elapsedStatus.textContent = millis === null
+        ? 'Message recorded time unavailable; send-to-reply duration unknown.'
+        : `Last message on this page recorded ${recordedAge(millis, now)} (ledger). Send-to-reply duration is not recorded.`;
+    } else elapsedStatus.textContent = '';
+  }
+  function stopClock() {
+    if (clockTimer !== null) clearInterval(clockTimer);
+    clockTimer = null;
+  }
+  function syncClock() {
+    renderTiming();
+    if (disposed || !active || document.hidden || (!timeNodes.length && !matchingClock(pendingMessage()))) stopClock();
+    else if (clockTimer === null) clockTimer = setInterval(renderTiming, 1000);
+  }
   function update() {
     const allowed = controlAvailability(run, busy, !!unknown);
     for (const [name, control] of Object.entries(controls)) control.disabled = !allowed[name];
@@ -302,7 +368,7 @@ export function createSymbolicAgent(host, {
       : profile.value === 'loaded'
         ? `New uses your loaded profile${agent.value.trim() ? ` ${agent.value.trim()}` : ''}. Configure its agent and MTs in Settings. Send starts it; selecting a conversation does not.`
         : `New uses ${selectedProfile?.label ?? (profile.value ? `saved profile ${profile.value}` : 'the limited app-owned Cyc starter')}. Send starts it; nothing starts on selection.${selectedProfile?.examples?.length ? ` Examples: ${selectedProfile.examples.join(', ')}.` : ''}`;
-    emit();
+    syncClock(); emit();
   }
   function selectTab(name) {
     inspection = name;
@@ -320,6 +386,7 @@ export function createSymbolicAgent(host, {
   }
   function draw() {
     if (disposed) return;
+    timeNodes = [];
     transcript.replaceChildren();
     if (!events.length) transcript.append(el('div', { className: 'cyc-empty' },
       el('h2', {}, currentId ? 'Conversation' : 'What would you like to say?'),
@@ -328,8 +395,8 @@ export function createSymbolicAgent(host, {
     for (const event of events) {
       const input = event.request?.input?.term;
       if (input?.type === 'compound' && input.functor === 'text' && input.args[0]?.type === 'string')
-        transcript.append(message('You → Cyc', input.args[0].value));
-      for (const item of event.messages ?? []) transcript.append(message('Cyc', item.text));
+        transcript.append(message('You → Cyc', input.args[0].value, event));
+      for (const item of event.messages ?? []) transcript.append(message('Cyc', item.text, event));
     }
     if ((events[0]?.sequence ?? 0) > 0) transcript.prepend(button('Load earlier events', loadEarlier, 'text-button'));
     if ((events.at(-1)?.sequence ?? 0) < eventTotal - 1)
@@ -353,8 +420,17 @@ export function createSymbolicAgent(host, {
     scope.textContent = run ? JSON.stringify(run.source, null, 2) : 'No verified snapshot yet.';
     drawRequest(); drawPicker(); update();
   }
-  function message(label, content) {
-    return el('article', { className: 'cyc-message' }, el('h3', {}, label), el('pre', {}, content));
+  function message(label, content, event) {
+    const millis = eventTimeMillis(event);
+    const stamp = el('p', { className: 'cyc-message-time' });
+    if (millis === null) stamp.textContent = 'Recorded time unavailable';
+    else {
+      const age = el('span', {});
+      stamp.append('Recorded ', el('time', { dateTime: new Date(millis).toISOString(),
+        title: 'Durable ledger event time, not message acceptance or execution duration.' }, dateFormat.format(millis)), ' · ', age);
+      timeNodes.push({ node: age, millis });
+    }
+    return el('article', { className: 'cyc-message' }, el('h3', {}, label), stamp, el('pre', {}, content));
   }
   function data(value) { return el('pre', { className: 'cyc-data' }, typeof value === 'string' ? value : JSON.stringify(value, null, 2)); }
   function validateFormField(field, input) {
@@ -457,12 +533,18 @@ export function createSymbolicAgent(host, {
   }
   async function writeRequest(job, action, body) {
     const previous = unknown;
+    job.callId = body.callId;
     unknown = { action, body, draftKey: currentId ?? 'new', formKey: action === 'form' ? formDraftKey : null,
       ...(previous ? { previous } : {}) };
+    if (action === 'send') {
+      unknown.localSubmittedAt = Date.now();
+      requestClock = { callId: body.callId, conversation: body.conversation, monotonic: performance.now() };
+    }
     write(SYMBOLIC_STORAGE.pending, unknown); update();
     const reply = await api(`symbolic/${action}`, {}, { method: 'POST', body, signal: operationSignal(job) });
     if (!isCurrent(job)) return null;
     checkReply(reply, body);
+    if (requestClock?.callId === body.callId) requestClock = null;
     unknown = previous ?? null; write(SYMBOLIC_STORAGE.pending, unknown);
     return reply;
   }
@@ -634,7 +716,7 @@ export function createSymbolicAgent(host, {
     const activating = !!value && !active;
     active = !!value; panel.hidden = !active;
     if (active) unread = 0;
-    emit();
+    syncClock(); emit();
     if (activating) void loadProfiles();
     if (activating && currentId) {
       if (busy) refreshWhenIdle = true;
@@ -644,8 +726,10 @@ export function createSymbolicAgent(host, {
   function destroy() {
     if (disposed) return;
     saveDraft(); saveFormDraft(); disposed = true; lifecycle.abort();
+    stopClock(); document.removeEventListener('visibilitychange', syncClock);
     signal?.removeEventListener('abort', destroy); panel.remove(); emit();
   }
+  document.addEventListener('visibilitychange', syncClock);
   if (signal?.aborted) destroy();
   else signal?.addEventListener('abort', destroy, { once: true });
   events = history.find(item => item.id === currentId)?.events ?? [];

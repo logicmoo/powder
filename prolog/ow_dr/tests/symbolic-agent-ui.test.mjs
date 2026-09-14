@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchChromium } from './chromium.mjs';
-import { linkedMts, controlAvailability, symbolicText, mergeEvents, SYMBOLIC_STORAGE } from '../web/symbolic-agent.js';
+import { linkedMts, controlAvailability, symbolicText, mergeEvents, eventTimeMillis, elapsedText, SYMBOLIC_STORAGE } from '../web/symbolic-agent.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const symbol = value => ({ type: 'symbol', value });
 const wire = term => ({ schema: 'powder.symbolic-term.v1', term });
@@ -33,6 +33,17 @@ test('wire rendering never evaluates markup and preserves structured variables',
   ] })), '(pair Thing ?0 "<img src=x>")');
   assert.deepEqual(mergeEvents([{ sequence: 2 }, { sequence: 1 }], [{ sequence: 2, updated: true }]),
     [{ sequence: 1 }, { sequence: 2, updated: true }]);
+});
+test('timing uses typed ledger seconds and never fabricates invalid durations', () => {
+  assert.equal(eventTimeMillis({ time: 1700000000.125 }), 1700000000125);
+  assert.equal(eventTimeMillis({ time: 0 }), 0);
+  for (const time of [undefined, null, '1700000000', '2026-01-01', -1, Infinity, NaN, 1e100])
+    assert.equal(eventTimeMillis({ time }), null);
+  for (const duration of [undefined, null, -1, NaN, Infinity]) assert.equal(elapsedText(duration), 'unknown');
+  assert.equal(elapsedText(0), '0s');
+  assert.equal(elapsedText(61000), '1m 1s');
+  assert.equal(elapsedText(3661000), '1h 1m');
+  assert.equal(elapsedText(90061000), '1d 1h');
 });
 test('real isolated host: chat-first New/Previous, symbolic greeting, forms and safe resume', {
   skip: !process.env.LOGOS_CHROME, timeout: 90000,
@@ -70,6 +81,9 @@ test('real isolated host: chat-first New/Previous, symbolic greeting, forms and 
     assert.deepEqual(await browser.evaluate(`fixtureRequests.map(r=>r.path)`), ['symbolic/status', 'symbolic/start', 'symbolic/send']);
     assert.equal(await browser.evaluate(`fixtureRequests.at(-1).body.text`), 'hello');
     assert.match(await browser.evaluate(`document.querySelector('.cyc-transcript').textContent`), /Hello\. I am Cyc's limited declarative starter/u);
+    assert.equal(await browser.evaluate(`document.querySelector('.cyc-message time').dateTime===new Date(fixtureLatest.events.find(e=>e.request?.input?.term?.functor==='text').time*1000).toISOString()`), true);
+    assert.match(await browser.evaluate(`document.querySelector('.cyc-elapsed').textContent`), /recorded .*\(ledger\).*not recorded/u);
+    assert.match(await browser.evaluate(`document.querySelector('.cyc-message time').title`), /not message acceptance or execution duration/u);
     assert.equal(await browser.evaluate(`cyc.getState().draft`), '');
     await fill('cyc-message', 'Keep this unsent draft');
     const beforeNew = await browser.evaluate(`fixtureRequests.length`);
@@ -228,6 +242,9 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     await browser.send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
     await browser.wait(`!!window.cyc`);
     await browser.wait(`document.querySelector('[name="cyc-profile"]').options.length===3`);
+    await browser.evaluate(`(()=>{window.clockIntervals=new Set();const start=window.setInterval.bind(window),stop=window.clearInterval.bind(window);
+      window.setInterval=(fn,delay,...args)=>{const id=start(fn,delay,...args);clockIntervals.add(id);return id};
+      window.clearInterval=id=>{clockIntervals.delete(id);stop(id)}})()`);
     assert.deepEqual(requests.map(r => r.action), ['status'], 'mount may discover profiles but must not start or load knowledge');
     assert.deepEqual(await browser.evaluate(`({sequence:cyc.getState().sequence,error:cyc.getState().error,conversationId:cyc.getState().conversationId})`),
       { sequence: 0, error: null, conversationId: null });
@@ -280,6 +297,14 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     assert.equal(await browser.evaluate(`document.querySelector('[name="cyc-message"]').value`), 'draft kept 😀');
     await click('Send'); await browser.wait(`!cyc.getState().pending&&document.querySelector('.cyc-transcript').textContent.includes('known response')`);
     assert.equal(await browser.evaluate(`document.querySelectorAll('.cyc-transcript img').length`), 0);
+    assert.equal(await browser.evaluate(`document.querySelector('.cyc-message-time').textContent`), 'Recorded time unavailable');
+    assert.match(await browser.evaluate(`document.querySelector('.cyc-elapsed').textContent`), /time unavailable/u);
+    latest.events.at(-1).time = (Date.now() + 60000) / 1000;
+    await click('State'); await click('Refresh state'); await browser.wait(`!cyc.getState().pending`);
+    assert.match(await browser.evaluate(`document.querySelector('.cyc-elapsed').textContent`), /elapsed unavailable \(clock differs\)/u);
+    delete latest.events.at(-1).time;
+    await click('Refresh state'); await browser.wait(`!cyc.getState().pending`);
+    assert.match(await browser.evaluate(`document.querySelector('.cyc-elapsed').textContent`), /time unavailable/u);
     assert.equal(await browser.evaluate(`document.querySelector('[name="cyc-message"]').value`), '');
     const observed = await browser.evaluate(`cyc.getState().sequence`);
     await click('Refresh state'); await browser.wait(`!cyc.getState().pending`);
@@ -332,6 +357,15 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     dropResponse = true;
     await click('Send'); await browser.wait(`cyc.getState().unknownOutcome&&!cyc.getState().pending`);
     const sendCount = requests.filter(r => r.action === 'send').length;
+    assert.match(await browser.evaluate(`document.querySelector('.cyc-elapsed').textContent`), /Outcome unknown/u);
+    assert.equal(await browser.evaluate(`typeof JSON.parse(localStorage.getItem('powder.cyc.pending.v1')).localSubmittedAt`), 'number');
+    const beforeCold = await browser.evaluate(`clockIntervals.size`);
+    await browser.evaluate(`(()=>{const copy=new Map(Object.keys(localStorage).filter(k=>k.startsWith('powder.cyc.')).map(k=>[k,localStorage.getItem(k)]));
+      window.coldCyc=make({active:false,storage:{getItem:k=>copy.get(k)??null,setItem:(k,v)=>copy.set(k,v)}})})()`);
+    assert.equal(await browser.evaluate(`clockIntervals.size`), beforeCold, 'inactive reconstruction creates no timer');
+    assert.match(await browser.evaluate(`coldCyc.element.querySelector('.cyc-elapsed').textContent`), /Elapsed unavailable after reload/u);
+    await browser.evaluate(`coldCyc.destroy()`);
+    assert.equal(await browser.evaluate(`clockIntervals.size`), beforeCold, 'destroying another view preserves the original timer');
     await click('Stop'); await browser.wait(`cyc.getState().status==='stopped'&&!cyc.getState().pending`);
     assert.equal(await browser.evaluate(`cyc.getState().unknownOutcome`), true, 'Stop must retain the earlier uncertain request');
     assert.equal(await browser.evaluate(`JSON.parse(localStorage.getItem('powder.cyc.pending.v1')).action`), 'send');
@@ -370,6 +404,20 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     for (let i = 0; !releaseWrite && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(typeof releaseWrite, 'function');
     const heldRequestCount = requests.length;
+    assert.match(await browser.evaluate(`document.querySelector('.cyc-elapsed').textContent`), /Elapsed \d+s since submission.*Awaiting response/u);
+    const beforeClock = await browser.evaluate(`({sequence:cyc.getState().sequence,callbacks:states.length})`);
+    await browser.evaluate(`window.realDateNow=Date.now;Date.now=()=>realDateNow()-86400000`);
+    await browser.wait(`/Elapsed [1-9]\\d*s since submission/.test(document.querySelector('.cyc-elapsed').textContent)`);
+    assert.equal(requests.length, heldRequestCount, 'the clock must not poll the API');
+    assert.deepEqual(await browser.evaluate(`({sequence:cyc.getState().sequence,callbacks:states.length})`), beforeClock, 'ticks are not messages or state events');
+    await browser.evaluate(`Date.now=realDateNow;cyc.deactivate()`);
+    assert.equal(await browser.evaluate(`clockIntervals.size`), 0, 'inactive views do not keep a display timer');
+    await browser.evaluate(`cyc.activate()`);
+    assert.equal(await browser.evaluate(`clockIntervals.size`), 1, 'reactivation resumes one timer from the original monotonic anchor');
+    await browser.evaluate(`Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))`);
+    assert.equal(await browser.evaluate(`clockIntervals.size`), 0, 'a hidden document pauses the display timer');
+    await browser.evaluate(`delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))`);
+    assert.equal(await browser.evaluate(`clockIntervals.size`), 1, 'visibility resumes exactly one timer');
     assert.equal((await appearance('Interrupt')).disabled, true);
     assert.equal((await appearance('Interrupt')).border, 'dashed');
     assert.match(await browser.evaluate(`document.querySelector('.cyc-control-reason').textContent`), /no enqueue queue or mid-step cancellation/u);
@@ -400,6 +448,7 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     assert.equal(await browser.evaluate(`document.documentElement.scrollWidth<=innerWidth`), true);
     await choose(''); await fill('cyc-message', 'Persisted New conversation draft');
     await browser.evaluate(`cyc.destroy();window.cyc=make({active:false});document.querySelector('main').append(cyc.element)`);
+    assert.equal(await browser.evaluate(`clockIntervals.size`), 0);
     assert.equal(await browser.evaluate(`cyc.getState().active`), false);
     assert.equal(await browser.evaluate(`document.querySelectorAll('.symbolic-agent').length`), 1);
     assert.equal(await browser.evaluate(`cyc.getState().runId`), null);
