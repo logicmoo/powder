@@ -32,7 +32,7 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
   skip: !process.env.LOGOS_CHROME, timeout: 90000,
 }, async () => {
   const requests = [], runs = new Map(), receipts = new Map();
-  let latest, dropResponse = false;
+  let latest, dropResponse = false, holdNextRead = false, releaseRead;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (url.pathname === '/') {
@@ -51,7 +51,7 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
         const host={api,element,button:(text,click,className='button')=>element('button',{type:'button',className,onclick:click},text),
           heading:(title,body)=>element('header',{className:'page-heading'},element('div',{},element('h1',{},title),element('p',{},body)))};
         window.make=options=>createSymbolicAgent(host,options);
-        window.cyc=make({onStateChange:value=>window.lastState=value});document.querySelector('main').append(cyc.element);
+        window.states=[];window.cyc=make({onStateChange:value=>{window.lastState=value;states.push(value)}});document.querySelector('main').append(cyc.element);
         </script></html>`);
       return;
     }
@@ -76,7 +76,10 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
         runs.set(latest.run.id, latest); reply = latest;
       }
     } else if (action === 'request-status') reply = { receipt: receipts.get(url.searchParams.get('callId')) ?? { status: 'unknown' } };
-    else if (action === 'conversation') reply = runs.get(url.searchParams.get('id'));
+    else if (action === 'conversation') {
+      if (holdNextRead) { holdNextRead = false; await new Promise(resolve => { releaseRead = resolve; }); }
+      reply = runs.get(url.searchParams.get('id'));
+    }
     else if (action === 'todos' || action === 'audit') reply = { result: { items: [{ title: 'Actual fixture application record' }], total: 1 } };
     else if (action === 'receipt') reply = { receipt: { status: 'unknown', commit: null } };
     else if (['send', 'continue', 'interrupt', 'resume', 'stop', 'form'].includes(action)) {
@@ -113,21 +116,39 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     await browser.send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
     await browser.wait(`!!window.cyc`);
     assert.equal(requests.length, 0, 'mount must not create a run or load knowledge');
+    assert.deepEqual(await browser.evaluate(`({sequence:cyc.getState().sequence,error:cyc.getState().error,conversationId:cyc.getState().conversationId})`),
+      { sequence: 0, error: null, conversationId: null });
     await fill('cyc-agent', 'x_Unavailable'); await fill('cyc-definition-mt', 'x_DefMt');
     await fill('cyc-linked-mts', 'x_GrammarMt\nx_GrammarMt');
     await click('Start'); await browser.wait(`document.body.textContent.includes('Loaded agent definition unavailable')`);
     assert.equal(await browser.evaluate(`cyc.getState().unknownOutcome`), false);
+    assert.match(await browser.evaluate(`cyc.getState().error.message`), /definition unavailable/u);
     await fill('cyc-agent', 'x_TestAgent'); await click('Start');
     await browser.wait(`cyc.getState().runId==='run:1'&&!cyc.getState().pending`);
     assert.deepEqual(requests.filter(r => r.action === 'start').at(-1).body.linkedMts, ['x_GrammarMt']);
     await fill('cyc-message', 'draft kept 😀');
     const count = requests.length;
     await browser.evaluate(`cyc.deactivate();cyc.activate()`);
-    assert.equal(requests.length, count);
+    await browser.wait(`!cyc.getState().pending`);
+    assert.deepEqual(requests.slice(count).map(r => r.action), ['conversation'], 'reactivation reads but never starts work');
     assert.equal(await browser.evaluate(`document.querySelector('[name="cyc-message"]').value`), 'draft kept 😀');
     await click('Send'); await browser.wait(`!cyc.getState().pending&&document.querySelector('.cyc-transcript').textContent.includes('known response')`);
     assert.equal(await browser.evaluate(`document.querySelectorAll('.cyc-transcript img').length`), 0);
     assert.equal(await browser.evaluate(`document.querySelector('[name="cyc-message"]').value`), '');
+    const observed = await browser.evaluate(`cyc.getState().sequence`);
+    await click('Refresh state'); await browser.wait(`!cyc.getState().pending`);
+    assert.equal(await browser.evaluate(`cyc.getState().sequence`), observed);
+    assert.equal(await browser.evaluate(`cyc.getState().unread`), 0, 'an unchanged poll is not unread');
+    holdNextRead = true; await click('Refresh state'); await browser.wait(`cyc.getState().pending`);
+    await browser.evaluate(`cyc.deactivate()`);
+    latest.events.push({ sequence: latest.events.length + 1, kind: 'transition', messages: [] });
+    latest.eventTotal = latest.events.length;
+    releaseRead();
+    await browser.wait(`!cyc.getState().pending&&cyc.getState().unread===1`);
+    assert.equal(await browser.evaluate(`cyc.getState().sequence`), observed + 1);
+    await browser.evaluate(`cyc.activate()`); await browser.wait(`!cyc.getState().pending`);
+    assert.equal(await browser.evaluate(`cyc.getState().sequence`), observed + 1);
+    assert.equal(await browser.evaluate(`cyc.getState().unread`), 0);
     await click('Proofs'); assert.match(await browser.evaluate(`document.getElementById(document.querySelector('[role="tab"][aria-selected="true"]').getAttribute('aria-controls')).textContent`), /Event 1/u);
     await click('TODOs'); await click('Refresh TODOs');
     await browser.wait(`document.body.textContent.includes('Actual fixture application record')`);
@@ -144,9 +165,11 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     await fill('cyc-message', 'unsent first');
     await click('Knowledge'); await click('Start');
     await browser.wait(`cyc.getState().runId==='run:2'&&!cyc.getState().pending`);
+    assert.equal(await browser.evaluate(`cyc.getState().sequence`), 0, 'sequence belongs to this conversation, not the controller lifetime');
     await fill('cyc-message', 'second draft');
     await browser.evaluate(`const p=document.querySelector('[aria-label="Cyc conversations"]');p.value='run:1';p.dispatchEvent(new Event('change'))`);
     await browser.wait(`cyc.getState().runId==='run:1'&&!cyc.getState().pending`);
+    assert.ok(await browser.evaluate(`cyc.getState().sequence`) >= observed + 1);
     assert.equal(await browser.evaluate(`document.querySelector('[name="cyc-message"]').value`), 'unsent first');
     dropResponse = true;
     await click('Send'); await browser.wait(`cyc.getState().unknownOutcome&&!cyc.getState().pending`);
@@ -159,6 +182,9 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     await browser.evaluate(`cyc.destroy();window.cyc=make({active:false});document.querySelector('main').append(cyc.element)`);
     assert.equal(await browser.evaluate(`cyc.getState().active`), false);
     assert.equal(await browser.evaluate(`document.querySelectorAll('.symbolic-agent').length`), 1);
+    assert.equal(await browser.evaluate(`states.every((s,index)=>Number.isSafeInteger(s.sequence)&&s.sequence>=0&&typeof s.status==='string'
+      &&(s.conversationId===null||typeof s.conversationId==='string')&&('error'in s)
+      &&states.slice(0,index).filter(p=>p.conversationId===s.conversationId).every(p=>p.sequence<=s.sequence))`), true);
     assert.deepEqual(browser.exceptions, []);
   } catch (error) {
     error.message += `\nBrowser exceptions: ${JSON.stringify(browser.exceptions)}`; throw error;

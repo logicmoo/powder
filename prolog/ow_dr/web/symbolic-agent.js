@@ -73,7 +73,10 @@ export function createSymbolicAgent(host, {
   history = history.filter(item => typeof item?.id === 'string' && typeof item?.conversation === 'string').slice(-20);
   let run = null, events = [], unknown = read(SYMBOLIC_STORAGE.pending, null);
   let currentId = history.at(-1)?.id ?? null, currentConversation = history.at(-1)?.conversation ?? null;
-  let inspection = 'State', eventTotal = 0;
+  let inspection = 'State', eventTotal = 0, lastError = null, refreshWhenIdle = false;
+  const sequences = new Map(history.map(item => [item.conversation,
+    Number.isSafeInteger(item.sequence) && item.sequence >= 0 ? item.sequence
+      : Math.max(0, (item.events?.at(-1)?.sequence ?? -1) + 1)]));
   if (!document.querySelector('link[data-symbolic-agent-style]')) {
     document.head.append(el('link', { rel: 'stylesheet', 'data-symbolic-agent-style': '',
       href: new URL('./symbolic-agent.css', import.meta.url).href }));
@@ -151,9 +154,20 @@ export function createSymbolicAgent(host, {
   function state() {
     return { agent: 'symbolic', identity: 'symbolic', label: 'Cyc', active, disposed,
       conversationId: currentConversation, runId: currentId, status: run?.phase ?? 'not_started',
+      sequence: sequences.get(currentConversation) ?? 0,
+      error: lastError ?? (unknown ? { code: 'outcome_unknown', message: 'Request outcome requires durable receipt inspection.' } : null),
       pending: busy, unknownOutcome: !!unknown, unread, draft: text.value, storageFailed };
   }
   function emit() { onStateChange?.(state()); }
+  function recordError(error) {
+    lastError = { code: error?.code ?? 'symbolic_request_failed', message: error?.message ?? String(error) };
+  }
+  function settled() {
+    busy = false; update();
+    if (refreshWhenIdle && active && !disposed) {
+      refreshWhenIdle = false; void refreshState();
+    }
+  }
   function saveDraft() {
     drafts[currentId ?? 'new'] = text.value;
     const keys = Object.keys(drafts);
@@ -210,7 +224,7 @@ export function createSymbolicAgent(host, {
     pages.get('Proofs').replaceChildren(el('h2', {}, 'Source evidence and transitions'),
       ...events.filter(e => e.semantic).map(e => el('details', {},
         el('summary', {}, `Event ${e.sequence} · ${e.kind}`), data(symbolicText(e.semantic)))));
-    const gaps = events.filter(e => JSON.stringify(e.semantic).includes('"gap"'));
+    const gaps = events.filter(e => JSON.stringify(e.semantic ?? null).includes('"gap"'));
     pages.get('Gaps').replaceChildren(el('h2', {}, 'Knowledge gaps'),
       ...(gaps.length ? gaps.map(e => data(symbolicText(e.semantic)))
         : [el('p', {}, 'No gap events in this page. This does not prove complete knowledge.')]));
@@ -244,7 +258,10 @@ export function createSymbolicAgent(host, {
                 : field.type === 'Term' ? JSON.parse(input.value) : input.value;
           }
           perform('form', { values });
-        } catch { feedback.textContent = 'Term fields require valid powder.symbolic-term.v1 JSON. Nothing submitted.'; }
+        } catch {
+          feedback.textContent = 'Term fields require valid powder.symbolic-term.v1 JSON. Nothing submitted.';
+          recordError(new Error(feedback.textContent)); update();
+        }
       } });
       form.append(el('h2', {}, 'Knowledge-defined form'), data(symbolicText(pending.key)));
       for (const field of pending.fields) {
@@ -262,11 +279,18 @@ export function createSymbolicAgent(host, {
   function absorb(reply) {
     run = reply.run; currentId = run.id; currentConversation = run.conversation;
     events = mergeEvents(events, reply.events ?? []); eventTotal = reply.eventTotal ?? events.length;
+    const previous = sequences.get(currentConversation) ?? 0;
+    const observed = Number.isSafeInteger(reply.eventTotal) && reply.eventTotal >= 0 ? reply.eventTotal
+      : Number.isSafeInteger(run.eventSequence) ? run.eventSequence + 1
+        : Math.max(0, (events.at(-1)?.sequence ?? -1) + 1);
+    const sequence = Math.max(previous, observed);
+    sequences.set(currentConversation, sequence);
     const entry = { id: currentId, conversation: currentConversation, agent: run.source?.knowledgeAgent,
-      status: run.phase, events };
+      status: run.phase, sequence, events };
     history = [...history.filter(item => item.id !== currentId), entry].slice(-20);
     write(SYMBOLIC_STORAGE.history, history);
-    if (!active) unread += 1;
+    if (!active) unread += sequence - previous;
+    lastError = null;
     draw();
   }
   async function perform(action, extra = {}) {
@@ -291,6 +315,7 @@ export function createSymbolicAgent(host, {
       feedback.textContent = `Recorded ${run.phase}. ${run.pending?.kind === 'action' ? 'Inspect the planned action, then Continue.' : ''}`;
     } catch (error) {
       if (disposed) return;
+      recordError(error);
       // A structured rejection is known. A lost response is not evidence of no
       // effect; retain its identity and text without an automatic retry.
       if (error?.status >= 400 && error.status < 500) {
@@ -299,11 +324,11 @@ export function createSymbolicAgent(host, {
       feedback.textContent = `${error.message ?? 'Request failed'}. ${unknown
         ? 'Outcome may be durable. Refresh/inspect before any manual retry.'
         : 'Check Knowledge and refresh the current revision.'}`;
-    } finally { if (!disposed) { busy = false; update(); drawRequest(); } }
+    } finally { if (!disposed) { settled(); drawRequest(); } }
   }
   async function refreshState() {
     if (disposed || busy || !currentId) return;
-    busy = true; update();
+    refreshWhenIdle = false; busy = true; update();
     try {
       const reply = await api('symbolic/conversation', { id: currentId, conversation: currentConversation, limit: 100 }, { signal: lifecycle.signal });
       if (disposed) return;
@@ -312,8 +337,9 @@ export function createSymbolicAgent(host, {
       }
       absorb(reply);
       feedback.textContent = unknown ? 'Request outcome still unknown. No action was replayed.' : 'Durable state refreshed; no execution requested.';
-    } catch (error) { if (!disposed) feedback.textContent = `State unavailable: ${error.message}. History and draft retained.`; }
-    finally { if (!disposed) { busy = false; update(); } }
+    } catch (error) {
+      if (!disposed) { recordError(error); feedback.textContent = `State unavailable: ${error.message}. History and draft retained.`; }
+    } finally { if (!disposed) settled(); }
   }
   async function recoverRequest() {
     if (disposed || busy || !unknown?.body) return;
@@ -330,13 +356,14 @@ export function createSymbolicAgent(host, {
         events = []; unknown = null; write(SYMBOLIC_STORAGE.pending, null); absorb(restored);
         feedback.textContent = 'Committed request found. Restored state without replaying its action.';
       } else feedback.textContent = 'No committed receipt found. Outcome remains unknown; no request was replayed.';
-    } catch (error) { if (!disposed) feedback.textContent = `Receipt unavailable: ${error.message}`; }
-    finally { if (!disposed) { busy = false; update(); } }
+    } catch (error) {
+      if (!disposed) { recordError(error); feedback.textContent = `Receipt unavailable: ${error.message}`; }
+    } finally { if (!disposed) settled(); }
   }
   async function selectConversation() {
     saveDraft(); const saved = history.find(item => item.id === picker.value);
     if (!saved || busy) return;
-    currentId = saved.id; currentConversation = saved.conversation; run = null;
+    currentId = saved.id; currentConversation = saved.conversation; run = null; lastError = null; unread = 0;
     events = saved.events ?? []; text.value = drafts[currentId] ?? '';
     for (const content of inspectContent.values()) content.replaceChildren();
     draw(); await refreshState();
@@ -348,8 +375,8 @@ export function createSymbolicAgent(host, {
       const offset = Math.max(0, (events[0]?.sequence ?? eventTotal) - 50);
       const reply = await api('symbolic/conversation', { id: currentId, conversation: currentConversation, offset, limit: 50 }, { signal: lifecycle.signal });
       if (!disposed) { events = events.slice(0, 150); absorb(reply); }
-    } catch (error) { if (!disposed) feedback.textContent = error.message; }
-    finally { if (!disposed) { busy = false; update(); } }
+    } catch (error) { if (!disposed) { recordError(error); feedback.textContent = error.message; } }
+    finally { if (!disposed) settled(); }
   }
   async function inspect(name) {
     if (disposed || busy || !run) return;
@@ -357,9 +384,10 @@ export function createSymbolicAgent(host, {
     try {
       const reply = await api(`symbolic/${name === 'TODOs' ? 'todos' : 'audit'}`,
         { id: currentId, conversation: currentConversation, limit: 50 }, { signal: lifecycle.signal });
-      if (!disposed) inspectContent.get(name).replaceChildren(data(reply.result));
-    } catch (error) { if (!disposed) inspectContent.get(name).replaceChildren(el('p', { role: 'alert' }, error.message)); }
-    finally { if (!disposed) { busy = false; update(); } }
+      if (!disposed) { lastError = null; inspectContent.get(name).replaceChildren(data(reply.result)); }
+    } catch (error) {
+      if (!disposed) { recordError(error); inspectContent.get(name).replaceChildren(el('p', { role: 'alert' }, error.message)); }
+    } finally { if (!disposed) settled(); }
   }
   async function inspectReceipt() {
     if (disposed || busy || !run?.pending?.callId) return;
@@ -367,15 +395,20 @@ export function createSymbolicAgent(host, {
     try {
       const reply = await api('symbolic/receipt', { id: currentId, conversation: currentConversation,
         actionCallId: run.pending.callId }, { signal: lifecycle.signal });
-      if (!disposed) pages.get('Actions').append(data(reply.receipt));
-    } catch (error) { if (!disposed) feedback.textContent = error.message; }
-    finally { if (!disposed) { busy = false; update(); } }
+      if (!disposed) { lastError = null; pages.get('Actions').append(data(reply.receipt)); }
+    } catch (error) { if (!disposed) { recordError(error); feedback.textContent = error.message; } }
+    finally { if (!disposed) settled(); }
   }
   function setActive(value) {
     if (disposed) return;
+    const activating = !!value && !active;
     active = !!value; panel.hidden = !active;
     if (active) unread = 0;
     emit();
+    if (activating && currentId) {
+      if (busy) refreshWhenIdle = true;
+      else void refreshState();
+    }
   }
   function destroy() {
     if (disposed) return;

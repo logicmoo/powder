@@ -403,7 +403,14 @@ createSymbolicAgent(host, {signal, active, onStateChange, storage})
 The controller owns no main navigation and edits no shared shell. It loads its
 scoped CSS, preserves separate Cyc settings/drafts/history, and hides without
 submitting, cancelling or replaying work when deactivated. No timer/provider is
-started. GET recovery reads durable state; only explicit POSTs execute steps.
+started. Reactivation always reads the latest durable state (deferred until an
+already pending request settles). GET recovery reads durable state; only explicit
+POSTs execute steps. The lifetime signal belongs to the app/controller, not a
+route visit. `onStateChange` and `getState()` include `status`, `conversationId`,
+`sequence`, `error` and `unread`. `sequence` is a nonnegative monotonic durable
+event count per conversation; unchanged polling and older-page reads never
+increment it or unread. In-flight results arriving while hidden count only new
+events. Reactivation clears the view's unread count without resetting sequence.
 Storage keys are `powder.cyc.{settings,drafts,history,pending}.v1`, separate from
 Teacher and operators. Browser history is a bounded local index/cache (20 runs,
 200 events per view); authoritative history/state remains in KEE. There is no
