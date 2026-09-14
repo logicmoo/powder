@@ -191,6 +191,7 @@ iframe protocol and `createOperatorAgent` interface are unchanged.
 | `/conversations` | GET | `{provider,conversationId,selectionRevision,items:[{id,title,created}]}` |
 | `/conversations/new` | POST | `{conversationId,id:<fresh UUID>,title?}`; creates and selects without native work |
 | `/conversations/select` | POST | `{conversationId,id:<existing UUID>}` |
+| `/conversations/branch` | POST | `{conversationId,id:<fresh UUID>,startAnyway?:boolean}`; native Codex fork, then select |
 | `/settings` | GET / POST | Read settings; write `{conversationId,model:<native ID or null>}` |
 | `/draft` | GET / POST | Read draft; write `{conversationId,text}` |
 
@@ -216,6 +217,51 @@ view changes selection; they never become a draft in the newly selected chat.
 Explicit selection flushes the current draft before switching. Interrupted
 exclusive creation files are retained, not overwritten or automatically deleted.
 
+#### Native conversation branches
+
+**Branch conversation** means a conversation fork at the latest idle native
+history—not a Git branch, checkout or prompt replay. It is an explicit action
+inside the operator frame; loading, reconnecting and selecting history cannot
+fork. Source work/permissions/uncertain outcomes block it. Status exposes
+`branch:{supported,ready,reason}` and `branchFrom` provenance only inside the
+operator origin, never through parent messages.
+
+Codex CLI **0.149.0** supports documented `thread/fork`. A branch has a different
+native ID and confirmed `forkedFromId`; trusted CWD, durable/idle status and
+untrusted/user/read-only policy are validated. We negotiate `experimentalApi:true`
+for the pinned protocol's `excludeTurns:true` (bounded native response) and
+`deferGoalContinuation:true` (no inherited-goal continuation until a later explicit
+turn). This negotiates protocol fields, **not** permission grants. No `turn/start`
+is issued by Branch. If the native runtime must be started while another provider
+is active, the existing **Start anyway** warning applies before any fork.
+
+Copilot SDK **1.0.13** exposes no public session-fork method. Its visibly disabled
+Branch control explains this limitation. New/Previous and native resume work;
+copying prompts or manipulating provider storage to imitate a fork is not offered.
+
+The original journal remains unchanged apart from native lifecycle/safety
+metadata. The branch journal receives an inert event-history snapshot with
+`inheritedFrom:{conversationId,sequence}` per event, its own draft/model settings,
+and `branchFrom:{conversationId,nativeSessionId,sequence,created}`. Executable
+command records and pending permissions are **not** copied. Old permission IDs
+cannot authorize new work. Native history is copied by the native protocol, not
+reconstructed from browser messages. External native changes outside the bridge
+are not mirrored into its app event journal.
+
+Branch UUIDs are durable request identities. Completed retries reuse the existing
+branch. A recorded incomplete/unknown attempt is retained and never automatically
+retried or opened as a blank chat; host inspection may be required. A durable
+source uncertainty marker precedes native dispatch, so interruption fails closed.
+There is no branch-delete, rollback, arbitrary-turn boundary or automatic recovery
+RPC. Original conversations remain selectable after successful branching.
+
+Protocol review: [Codex pinned app-server documentation](https://github.com/openai/codex/blob/rust-v0.149.0/codex-rs/app-server/README.md),
+[fork parameter definitions](https://github.com/openai/codex/blob/rust-v0.149.0/codex-rs/app-server-protocol/src/protocol/v2/thread.rs)
+and [deferred goal implementation](https://github.com/openai/codex/blob/rust-v0.149.0/codex-rs/app-server/src/request_processors/thread_fork_goal.rs).
+The stable generated schema omits experimental fields; the pinned Rust definitions
+and processor were checked as well. Copilot capability was checked against the
+installed public SDK interface; no unsupported RPC is guessed.
+
 **Publication:** this revision requires an authorized Python bridge restart and
 fresh pairing inside the operator view. Old clients without conversation IDs
 fail closed. A browser refresh cannot reload Python modules. Do not restart a
@@ -225,17 +271,19 @@ existing 8063 bridge, or perform real native/model turns.
 
 Validation for this stage: native SDK/stdio fixture tests exercise distinct
 native IDs, New/Previous, restart/resume, draft/model persistence, idempotency,
-cancel/permission routing and cancelled detach. Six real Chromium scenarios
+cancel/permission routing, native forks and cancelled detach. Seven real Chromium scenarios
 cover standalone and embedded chat, stale/delayed responses, Unicode replay,
-permissions outside Settings, origin/window isolation and liveness recovery.
+permissions outside Settings, origin/window isolation, liveness recovery,
+branch acknowledgement/provenance, and disabled styles including hover/active.
 These are synthetic conversations, not evidence of a logged-in account or
 successful real model inference.
 
 Executable discovery is passive. Windows npm CMD/PowerShell shims are resolved
 through the installed official package metadata to their native `.exe`; shims
 are never passed to Win32 `Popen` or a shell. Missing/ambiguous installations
-remain unavailable. Before explicit Start, `protocolVerified` is false; discovery
-and SDK import do not start a CLI. Start verifies the actual native `--version`,
+remain unavailable. Before an explicit native action, `protocolVerified` is false;
+discovery and SDK import do not start a CLI. Start, Send startup and native Branch
+verify the actual native `--version`,
 not just npm package metadata, and rejects unvalidated versions. Authentication
 stays native-CLI-managed; neither discovery nor protocol health proves account
 or model access.
@@ -286,7 +334,7 @@ legacy Copilot alias; it is null for Codex and implies no shared protocol.
 Use `/api/operators/{provider}/status`, `/commands`, `/commands/{id}`,
 `/commands/{id}/cancel`, `/permissions/{id}`, `/draft` and `/stop`, with the same
 request bodies as below. Streams are `/events/{provider}?since=N`; every frame
-tags its provider. Numeric sequences are **per provider**, never global.
+tags its provider. Numeric sequences are **per conversation**, never global.
 Legacy unscoped endpoints remain Copilot-only compatibility aliases.
 
 The main four-chip workspace embeds `/embed?provider=copilot` and

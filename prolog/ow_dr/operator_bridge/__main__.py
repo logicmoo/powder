@@ -104,7 +104,7 @@ def main() -> None:
                                                  adapter_factory=adapter_factory)
         service = OperatorHub(services)
         print(f"Recovery view: http://{HOST}:{args.port}/")
-        print("Native providers start only after explicit human Start. No automatic sessions or prompts.")
+        print("Native providers start only after explicit human Start, Send or supported Branch. No automatic sessions or prompts.")
         app = create_app(service, auth, args.port, allowed_parent=args.parent_origin)
         if args.application_status_url:
             monitor = ApplicationMonitor(service, args.application_status_url)

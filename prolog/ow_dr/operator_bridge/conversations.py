@@ -75,7 +75,7 @@ class ConversationCatalog:
             raise BridgeError("conversation_mismatch", "Conversation journal identity does not match its catalog.")
         return journal
 
-    def create(self, identifier, title=None, settings=None):
+    def create(self, identifier, title=None, settings=None, *, branch_from=None):
         conversation_id(identifier)
         if self.contains(identifier):
             raise BridgeError("conversation_exists", "That conversation already exists.", 409)
@@ -93,6 +93,9 @@ class ConversationCatalog:
         try:
             journal.set("conversation_id", identifier)
             journal.set("conversation_settings", settings or {"model": None})
+            if branch_from is not None:
+                journal.set("branch_from", branch_from)
+                journal.set("branch_state", "prepared")
             with self.legacy.db:
                 self.legacy.db.execute("INSERT INTO conversation_catalog VALUES(?,?,?,NULL)",
                                        (identifier, title, time.time()))

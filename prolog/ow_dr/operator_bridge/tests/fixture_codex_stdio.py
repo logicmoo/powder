@@ -5,6 +5,8 @@ import sys
 import uuid
 
 thread_id = None
+fork_parent = None
+experimental = False
 
 
 def output(value):
@@ -18,7 +20,8 @@ def notice(method, **params):
 def thread(identifier=None):
     identifier = identifier or thread_id
     return {"id": identifier, "cwd": os.getcwd(), "status": {"type": "idle"},
-            "ephemeral": False, "gitInfo": {"branch": "master"}}
+            "ephemeral": False, "gitInfo": {"branch": "master"},
+            "forkedFromId": fork_parent if identifier == thread_id else None}
 
 
 def complete(status="completed"):
@@ -43,11 +46,19 @@ for line in sys.stdin:
         initialized = True
         continue
     if method == "initialize":
+        experimental = params.get("capabilities", {}).get("experimentalApi", False)
         result = {"userAgent": "fixture-not-codex"}
     elif not initialized:
         output({"id": message["id"], "error": {"code": -1, "message": "initialized required"}})
         continue
-    elif method in ("thread/start", "thread/resume"):
+    elif method in ("thread/start", "thread/resume", "thread/fork"):
+        if method == "thread/fork":
+            assert experimental and params["deferGoalContinuation"] is True and params["excludeTurns"] is True
+            assert params["ephemeral"] is False and params["sandbox"] == "read-only"
+            assert params["approvalPolicy"] == "untrusted" and params["approvalsReviewer"] == "user"
+            fork_parent = params["threadId"]
+        else:
+            fork_parent = None
         thread_id = params["threadId"] if method == "thread/resume" else "fixture-" + str(uuid.uuid4())
         result = {"thread": thread(), "cwd": params["cwd"], "approvalPolicy": "untrusted",
                   "approvalsReviewer": "user", "sandbox": {"type": "readOnly", "networkAccess": False}}

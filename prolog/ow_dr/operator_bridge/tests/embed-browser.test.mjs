@@ -74,6 +74,83 @@ async function pairFrame(child) {
   await child.until('document.querySelector("#bridge")?.textContent === "Online"');
 }
 
+test('disabled controls stay visibly disabled; Codex forks only on explicit Branch and keeps approvals scoped', {
+  timeout: 90000, skip: !existsSync(executable) || !existsSync(python),
+}, async () => {
+  const fixture = await startFixture(), browser = await launchChromium(executable);
+  const {send, evaluate, wait} = browser;
+  const stats = async () => (await fetch(fixture.parentURL + '/fixture/stats')).json();
+  try {
+    await send('Page.navigate', {url:fixture.parentURL});
+    await wait('window.states?.copilot?.status === "pairing"');
+    const copilot = await attachFrame(browser, 'copilot');
+    await pairFrame(copilot);
+    await copilot.until('!document.querySelector("#send").disabled');
+    assert.equal(await copilot.run('document.querySelector("#branch-conversation").disabled'), true);
+    assert.match(await copilot.run('document.querySelector("#branch-conversation").title'), /no public conversation fork/);
+    const style = '(() => { const s=getComputedStyle(document.querySelector("#branch-conversation")); return {background:s.backgroundColor,color:s.color,opacity:s.opacity,cursor:s.cursor}; })()';
+    const expected = {background:'rgb(223, 229, 236)',color:'rgb(36, 50, 71)',opacity:'0.8',cursor:'not-allowed'};
+    assert.deepEqual(await copilot.run(style), expected);
+    await copilot.command('DOM.enable'); await copilot.command('CSS.enable');
+    const {root:dom} = await copilot.command('DOM.getDocument');
+    const {nodeId} = await copilot.command('DOM.querySelector', {nodeId:dom.nodeId,selector:'#branch-conversation'});
+    await copilot.command('CSS.forcePseudoState', {nodeId,forcedPseudoClasses:['hover','active']});
+    assert.deepEqual(await copilot.run(style), expected, 'hover/active cannot restore actionable button colors');
+    assert.equal(await copilot.run('document.querySelectorAll("input[type=checkbox]").length'), 0);
+    await evaluate('document.getElementById("codex").click()');
+    const codex = await attachFrame(browser, 'codex');
+    await pairFrame(codex);
+    await codex.until('!document.querySelector("#send").disabled');
+    assert.equal(await codex.run('document.querySelector("#branch-conversation").disabled'), true);
+    assert.equal((await stats()).codexForks, 0);
+    await codex.run('document.querySelector("#prompt").value="permission"; document.querySelector("#composer").requestSubmit()');
+    await codex.until('document.querySelectorAll("#permissions button").length === 2');
+    assert.equal(await codex.run('document.querySelector("#branch-conversation").disabled'), true);
+    const original = await codex.run('operatorEmbed.api("/api/status")');
+    const permissionId = original.permissions[0].id;
+    await codex.run('document.querySelector("#permissions button").click()');
+    await codex.until('!document.querySelector("#branch-conversation").disabled');
+    await codex.run('document.querySelector("#prompt").value="branch draft"; document.querySelector("#prompt").dispatchEvent(new Event("input"))');
+    const before = await stats();
+    await codex.run('document.querySelector("#branch-conversation").click()');
+    await codex.until(`document.querySelector("#conversation-select").value !== ${JSON.stringify(original.conversationId)} && !document.querySelector("#send").disabled`);
+    const branch = await codex.run('operatorEmbed.api("/api/status")');
+    assert.notEqual(branch.nativeSessionId, original.nativeSessionId);
+    assert.equal(branch.branchFrom.conversationId, original.conversationId);
+    assert.equal(branch.branchFrom.nativeSessionId, original.nativeSessionId);
+    assert.equal(await codex.run('document.querySelector("#prompt").value'), 'branch draft');
+    await codex.until('document.querySelector("#transcript").textContent.includes("permission decline")');
+    assert.equal(branch.commands.length, 0, 'inherited command events have no executable command entries');
+    assert.equal(branch.permissions.length, 0);
+    const stale = await codex.run(`operatorEmbed.api('/api/permissions/${permissionId}',{conversationId:${JSON.stringify(branch.conversationId)},decision:'allow'}).then(()=>false,e=>e.code)`);
+    assert.equal(stale, 'permission_not_live', 'historical permission is not a blanket approval');
+    const after = await stats();
+    assert.equal(after.codexForks, 1);
+    assert.equal(after.codexPrompts, before.codexPrompts);
+    assert.equal(after.codexStarts, before.codexStarts);
+    assert.equal(after.copilotStarts, 0);
+    await codex.run('document.querySelector("#logout").click(); document.querySelector("#pair-retry").click()');
+    await pairFrame(codex);
+    await codex.until('document.querySelector("#prompt").value === "branch draft"');
+    assert.equal((await stats()).codexForks, 1, 're-pair cannot repeat thread/fork');
+    await codex.run(`operatorEmbed.api('/api/operator/stop',{conversationId:${JSON.stringify(branch.conversationId)},confirmation:'STOP OPERATOR'})`);
+    await evaluate('document.getElementById("copilot").click()');
+    await copilot.run('document.querySelector("#settings-toggle").click(); document.querySelector("#start").click()');
+    await copilot.until('document.querySelector("#copilot").textContent === "idle"');
+    await evaluate('document.getElementById("codex").click()');
+    await codex.until('!document.querySelector("#branch-conversation").disabled');
+    await codex.run('document.querySelector("#branch-conversation").click()');
+    await codex.until('!document.querySelector("#conflict").hidden');
+    assert.equal((await stats()).codexForks, 1, 'second-runtime branch waits for explicit acknowledgement');
+    await codex.run('document.querySelector("#start-anyway").click()');
+    await codex.until(`document.querySelector("#conversation-select").value !== ${JSON.stringify(branch.conversationId)} && !document.querySelector("#send").disabled`);
+    const confirmed = await stats();
+    assert.equal(confirmed.codexForks, 2);
+    assert.equal(confirmed.codexPrompts, after.codexPrompts, 'branching starts no model turn');
+    assert.equal(confirmed.copilotPrompts, 0);
+  } finally { await browser.close(); await fixture.close(); }
+});
+
 test('standalone recovery offers the same chat-first history and native controls', {
   timeout: 60000, skip: !existsSync(executable) || !existsSync(python),
 }, async () => {

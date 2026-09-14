@@ -88,6 +88,7 @@ class EmbedTests(unittest.IsolatedAsyncioTestCase):
             ("/settings", {"model": "must-not-change"}),
             ("/conversations/new", {"id": str(uuid.uuid4())}),
             ("/conversations/select", {"id": original}),
+            ("/conversations/branch", {"id": str(uuid.uuid4())}),
         ]
         for route, body in stale:
             for expected in (original, self.hub.get("codex").journal.get("conversation_id"), None):

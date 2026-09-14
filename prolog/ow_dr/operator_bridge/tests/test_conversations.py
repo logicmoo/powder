@@ -9,6 +9,7 @@ from pathlib import Path
 from ..codex_adapter import CodexAdapter
 from ..copilot_adapter import CopilotAdapter
 from ..journal import Journal
+from ..hub import OperatorHub
 from ..native import NativeCommand
 from ..service import OperatorService
 from ..stdio_rpc import StdioRpc
@@ -144,6 +145,8 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
         next_id = str(uuid.uuid4())
         with self.assertRaisesRegex(BridgeError, "Finish/cancel"):
             await service.select_conversation("browser", first, next_id, create=True)
+        with self.assertRaisesRegex(BridgeError, "Finish/cancel"):
+            await service.branch_conversation("browser", first, next_id)
         self.assertEqual(len(service.conversations()["items"]), 1)
         with self.assertRaises(BridgeError):
             await service.decide("browser", permission, "allow", expected=next_id)
@@ -209,3 +212,161 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(service.adapter.uncertain)
         with self.assertRaises(BridgeError):
             await service.select_conversation("browser", original, str(uuid.uuid4()), create=True)
+
+    async def test_codex_native_fork_preserves_history_provenance_without_replaying_commands(self):
+        service = await self.make("codex")
+        source = service.journal.get("conversation_id")
+        await service.save_settings("browser", source, "fixture-branch-model")
+        await self.submit(service, "source history")
+        await settle(service)
+        native_source = service.native_session_id()
+        service.draft("unsent branch draft")
+        boundary = service.journal.latest()
+        requests = []
+        native_call = service.adapter.rpc.call
+
+        async def traced(method, params, **kwargs):
+            requests.append((method, params))
+            return await native_call(method, params, **kwargs)
+
+        service.adapter.rpc.call = traced
+        target = str(uuid.uuid4())
+        await service.branch_conversation("browser", source, target)
+        native_target = service.native_session_id()
+        self.assertNotEqual(native_source, native_target)
+        self.assertEqual(service.journal.get("branch_from")["conversationId"], source)
+        self.assertEqual(service.journal.get("branch_from")["sequence"], boundary)
+        self.assertEqual(service.draft()["text"], "unsent branch draft")
+        self.assertEqual(service.journal.commands(), [], "inherited messages are not executable command records")
+        self.assertEqual(service.journal.pending(), [])
+        self.assertEqual([m for m, _ in requests], ["thread/read", "thread/fork"])
+        config = requests[-1][1]
+        self.assertIs(config["deferGoalContinuation"], True)
+        self.assertIs(config["excludeTurns"], True)
+        self.assertEqual(config["sandbox"], "read-only")
+        self.assertEqual(config["approvalsReviewer"], "user")
+        self.assertEqual(config["model"], "fixture-branch-model")
+        inherited = service.journal.events(0)["events"]
+        self.assertEqual(len(inherited), boundary + 1)
+        self.assertEqual(inherited[0]["data"]["inheritedFrom"], {"conversationId": source, "sequence": 1})
+        await service.branch_conversation("browser", source, target)
+        self.assertEqual(len(requests), 2, "duplicate HTTP request cannot issue another native fork")
+        await service.select_conversation("browser", target, source)
+        self.assertEqual(service.native_session_id(), native_source)
+        self.assertEqual(service.journal.latest(), boundary, "source history is unchanged")
+        self.assertEqual(service.settings()["model"], "fixture-branch-model")
+        await service.select_conversation("browser", source, target)
+        await service.adapter.stop()
+        await service.close()
+        restarted = await self.make("codex")
+        self.assertEqual(restarted.native_session_id(), native_target)
+        self.assertEqual(restarted.journal.events(0)["events"], inherited)
+        self.assertEqual(restarted.journal.get("branch_from")["nativeSessionId"], native_source)
+        await self.submit(restarted, "new branch turn")
+        await settle(restarted)
+        self.assertEqual(restarted.native_session_id(), native_target)
+        self.assertEqual(len(restarted.journal.commands()), 1)
+
+    async def test_native_fork_failure_is_retained_and_never_automatically_repeated(self):
+        service = await self.make("codex")
+        source = service.journal.get("conversation_id")
+        await self.submit(service)
+        await settle(service)
+        native_call = service.adapter.rpc.call
+        attempts = []
+
+        async def interrupted(method, params, **kwargs):
+            if method == "thread/fork":
+                attempts.append(params)
+                raise TimeoutError("synthetic uncertain native response")
+            return await native_call(method, params, **kwargs)
+
+        service.adapter.rpc.call = interrupted
+        target = str(uuid.uuid4())
+        with self.assertRaises(TimeoutError):
+            await service.branch_conversation("browser", source, target)
+        self.assertEqual(service.conversations()["conversationId"], source)
+        self.assertEqual(len(attempts), 1)
+        with self.assertRaises(BridgeError):
+            await service.branch_conversation("browser", source, target)
+        await service.stop_operator("browser", "STOP OPERATOR", expected=source)
+        with self.assertRaises(BridgeError) as error:
+            await service.branch_conversation("browser", source, target)
+        self.assertEqual(error.exception.code, "branch_outcome_unknown")
+        with self.assertRaises(BridgeError) as error:
+            await service.select_conversation("browser", source, target)
+        self.assertEqual(error.exception.code, "branch_incomplete")
+        self.assertEqual(len(attempts), 1)
+
+    async def test_fork_native_start_uses_two_provider_admission_warning(self):
+        codex = await self.make("codex")
+        copilot = await self.make("copilot")
+        hub = OperatorHub({"copilot": copilot, "codex": codex})
+        source = codex.journal.get("conversation_id")
+        await self.submit(codex)
+        await settle(codex)
+        await codex.stop_operator("browser", "STOP OPERATOR", expected=source)
+        await self.submit(copilot)
+        await settle(copilot)
+        request = {"conversationId": source, "id": str(uuid.uuid4())}
+        with self.assertRaises(BridgeError) as error:
+            await hub.branch("codex", "browser", request)
+        self.assertEqual(error.exception.code, "operator_conflict")
+        self.assertEqual(len(codex.conversations()["items"]), 1)
+        self.assertEqual(len(self.rpcs), 1)
+        await hub.branch("codex", "browser", {**request, "startAnyway": True})
+        self.assertEqual(len(self.rpcs), 2)
+        self.assertEqual(len(codex.conversations()["items"]), 2)
+        before = codex.journal.latest()
+        await hub.branch("codex", "browser", {**request, "startAnyway": True})
+        self.assertEqual(codex.journal.latest(), before)
+        self.assertTrue(copilot.connected)
+
+    async def test_branch_rechecks_author_and_records_uncertainty_before_native_dispatch(self):
+        service = await self.make("codex")
+        source = service.journal.get("conversation_id")
+        await self.submit(service)
+        await settle(service)
+        call = service.adapter.rpc.call
+        methods = []
+
+        async def disconnect(method, params, **kwargs):
+            methods.append(method)
+            self.assertTrue(service.journal.get("unsettled_native"), "crash marker precedes native dispatch")
+            result = await call(method, params, **kwargs)
+            if method == "thread/read":
+                service.detach("browser")
+            return result
+
+        service.adapter.rpc.call = disconnect
+        with self.assertRaises(BridgeError) as error:
+            await service.branch_conversation("browser", source, str(uuid.uuid4()))
+        self.assertEqual(error.exception.code, "browser_disconnected")
+        self.assertEqual(methods, ["thread/read"])
+        self.assertFalse(service.journal.get("unsettled_native"), "no fork was dispatched")
+        self.assertFalse(service.branching)
+        self.assertEqual(service.conversations()["conversationId"], source)
+
+    async def test_pinned_copilot_fork_is_explicitly_unsupported(self):
+        service = await self.make("copilot")
+        self.assertFalse(service.branch_capability()["supported"])
+        with self.assertRaises(BridgeError) as error:
+            await service.branch_conversation("browser", service.journal.get("conversation_id"), str(uuid.uuid4()))
+        self.assertEqual(error.exception.code, "branch_unsupported")
+        self.assertEqual(self.clients, [], "unsupported branching starts no runtime or replay")
+        self.assertEqual(len(service.conversations()["items"]), 1)
+
+    async def test_interrupted_branch_preparation_cannot_open_as_blank_chat_after_restart(self):
+        service = await self.make("codex")
+        source = service.journal.get("conversation_id")
+        identifier = str(uuid.uuid4())
+        target = service.catalog.create(identifier, "Interrupted branch", {"model": None},
+            branch_from={"conversationId": source, "nativeSessionId": "fixture-source", "sequence": 0, "created": 1})
+        self.assertEqual(target.get("branch_state"), "prepared")
+        target.close()
+        await service.close()
+        restarted = await self.make("codex")
+        with self.assertRaises(BridgeError) as error:
+            await restarted.select_conversation("browser", source, identifier)
+        self.assertEqual(error.exception.code, "branch_incomplete")
+        self.assertEqual(self.rpcs, [])

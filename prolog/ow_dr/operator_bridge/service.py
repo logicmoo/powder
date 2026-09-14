@@ -4,6 +4,7 @@ import asyncio
 import os
 import inspect
 import re
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -41,6 +42,7 @@ class OperatorService:
         self.control_lock = asyncio.Lock()
         self.changed = asyncio.Condition()
         self.active: str | None = None
+        self.branching = False
         self.task: asyncio.Task | None = None
         self.connected = False
         self.stopped = False
@@ -98,6 +100,20 @@ class OperatorService:
                 "selectionRevision": self.catalog.revision(),
                 "items": self.catalog.entries()}
 
+    def branch_capability(self):
+        supported = self.provider == "codex" and hasattr(self.adapter, "fork") and self.adapter.available
+        unsettled = bool(self.active or self.waiters or not self.queue.empty() or self.branching
+                         or self.journal.get("unsettled_native") or self.stop_outcome == "unknown"
+                         or (self.stopped and self.adapter_factory is None)
+                         or (getattr(self.adapter, "uncertain", False) and self.stop_outcome != "confirmed"))
+        reason = ("Copilot SDK 1.0.13 exposes no public conversation fork; prompts are never replayed to imitate one."
+                  if self.provider == "copilot" else "Native Codex adapter is unavailable." if not supported
+                  else "Start this native conversation before branching." if not self.native_session_id()
+                  else "Finish active work or resolve uncertain outcomes before branching." if unsettled
+                  else "Copies native history into a new thread; no prompt is sent and inherited goals are deferred.")
+        return {"supported": supported, "ready": bool(supported and self.native_session_id() and not unsettled),
+                "reason": reason}
+
     def _replacement_adapter(self, journal):
         if not self.adapter_factory:
             raise BridgeError("adapter_unavailable", "Restart this bridge to replace a stopped native adapter.", 409)
@@ -113,6 +129,8 @@ class OperatorService:
         return replacement
 
     async def _bind_journal(self, journal):
+        if journal.get("branch_from") and journal.get("branch_state") != "complete":
+            raise BridgeError("branch_incomplete", "This native branch is unconfirmed. It will not be recreated or used as a blank conversation.")
         model = journal.get("conversation_settings")["model"]
         if self.stopped:
             self.adapter = self._replacement_adapter(journal)
@@ -122,6 +140,7 @@ class OperatorService:
             except BaseException as error:
                 self.connected = False
                 self.adapter.uncertain = True
+                self.journal.set("unsettled_native", True)
                 if isinstance(error, asyncio.CancelledError):
                     raise
                 raise BridgeError("conversation_detach_failed", "Native detach was not confirmed. Selection is unchanged.") from None
@@ -179,6 +198,72 @@ class OperatorService:
                 raise
             await self.notify()
             return self.settings()
+
+    async def branch_conversation(self, principal, expected, identifier):
+        async with self.control_lock:
+            self.human(principal)
+            if identifier == self.journal.get("conversation_id") and self.journal.get("branch_from"):
+                if self.journal.get("branch_from")["conversationId"] == expected:
+                    return self.conversations()
+            self.require_conversation(expected)
+            if not self.branch_capability()["supported"]:
+                raise BridgeError("branch_unsupported", self.branch_capability()["reason"], 409)
+            self._gate_selection()
+            source_id = self.native_session_id()
+            if not source_id:
+                raise BridgeError("native_session_required", "Start this native conversation before branching.", 409)
+            self.verify()
+            if self.catalog.contains(identifier):
+                target = self.catalog.open(identifier)
+                provenance = target.get("branch_from") or {}
+                if provenance.get("conversationId") != expected or provenance.get("nativeSessionId") != source_id:
+                    if target is not self.catalog.legacy:
+                        target.close()
+                    raise BridgeError("branch_identity_conflict", "That identifier does not belong to this branch request.", 409)
+                if target.get("branch_state") != "complete":
+                    target.close()
+                    raise BridgeError("branch_outcome_unknown", "A previous branch attempt is incomplete. It is not retried.", 409)
+            else:
+                title = next(item["title"] for item in self.catalog.entries() if item["id"] == expected)
+                target = self.catalog.create(identifier, ("Branch of " + title)[:120], {"model": self.settings()["model"]},
+                    branch_from={"conversationId": expected, "nativeSessionId": source_id,
+                                 "sequence": self.journal.latest(), "created": time.time()})
+            self.branching = True
+            native_attempt = False
+            try:
+                await self.notify()
+                if target.get("branch_state") != "complete":
+                    self.journal.inherit_history(target, target.get("branch_from")["sequence"])
+                    target.set("operator_draft", self.draft()["text"])
+                    if self.stopped:
+                        self.adapter = self._replacement_adapter(self.journal)
+                        self.stopped = False
+                        self.stop_outcome = None
+                    self.journal.set("unsettled_native", True)
+                    native_attempt = True
+                    native_id = await self.adapter.fork(source_id, target, cwd=self.workspace.root,
+                                                        authorize=lambda: self.human(principal))
+                    self.catalog.claim_native(identifier, native_id)
+                    target.set("native_session_id", native_id)
+                    target.event("conversation.branched", target.get("branch_from"))
+                    target.set("branch_state", "complete")
+                    self.journal.set("unsettled_native", False)
+                await self._bind_journal(target)
+                return self.conversations()
+            except BaseException:
+                if target.get("native_creation") and target.get("branch_state") != "complete":
+                    target.set("branch_state", "unknown")
+                    self.journal.set("unsettled_native", True)
+                    self.adapter.uncertain = True
+                    self.connected = False
+                elif native_attempt and not target.get("native_creation"):
+                    self.journal.set("unsettled_native", False)
+                if target is not self.journal and target is not self.catalog.legacy:
+                    target.close()
+                raise
+            finally:
+                self.branching = False
+                await self.notify()
 
     def validate_payload(self, payload: dict) -> tuple[str, str]:
         if set(payload) - {"id", "kind", "text", "startAnyway", "startIfNeeded", "conversationId"}:
@@ -419,7 +504,7 @@ class OperatorService:
 
     def status(self) -> dict:
         adapter = self.adapter.status()
-        state = ("awaiting_permission" if self.waiters else "busy" if self.active
+        state = ("awaiting_permission" if self.waiters else "busy" if self.active or self.branching
                  else "idle" if self.connected and not self.stopped else "offline")
         if state == "idle" and adapter.get("connected") is False:
             state = "offline"
@@ -436,7 +521,8 @@ class OperatorService:
                 "adapter": adapter,
                 "application": self.app, "lastSequence": self.journal.latest(),
                 "permissions": self.journal.pending(), "commands": self.journal.commands(),
-                "settings": self.settings()}
+                "settings": self.settings(), "branch": self.branch_capability(),
+                "branchFrom": self.journal.get("branch_from")}
 
     async def update_application(self, state: dict) -> None:
         self.app = state

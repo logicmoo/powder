@@ -38,7 +38,7 @@ def project_status(status: dict) -> dict:
               "stopped", "stopOutcome", "canRestart", "conversationId", "nativeSessionId",
               "sdkSessionId", "lastSequence", "selectionRevision")
     result = {key: _scalar(status.get(key)) for key in fields}
-    for key in ("workspace", "bridge", "application", "adapter", "settings"):
+    for key in ("workspace", "bridge", "application", "adapter", "settings", "branch", "branchFrom"):
         result[key] = _record(status.get(key, {}))
     adapter = status.get("adapter", {})
     result["adapter"]["ownedPids"] = [_scalar(item) for item in adapter.get("ownedPids", [])[:32]]

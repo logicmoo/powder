@@ -83,10 +83,11 @@ async def main():
         return rpc
 
     second_journal = Journal(directory / "codex.sqlite3", first.workspace, provider="codex")
-    second = OperatorService(second_journal, first.workspace,
-        CodexAdapter(NativeCommand("codex", Path(sys.executable)), second_journal,
-                     model="fixture-codex-model", rpc_factory=rpc_factory, version_probe=fake_version),
-        verify=lambda: None)
+    def codex_factory(journal=second_journal, model="fixture-codex-model"):
+        return CodexAdapter(NativeCommand("codex", Path(sys.executable)), journal,
+                            model=model, rpc_factory=rpc_factory, version_probe=fake_version)
+    second = OperatorService(second_journal, first.workspace, codex_factory(),
+                             verify=lambda: None, adapter_factory=codex_factory)
     hub = OperatorHub({"copilot": first, "codex": second})
     sockets = []
     for _ in range(2):
@@ -124,6 +125,7 @@ async def main():
             "copilotCreates": sum(client.creates for client in clients),
             "copilotResumes": sum(client.resumes for client in clients),
             "codexResumes": rpc_calls.count("thread/resume"),
+            "codexForks": rpc_calls.count("thread/fork"),
             "codexStarts": rpc_calls.count("thread/start"),
             "codexPrompts": rpc_calls.count("turn/start"),
             "embedCookiesReceived": any(cookies),

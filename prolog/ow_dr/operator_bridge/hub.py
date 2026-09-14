@@ -89,3 +89,25 @@ class OperatorHub:
                 "operators": [operator.status() for operator in self.operators.values()],
                 "concurrencyPolicy": "warn-and-confirm-not-exclusive",
                 "externalOperatorsTracked": False}
+
+    async def branch(self, provider, principal, payload):
+        async with self.start_gate:
+            operator = self.get(provider)
+            operator.human(principal)
+            conflicts = []
+            if payload["id"] != operator.journal.get("conversation_id"):
+                operator.require_conversation(payload["conversationId"])
+                if not operator.branch_capability()["supported"]:
+                    raise BridgeError("branch_unsupported", operator.branch_capability()["reason"], 409)
+                conflicts = self.conflicts(provider) if not operator.adapter.status().get("ownedPids") else []
+                if conflicts and not payload.get("startAnyway", False):
+                    raise BridgeError("operator_conflict",
+                       "Branching needs this provider's native runtime. Another operator is active; we recommend one at a time.",
+                       details={"conflicts": conflicts, "requiresConfirmation": True, "allowedWithConfirmation": True})
+            result = await operator.branch_conversation(principal, payload["conversationId"], payload["id"])
+            if payload.get("startAnyway") and conflicts:
+                operator.journal.event("operator.concurrency_acknowledged", {
+                    "branchId": payload["id"], "conflicts": conflicts,
+                    "message": "Human chose Start anyway for native branching. Native permissions remain separate."})
+                await operator.notify()
+            return result

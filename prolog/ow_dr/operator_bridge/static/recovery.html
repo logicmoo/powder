@@ -22,7 +22,8 @@ FORM: Narrow independent recovery surface; not a pretend terminal or replacement
 <div class="chat-toolbar"><label for="conversation-select">Conversation</label>
 <select id="conversation-select" disabled><option>Loading conversations…</option></select>
 <button id="conversation-retry" class="secondary" type="button" hidden>Retry history</button>
-<button id="settings-toggle" class="secondary" type="button" aria-expanded="false" aria-controls="inspector">Settings</button></div>
+<button id="settings-toggle" class="secondary" type="button" aria-expanded="false" aria-controls="inspector">Settings</button>
+<button id="branch-conversation" class="secondary" type="button" aria-describedby="branch-support" disabled>Branch conversation</button></div>
 <section id="permission-section" hidden aria-labelledby="permission-title"><h2 id="permission-title">Your permission is needed</h2>
 <p class="muted">Every native request needs a human decision. Disconnection never approves.</p><div id="permissions"></div></section>
 <section id="conflict" class="notice" hidden aria-labelledby="conflict-title">
@@ -46,6 +47,7 @@ Starting anyway does not approve any native tool permission.</p>
 </form>
 </section>
 <div id="inspector" hidden>
+<p id="branch-support" class="muted">Checking native conversation branching support…</p>
 <dl class="connections"><div><dt>Bridge</dt><dd id="bridge">Connecting</dd></div>
 <div><dt id="native-label">Native operator</dt><dd id="copilot">Not connected</dd></div>
 <div><dt>Prolog</dt><dd id="prolog">Not registered</dd></div></dl>

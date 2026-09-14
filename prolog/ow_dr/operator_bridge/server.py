@@ -233,6 +233,16 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
         operator.require_conversation(data["conversationId"])
         return web.json_response(await operator.save_settings(request[PRINCIPAL], data["conversationId"], data["model"]))
 
+    async def conversation_branch(request):
+        data = await payload(request)
+        if (set(data) - {"conversationId", "id", "startAnyway"} or not {"conversationId", "id"} <= set(data)
+                or ("startAnyway" in data and type(data["startAnyway"]) is not bool)):
+            raise BridgeError("invalid_branch", "Supply the source conversationId and a fresh branch UUID.", 400)
+        if isinstance(service, OperatorHub):
+            return web.json_response(await service.branch(selected(request).provider, request[PRINCIPAL], data))
+        return web.json_response(await selected(request).branch_conversation(
+            request[PRINCIPAL], data["conversationId"], data["id"]))
+
     async def embedded_logout(request):
         await payload(request)
         token = request.headers.get(EMBED_HEADER)
@@ -369,6 +379,7 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
         ("/draft/read", embedded_draft_read), ("/events", embedded_events),
         ("/conversations", conversations), ("/conversations/new", conversation_change),
         ("/conversations/select", conversation_change), ("/settings", settings), ("/settings/read", settings),
+        ("/conversations/branch", conversation_branch),
     ):
         app.router.add_post(embedded_prefix + suffix, handler)
     app.router.add_get("/api/status", status)
@@ -393,6 +404,7 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
     app.router.add_get("/api/operators/{provider}/conversations", conversations)
     app.router.add_post("/api/operators/{provider}/conversations/new", conversation_change)
     app.router.add_post("/api/operators/{provider}/conversations/select", conversation_change)
+    app.router.add_post("/api/operators/{provider}/conversations/branch", conversation_branch)
     app.router.add_get("/api/operators/{provider}/settings", settings)
     app.router.add_post("/api/operators/{provider}/settings", settings)
     app.router.add_get("/events/{provider}", websocket)

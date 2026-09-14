@@ -49,7 +49,7 @@ class CodexAdapter:
                                           "version": self.version, "owner": "bridge-stdio"})
         result = await self.rpc.call("initialize", {
             "clientInfo": {"name": "powder_operator", "title": "powder operator", "version": "1.0"},
-            "capabilities": {"experimentalApi": False}})
+            "capabilities": {"experimentalApi": True}})
         if not isinstance(result, dict) or not isinstance(result.get("userAgent"), str):
             raise BridgeError("native_protocol_mismatch", "Codex initialize response was not recognized.")
         await self.rpc.notify("initialized")
@@ -105,6 +105,34 @@ class CodexAdapter:
             raise BridgeError("session_branch_mismatch", "Native thread belongs to another branch.")
         if thread.get("ephemeral") is not False or (thread.get("status") or {}).get("type") not in ("idle", "notLoaded"):
             raise BridgeError("native_thread_not_idle", "Only verified idle durable threads may be attached.")
+
+    async def fork(self, source_id, target_journal, *, cwd, authorize):
+        async with self.lifecycle:
+            if self.stopping or self.uncertain or self.events is not None or self.permission_handler is not None:
+                raise BridgeError("native_work_unsettled", "Branch only an idle, verified native conversation.")
+            await self.connect(cwd)
+            source = await self.rpc.call("thread/read", {"threadId": source_id, "includeTurns": False})
+            self._validate_thread(source.get("thread"), source_id)
+            authorize()
+            target_journal.set("native_creation", {"state": "requested", "operation": "thread/fork", "sourceId": source_id})
+            config = {"threadId": source_id, "cwd": cwd, "ephemeral": False,
+                      "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "read-only",
+                      "excludeTurns": True, "deferGoalContinuation": True}
+            model = target_journal.get("conversation_settings")["model"]
+            if model:
+                config["model"] = model
+            result = await self.rpc.call("thread/fork", config)
+            trusted_cwd(result.get("cwd"), cwd)
+            thread = result.get("thread")
+            self._validate_thread(thread)
+            if (thread["id"] == source_id or thread.get("forkedFromId") != source_id
+                    or result.get("approvalPolicy") != "untrusted" or result.get("approvalsReviewer") != "user"
+                    or not isinstance(result.get("sandbox"), dict) or result["sandbox"].get("type") != "readOnly"
+                    or result["sandbox"].get("networkAccess", False) is not False):
+                raise BridgeError("invalid_native_fork", "Native fork identity, provenance or human-reviewed policy was not confirmed.")
+            target_journal.set("native_creation", {"id": thread["id"], "state": "confirmed",
+                                                  "operation": "thread/fork", "sourceId": source_id})
+            return thread["id"]
 
     async def _notification(self, method: str, params: dict):
         if method == "bridge/transportClosed":

@@ -9,7 +9,7 @@ const prefix = `/api/operators/${provider}`;
 let socket, sequence = 0, connected = false, state, reconnect, refreshTimer, draftTimer, pendingSend;
 let draftLoaded = false, draftWrites = Promise.resolve();
 let permissionsKey, commandsKey;
-let switching = false, draftConversation, catalogKey, manualNotice;
+let switching = false, draftConversation, catalogKey, manualNotice, pendingBranch;
 const localDrafts = new Map();
 $(`${provider}-chip`)?.setAttribute('aria-current', 'page');
 $('native-label').textContent = providerName;
@@ -59,7 +59,7 @@ function renderStatus(value) {
     clearTimeout(draftTimer); draftLoaded = false; draftConversation = value.conversationId;
     sequence = 0; $('transcript').replaceChildren(); $('empty').hidden = false;
     $('event-journal').replaceChildren();
-    $('prompt').value = ''; pendingSend = null; permissionsKey = commandsKey = null;
+    $('prompt').value = ''; pendingSend = pendingBranch = null; permissionsKey = commandsKey = null;
     $('conflict').hidden = true;
     $('model').value = value.settings?.model || '';
   }
@@ -74,6 +74,9 @@ function renderStatus(value) {
   $('send').disabled = !available || !draftLoaded || switching || (value.stopped && !value.canRestart);
   $('say-something').disabled = !connected || !draftLoaded || switching;
   $('conversation-select').disabled = !connected || switching;
+  $('branch-conversation').disabled = !connected || switching || !draftLoaded || !value.branch?.ready;
+  $('branch-conversation').title = value.branch?.reason || 'Native branching is unavailable in this bridge version.';
+  $('branch-support').textContent = $('branch-conversation').title;
   $('permission-section').hidden = !value.permissions.length;
   if (changed) loadConversation(value.conversationId);
   if (!value.adapter.available) statusNotice(value.adapter.reason || `${providerName} adapter is not configured. Executable discovery does not mean a live session or authenticated account.`);
@@ -91,6 +94,8 @@ function renderStatus(value) {
     ['Provider', value.provider], ['Executable', value.adapter.executable?.path || 'Not discovered / test adapter'],
     ['Model', value.adapter.model || 'Provider-native default; access not verified'],
     ['Native authentication', value.adapter.authentication || 'Provider-owned; not shared'],
+    ['Branched from', value.branchFrom?.conversationId
+      ? `${value.branchFrom.conversationId} · through event ${value.branchFrom.sequence}` : 'Independent conversation'],
     ['Application lifecycle', value.application.message || 'No restart authority']]) {
     identity.append(text('dt', label), text('dd', String(item)));
   }
@@ -261,9 +266,10 @@ $('prompt').addEventListener('input', () => {
 $('start').addEventListener('click', () => submit('start_session'));
 $('start-anyway').addEventListener('click', () => {
   if (pendingSend) submit(pendingSend.kind, pendingSend.text, true);
+  else if (pendingBranch) chooseConversation('__branch__', true);
 });
 $('dismiss-conflict').addEventListener('click', () => {
-  $('conflict').hidden = true; pendingSend = null;
+  $('conflict').hidden = true; pendingSend = pendingBranch = null;
 });
 $('stop').addEventListener('click', async () => {
   try { await api('/api/operator/stop', {confirmation: $('confirmation').value}); $('confirmation').value = ''; await refresh(); }
@@ -295,27 +301,39 @@ $('say-something').addEventListener('click', () => {
   $('prompt').value = 'Say hello briefly. Do not use tools or inspect files.';
   $('prompt').dispatchEvent(new Event('input')); $('prompt').focus();
 });
-$('conversation-select').addEventListener('change', async () => {
+async function chooseConversation(choice, startAnyway = false) {
   if (switching || !draftLoaded) return;
   manualNotice = null;
-  const previous = state.conversationId, choice = $('conversation-select').value;
+  const previous = state.conversationId;
+  const route = choice === '__new__' ? 'new' : choice === '__branch__' ? 'branch' : 'select';
+  if (route !== 'branch') pendingBranch = null;
+  const body = route === 'branch' && pendingBranch?.conversationId === previous ? {...pendingBranch}
+    : {conversationId: previous, id: route === 'select' ? choice : crypto.randomUUID()};
+  if (route === 'branch') { pendingBranch = {...body}; pendingSend = null; }
+  if (startAnyway) body.startAnyway = true;
   switching = true; clearTimeout(draftTimer); renderStatus(state);
   try {
     await saveDraft($('prompt').value, previous);
-    await api(choice === '__new__' ? '/api/conversations/new' : '/api/conversations/select',
-      {conversationId: previous, id: choice === '__new__' ? crypto.randomUUID() : choice});
+    await api('/api/conversations/' + route, body);
+    pendingBranch = null; $('conflict').hidden = true;
     await refresh();
   } catch (error) {
     $('conversation-select').value = state.conversationId;
-    notice(`Conversation switch paused: ${error.message}`, true);
+    if (error.code === 'operator_conflict' && route === 'branch') {
+      $('conflict-message').textContent = `${error.message} Active: ${error.details.conflicts.join(', ')}.`;
+      $('conflict').hidden = false; $('start-anyway').focus();
+    } else notice(`Conversation switch paused: ${error.message}`, true);
   } finally {
     switching = false;
     $('conversation-select').disabled = !connected;
     $('prompt').disabled = !connected || !draftLoaded;
     $('send').disabled = !connected || !draftLoaded || !state.adapter.available || (state.stopped && !state.canRestart);
     $('say-something').disabled = !connected || !draftLoaded;
+    $('branch-conversation').disabled = !connected || !draftLoaded || !state.branch?.ready;
   }
-});
+}
+$('conversation-select').addEventListener('change', () => chooseConversation($('conversation-select').value));
+$('branch-conversation').addEventListener('click', () => chooseConversation('__branch__'));
 document.querySelectorAll('.provider-chip').forEach(link => {
   link.addEventListener('click', async event => {
     event.preventDefault(); clearTimeout(draftTimer);

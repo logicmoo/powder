@@ -99,6 +99,17 @@ class Journal:
     def latest(self) -> int:
         return self.db.execute("SELECT COALESCE(MAX(sequence),0) FROM events").fetchone()[0]
 
+    def inherit_history(self, target, through):
+        source_id = self.get("conversation_id")
+        with target.db:
+            for row in self.db.execute("SELECT created,kind,payload,sequence FROM events WHERE sequence<=? ORDER BY sequence",
+                                       (through,)):
+                value = json.loads(row["payload"])
+                value["inheritedFrom"] = {"conversationId": source_id, "sequence": row["sequence"]}
+                target.db.execute("INSERT INTO events(created,kind,payload) VALUES(?,?,?)",
+                                  (row["created"], row["kind"], json.dumps(value, ensure_ascii=False)))
+            target.db.execute("INSERT OR REPLACE INTO meta VALUES('history_inherited','true')")
+
     def command(self, command_id: str) -> dict:
         row = self.db.execute("SELECT id,kind,preview,state,created FROM commands WHERE id=?",
                                (command_id,)).fetchone()
