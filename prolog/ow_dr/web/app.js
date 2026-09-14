@@ -38,7 +38,7 @@ const annotations = createAnnotationHost({ api, presentation, reference: nativeR
   getGeneration: () => state.status?.generation });
 let annotationRevision = null;
 let sourceEditor, sourceOpenCount = 0, acceptedRoute = location.hash, pendingInterfaceReload = false;
-let agentWorkspace;
+let agentWorkspace, agentStatusRequest;
 const pendingJobs = new Set();
 
 function nativeReference({ key, expression, kind }) {
@@ -2119,6 +2119,12 @@ const pages = {
 function agentsPage(route) {
   agentWorkspace ??= createAgentWorkspace({ api, element, button, heading });
   agentWorkspace.activate(route);
+  if (!state.status && !agentStatusRequest) {
+    agentStatusRequest = api('status').then(setStatus).catch(error => {
+      $('#generation-state').textContent = `KB status unavailable: ${error.message}`;
+      $('#loaded-count').textContent = 'KB Sources';
+    }).finally(() => { agentStatusRequest = null; });
+  }
   return agentWorkspace.element;
 }
 

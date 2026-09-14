@@ -67,6 +67,7 @@ test('real app serves four-role workspace without loading KBs or contacting a mo
     await browser.send('Page.navigate', { url: `${base}#/agents` });
     await browser.wait('document.querySelectorAll(".agent-chip").length===4');
     await browser.wait('document.querySelector(\'[name="llm-model"]\')?.value==="gpt-5.6-sol"');
+    await browser.wait('document.querySelector("#generation-state").textContent.includes("Generation 0")');
     await browser.evaluate(`document.querySelector('[name="llm-message"]').value='Private local draft, never sent';
       document.querySelector('[name="llm-message"]').dispatchEvent(new Event('input'))`);
     await browser.route('#/overview');
