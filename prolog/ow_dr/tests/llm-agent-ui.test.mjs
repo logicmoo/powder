@@ -102,18 +102,18 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
       localState: 'unknown', commit: null, notice: 'Unknown may still commit. No retry or unblocking.' };
     else if (action === 'start') {
       conversation = { id: `c-fixture${conversations.size ? `-${conversations.size}` : ''}`,
-        createdAt: Date.now() / 1000, identity: 'llm', status: 'ready', revision: 0, model: settings.model,
+        createdAt: Date.now() / 1000, identity: 'llm', status: 'ready', revision: 0, sequence: 0, model: settings.model,
         promptHash: 'p1', messages: [], scope: body.scope, events: [], audit: [], calls: [],
         registry: { available: false, limitation: 'No fixture registry' }, todos: { available: false, reason: 'Unavailable' } };
       result = conversation;
       conversations.set(conversation.id, conversation);
     } else if (action === 'chat') {
-      conversation = { ...conversation, status: 'running', revision: 1,
+      conversation = { ...conversation, status: 'running', revision: 1, sequence: 1,
         calls: [{ id: 'synthetic-recorded-call', name: 'kee_todo_create', state: 'unknown', receiptInspectable: true }],
         messages: [{ role: 'user', content: body.text }, { role: 'assistant', content: '<img src=x onerror=alert(1)> fixture' }] };
       result = conversation;
-    } else if (action === 'interrupt') { conversation = { ...conversation, status: 'interrupted' }; result = conversation; }
-    else if (action === 'stop') { conversation = { ...conversation, status: 'closed' }; result = conversation; }
+    } else if (action === 'interrupt') { conversation = { ...conversation, status: 'interrupted', sequence: conversation.sequence + 1 }; result = conversation; }
+    else if (action === 'stop') { conversation = { ...conversation, status: 'closed', sequence: conversation.sequence + 1 }; result = conversation; }
     else if (action === 'conversation') {
       if (failReads) { res.statusCode = 503; result = { error: { message: 'Synthetic disconnected transport' } }; }
       else result = conversations.get(url.searchParams.get('id'))?.id === conversation.id
@@ -143,6 +143,12 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     await click('Start new conversation');
     await browser.wait(`teacher.getState().conversationId==='c-fixture'`);
     await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Conversation started')`);
+    assert.equal(await browser.evaluate('teacher.getState().sequence'), 0);
+    assert.equal(await browser.evaluate('teacher.getState().error'), null);
+    const readyReads = requests.filter(r => r.action === 'conversation').length;
+    await browser.evaluate('teacher.deactivate();teacher.activate();new Promise(resolve=>setTimeout(resolve,300))');
+    assert.ok(requests.filter(r => r.action === 'conversation').length > readyReads, 'reactivation reads even a ready conversation');
+    assert.equal(await browser.evaluate('teacher.getState().sequence'), 0, 'a refresh is not a new event');
     await browser.evaluate(`const t=document.querySelector('[name="llm-message"]');t.value='Synthetic fixture';t.dispatchEvent(new Event('input'))`);
     await click('Preview grounding locally');
     await browser.wait(`document.querySelector('.llm-grounding-preview').textContent.includes('Synthetic approved evidence')`);
@@ -180,6 +186,7 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     assert.equal(requests.filter(r => r.action === 'chat').length, 1);
     assert.equal(requests.find(r => r.action === 'chat').body.grant, 'fixture-grant');
     assert.equal(await browser.evaluate('lastState.status'), 'running');
+    assert.equal(await browser.evaluate('lastState.sequence'), 1);
     await click('Events');
     await browser.evaluate(`document.querySelector('[name="llm-message"]').value='Unsent teacher draft';
       document.querySelector('[name="llm-message"]').dispatchEvent(new Event('input'));
@@ -211,6 +218,15 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     assert.equal(requests.filter(r => r.action === 'chat').length, 1);
     await click('Interrupt turn');
     await browser.wait(`document.body.textContent.includes('interrupted')`);
+    await browser.evaluate('teacher.deactivate()');
+    const beforeIdleRefresh = requests.length;
+    conversation = { ...conversation, status: 'closed', revision: conversation.revision + 1,
+      sequence: conversation.sequence + 1 };
+    await browser.evaluate('teacher.activate()');
+    await browser.wait(`teacher.getState().status==='closed'&&teacher.getState().sequence===3`);
+    assert.equal(await browser.evaluate('lastState.sequence'), 3);
+    assert.ok(requests.slice(beforeIdleRefresh).every(r => r.action === 'conversation'),
+      'resuming a completed view reads newer remote state without starting or replaying work');
     await click('Raw JSON');
     assert.equal(await browser.evaluate(`document.querySelector('[id$="-raw-json"]').hidden`), false);
     for (const width of [1280, 390]) {
@@ -222,9 +238,13 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     await click('Reconnect status');
     await browser.wait(`teacher.getState().status==='disconnected'`);
     assert.equal(await browser.evaluate('lastState.connection'), 'disconnected');
+    assert.equal(await browser.evaluate('typeof lastState.error'), 'string');
+    const beforeReconnectSequence = await browser.evaluate('teacher.getState().sequence');
     failReads = false;
     await click('Reconnect status');
     await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Status reconnected')`);
+    assert.equal(await browser.evaluate('teacher.getState().sequence'), beforeReconnectSequence);
+    assert.equal(await browser.evaluate('teacher.getState().error'), null);
     assert.equal(requests.filter(r => r.action === 'chat').length, 1);
     await browser.evaluate(`(async()=>{teacher.destroy();window.restored=await createTeacher({
       route:{params:new URLSearchParams('conversation=c-fixture')},active:false});
@@ -236,12 +256,14 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     await click('Start new conversation');
     await browser.wait(`restored.getState().conversationId==='c-fixture-1'`);
     await browser.wait(`document.querySelector('.llm-history p').textContent.includes('2 of 2')`);
+    assert.equal(await browser.evaluate('restored.getState().sequence'), 0, 'the new conversation has its own event count');
     assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-message"]').value`), '');
     await browser.evaluate(`const input=restored.element.querySelector('[name="llm-message"]');
       input.value='Second isolated draft';input.dispatchEvent(new Event('input'));
       restored.element.querySelector('[name="llm-history"]').value='c-fixture'`);
     await click('Open conversation');
     await browser.wait(`restored.getState().conversationId==='c-fixture'`);
+    assert.equal(await browser.evaluate('restored.getState().sequence'), 3, 'a stale history response cannot reduce the conversation event count');
     assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-message"]').value`), 'Unsent teacher draft');
     assert.equal(await browser.evaluate(`restored.element.querySelector('[name="llm-export-consent"]').checked`), false);
     failSettings = true;

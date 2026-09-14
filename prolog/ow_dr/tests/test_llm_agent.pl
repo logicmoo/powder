@@ -754,3 +754,25 @@ test(model_cannot_read_beyond_the_exact_preview,
     A.calls=[Rejected],assertion(Rejected.result.ok==false),assertion(A.status=="failed"),
     findall(B,fixture_request(chat,B),After),length(After,M),assertion(M=:=N+1).
 :- end_tests(llm_selected_catalog).
+
+:- begin_tests(llm_sequence,[setup(fixture_setup(State)),cleanup(fixture_cleanup(State))]).
+test(polling_does_not_increment_event_sequence_and_conversations_are_separate) :-
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},C),
+    assertion(C.sequence=:=0),
+    conversation(C.id,First),conversation(C.id,Second),
+    assertion(First.sequence=:=Second.sequence),
+    assertion(First.revision=:=Second.revision),
+    interrupt_chat(C.id,Interrupted),assertion(Interrupted.sequence=:=1),
+    conversation(C.id,Again),assertion(Again.sequence=:=1),
+    start_conversation(_{terms:[],readMts:[],writeMts:[]},Other),assertion(Other.sequence=:=0),
+    stop_conversation(C.id,Stopped),assertion(Stopped.sequence=:=2),
+    list_conversations(0,50,History),
+    assertion((member(Item,History.items),get_dict(id,Item,C.id),get_dict(sequence,Item,2))).
+test(sequence_survives_bounded_event_log_truncation_and_legacy_state) :-
+    kb_llm_agent:event(_{events:[_{kind:"legacy"}]},"synthetic",_{},Legacy),
+    assertion(Legacy.eventSequence=:=2),
+    numlist(1,205,Numbers),foldl(user:synthetic_event,Numbers,_{events:[],eventSequence:0},D),
+    length(D.events,Retained),assertion(Retained=:=200),
+    kb_llm_agent:event_sequence(D,Sequence),assertion(Sequence=:=205).
+:- end_tests(llm_sequence).
+synthetic_event(_,Before,After) :- kb_llm_agent:event(Before,"synthetic",_{},After).

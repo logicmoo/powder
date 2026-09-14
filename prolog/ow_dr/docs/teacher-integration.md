@@ -24,10 +24,17 @@ functions. The controller owns only Teacher. It does not rewrite the containing
 workspace URL. `route.params.get('conversation')` opens a specific history.
 `onConversationChange` receives `{agent, identity, id}`.
 `onStateChange` receives the same local snapshot as `getState()`:
-`agent`, `identity`, `active`, `disposed`, `conversationId`, `revision`, `turns`, `status`,
+`agent`, `identity`, `active`, `disposed`, `conversationId`, `revision`, `turns`, `sequence`, `error`, `status`,
 `backendStatus`, `connection`, `model`, `pending`, and `draft`.
 
+`sequence` is the nonnegative per-conversation durable event counter, independent
+of the 200-entry display-log bound. Ordinary polling never increments it.
+`error` is a current transport/client error string, backend error object, or null.
+The containing workspace can derive unread state from sequence deltas.
+
 Deactivation hides the view and pauses polling without cancelling backend work.
+Reactivation always reads the latest conversation, including previously idle
+ones. The supplied signal must have controller/app lifetime, not route lifetime.
 Destroy aborts browser requests, not submitted model/tool work. Reconnect reads
 status; it never resends a chat or mutation. A persisted running turn without a
 live host worker is reported as `outcome_unknown`, not as still progressing.
@@ -108,7 +115,7 @@ text. Prompt, KB, model and tool content cannot change permissions.
 From the repository root:
 
 ```powershell
-swipl -q -g "load_files('prolog/ow_dr/tests/test_llm_agent.pl',[silent(true)]),run_tests([llm_settings,llm_unicode,llm_chat,llm_schema,llm_kee,llm_receipts,llm_export_hold,llm_bound,llm_selected_catalog]),halt"
+swipl -q -g "load_files('prolog/ow_dr/tests/test_llm_agent.pl',[silent(true)]),run_tests([llm_settings,llm_unicode,llm_chat,llm_schema,llm_kee,llm_receipts,llm_export_hold,llm_bound,llm_selected_catalog,llm_sequence]),halt"
 $env:LOGOS_CHROME='C:\Program Files\Google\Chrome\Application\chrome.exe'
 node --test prolog\ow_dr\tests\llm-agent-ui.test.mjs
 ```

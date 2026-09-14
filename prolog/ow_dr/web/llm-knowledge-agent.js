@@ -185,6 +185,8 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   let preview = null;
   let grant = null, connection = 'connected', historyOffset = 0, historyTotal = 0, historyLoading = false;
   let receiptPending = false;
+  let refreshRequested = false, clientError = null;
+  const sequences = new Map();
   for (const input of [termKeys, readMts, writeMts]) input.addEventListener('input', () => {
     invalidatePreview();
     groundingPreview.replaceChildren(el('p', { className: 'muted' }, 'Selectors changed. Start a new conversation to apply a different scope.'));
@@ -193,10 +195,13 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   if (signal.aborted) disposed = true;
   container?.register({
     setActive(value) {
-      if (disposed) return;
+      if (disposed || active === !!value) return;
       active = !!value; panel.hidden = !active;
       clearTimeout(timer); timer = null;
-      if (active && conversation?.status === 'running' && !polling) timer = setTimeout(poll, 0);
+      if (active && conversation) {
+        refreshRequested = true;
+        timer = setTimeout(poll, 0);
+      }
       notifyState();
     },
     getState,
@@ -205,6 +210,8 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       agent: 'llm-knowledge', identity: 'llm', active, disposed,
       conversationId: conversation?.id ?? null,
       revision: conversation?.revision ?? null, turns: conversation?.turns ?? 0,
+      sequence: sequences.get(conversation?.id) ?? 0,
+      error: clientError ?? conversation?.error ?? null,
       status: connection === 'disconnected' ? 'disconnected' : conversation?.status ?? 'not_started',
       backendStatus: conversation?.status ?? 'not_started', connection,
       model: conversation?.model ?? settings?.model ?? null,
@@ -247,8 +254,11 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       receiptCall.value = '';
     }
     if (conversation?.id === data.id && conversation.revision !== data.revision) invalidatePreview();
+    const sequence = Number.isSafeInteger(data.sequence) && data.sequence >= 0
+      ? data.sequence : (data.events?.length || 0) + (data.messages?.length || 0);
+    sequences.set(data.id, Math.max(sequences.get(data.id) || 0, sequence));
     conversation = data;
-    connection = 'connected';
+    connection = 'connected'; clientError = null;
     identity.textContent = `LLM · ${data.model} · ${data.status} · prompt ${data.promptHash.slice(0, 12)}`;
     transcript.replaceChildren();
     if (!data.messages.length) transcript.append(el('p', { className: 'llm-empty' },
@@ -295,6 +305,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     try { await operation(); }
     catch (error) { if (!disposed) {
       grant = null; consent.checked = false; connection = 'disconnected';
+      clientError = error.message || String(error);
       feedback.textContent = `Not completed: ${error.message}. Reconnect to inspect status; no automatic mutation retry.`;
     } }
     finally { pending = false; if (!disposed) updateControls(); }
@@ -389,7 +400,10 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
             () => undoTodo(item), 'button secondary'));
         }
       }
-    } catch (error) { if (!disposed && conversation?.id === id) feedback.textContent = `Local TODOs unavailable: ${error.message}`; }
+    } catch (error) { if (!disposed && conversation?.id === id) {
+      clientError = error.message || String(error); notifyState();
+      feedback.textContent = `Local TODOs unavailable: ${error.message}`;
+    } }
   }
   async function inspectReceipt() {
     if (!conversation || !receiptCall.value || receiptPending || disposed) return;
@@ -401,7 +415,10 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
         localReceiptContent.replaceChildren(el('h3', {}, `Observed: ${result.status}`), json(result));
       }
     } catch (error) {
-      if (!disposed && conversation?.id === id) feedback.textContent = `Receipt inspection unavailable: ${error.message}`;
+      if (!disposed && conversation?.id === id) {
+        clientError = error.message || String(error); notifyState();
+        feedback.textContent = `Receipt inspection unavailable: ${error.message}`;
+      }
     } finally {
       receiptPending = false;
       if (!disposed) inspectReceiptButton.disabled = !receiptCall.value;
@@ -430,27 +447,28 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
       invalidatePreview(); drawConversation(result);
       feedback.textContent = `${kind === 'stop' ? 'Conversation stopped' : 'Interruption requested'}. No provider cancellation or log erasure is promised.`;
     } catch (error) { if (!disposed && conversation?.id === id) {
-      connection = 'disconnected'; updateControls();
+      connection = 'disconnected'; clientError = error.message || String(error); updateControls();
       feedback.textContent = `Control outcome unknown: ${error.message}. Reconnect to inspect; no automatic retry.`;
     } }
   }
   async function poll() {
     timer = null;
-    if (disposed || !active || conversation?.status !== 'running') return;
+    if (disposed || !active || !conversation || (!refreshRequested && conversation.status !== 'running')) return;
     if (document.hidden || polling) { timer = setTimeout(poll, 2000); return; }
-    polling = true;
+    polling = true; refreshRequested = false;
     const id = conversation.id;
     try {
       const result = await api('llm/conversation', { id }, { signal });
       if (!disposed && conversation?.id === id) drawConversation(result);
     }
     catch (error) { if (!disposed && conversation?.id === id) {
-      connection = 'disconnected'; updateControls();
+      connection = 'disconnected'; clientError = error.message || String(error); updateControls();
       feedback.textContent = `Status unavailable: ${error.message}. Reconnect only reads status; it never retries a mutation.`;
     } }
     finally {
       polling = false;
-      if (!disposed && active && conversation?.status === 'running' && !timer) timer = setTimeout(poll, 2000);
+      if (!disposed && active && (refreshRequested || conversation?.status === 'running') && !timer)
+        timer = setTimeout(poll, 2000);
     }
   }
   async function reconnect() {
@@ -464,7 +482,10 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
         feedback.textContent = `Status reconnected: ${result.status}. No work was resubmitted.`;
       }
     } catch (error) {
-      if (!disposed) { connection = 'disconnected'; updateControls(); feedback.textContent = `Reconnect failed: ${error.message}`; }
+      if (!disposed && conversation?.id === id) {
+        connection = 'disconnected'; clientError = error.message || String(error); updateControls();
+        feedback.textContent = `Reconnect failed: ${error.message}`;
+      }
     }
   }
   async function refreshHistory() {
@@ -485,8 +506,13 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
         `${new Date(item.createdAt * 1000).toLocaleString()} · ${item.model} · ${item.status}`));
       if (append) historyPicker.append(...options); else historyPicker.replaceChildren(...options);
       if ([...historyPicker.options].some(item => item.value === conversation?.id)) historyPicker.value = conversation.id;
+      if (connection === 'connected') clientError = null;
+      notifyState();
       historyState.textContent = `${historyPicker.options.length} of ${data.total} conversations. Opening never submits work.`;
-    } catch (error) { if (!disposed) historyState.textContent = `History unavailable: ${error.message}`; }
+    } catch (error) { if (!disposed) {
+      clientError = error.message || String(error); notifyState();
+      historyState.textContent = `History unavailable: ${error.message}`;
+    } }
     finally { historyLoading = false; }
   }
   async function openSelectedConversation() {
@@ -532,7 +558,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     const [saved, document] = await Promise.all([api('llm/settings', {}, { signal }), api('llm/prompt', {}, { signal })]);
     if (disposed) return panel;
     settings = saved; base.textContent = saved.baseURL;
-    connection = 'connected';
+    connection = 'connected'; clientError = null;
     model.replaceChildren(el('option', { value: saved.model, selected: true }, saved.model));
     for (const [key, input] of Object.entries(budgetInputs)) input.value = saved.budgets[key];
     prompt.value = document.content; promptRevision = document.revision;
@@ -546,7 +572,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     await refreshHistory();
     updateControls();
    } catch (error) { if (!disposed) {
-     connection = 'disconnected'; updateControls();
+     connection = 'disconnected'; clientError = error.message || String(error); updateControls();
      feedback.textContent = `Agent unavailable: ${error.message}. Reconnect status retries only these reads; no model request was sent.`;
    } }
   }

@@ -32,16 +32,16 @@ start_conversation(Scope,Reply) :-
     Doc=_{schema:1,id:Id,agent:"llm-knowledge",identity:"llm",createdAt:Now,
       revision:0,status:"ready",activeTurn:null,config:Config,prompt:Prompt,scope:Scope,
       history:History,
-      events:[],calls:[],audit:[],
+      events:[],eventSequence:0,calls:[],audit:[],
       turns:0,lastError:null,lastResponse:null},
     conversation_file(Id,File),locked_file(File,atomic_json(File,Doc)),conversation(Id,Reply).
 conversation(Input,Reply) :-
     load_document(Input,D),registry_status(Registry),
     exclude(system_message,D.history,Messages),maplist(public_call,D.calls,Calls),
-    observed_status(D,Status),
+    observed_status(D,Status),event_sequence(D,Sequence),
     (get_dict(lastAction,D,Action)->true;Action="chat"),
     Reply=_{id:D.id,agent:D.agent,identity:D.identity,status:Status,revision:D.revision,
-      activeTurn:D.activeTurn,model:D.config.model,baseURL:D.config.baseURL,
+      activeTurn:D.activeTurn,sequence:Sequence,model:D.config.model,baseURL:D.config.baseURL,
       promptHash:D.prompt.rawHash,settingsRevision:D.config.revision,
       budgets:D.config.budgets,scope:D.scope,messages:Messages,events:D.events,
       audit:D.audit,calls:Calls,turns:D.turns,error:D.lastError,
@@ -276,7 +276,10 @@ safe_error(_,_{code:"agent_failed",message:"The turn failed; no automatic retry 
 event(D,Kind,Detail,After) :-
     get_time(Now),append(D.events,[_{at:Now,kind:Kind,detail:Detail}],Events0),
     length(Events0,N),Drop is max(0,N-200),length(Prefix,Drop),append(Prefix,Events,Events0),
-    After=D.put(events,Events).
+    event_sequence(D,Before),Sequence is Before+1,
+    After=D.put(_{events:Events,eventSequence:Sequence}).
+event_sequence(D,Sequence) :-
+    (get_dict(eventSequence,D,Sequence)->true;length(D.events,Sequence)).
 bounded_json(Value,Limit) :-
     json_bytes(Value,Bytes),length(Bytes,N),
     (N=<Limit->true;resource_error(llm_payload_budget)).
@@ -299,9 +302,9 @@ list_conversations(Offset,Limit,Reply) :-
       directory_file_path(Dir,Name,File),time_file(File,Time)),Files),
     sort(0,@>=,Files,Sorted),length(Sorted,Total),
     findall(Item,(nth0(N,Sorted,_-File),N>=Offset,N<Offset+Limit,
-      catch((read_json(File,D),observed_status(D,Status),
+      catch((read_json(File,D),observed_status(D,Status),event_sequence(D,Sequence),
         Item=_{id:D.id,createdAt:D.createdAt,model:D.config.model,status:Status,
-               revision:D.revision,turns:D.turns,promptHash:D.prompt.rawHash}),
+               revision:D.revision,sequence:Sequence,turns:D.turns,promptHash:D.prompt.rawHash}),
         _,Item=_{status:"unavailable"})),Items),
     Reply=_{items:Items,total:Total,offset:Offset,limit:Limit}.
 undo_todo(R,Reply) :-
