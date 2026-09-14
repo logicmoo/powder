@@ -49,7 +49,7 @@ export function teacherDrafts(storage) {
 }
 
 export function modelOptions(items, selected) {
-  return [...new Set([selected, ...items])].map(id => ({
+  return [...new Set([selected, ...items].filter(id => id !== ''))].map(id => ({
     id, label: items.includes(id) ? id : `${id} — availability not confirmed`,
   }));
 }
@@ -143,7 +143,13 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   }
   inspector.append(tabs, ...pages.values());
   panel.append(notice, el('div', { className: 'llm-workspace' }, main, inspector));
-  const model = el('select', { name: 'llm-model', 'aria-label': 'Application agent model' });
+  const modelSuggestions = el('datalist', { id: `${viewId}-models` });
+  const model = el('input', { type: 'text', name: 'llm-model', maxLength: 200,
+    required: true, pattern: '[!-~]+', autocomplete: 'off', spellcheck: false,
+    'aria-label': 'Application agent model', 'aria-describedby': `${viewId}-model-help` });
+  model.setAttribute('list', modelSuggestions.id);
+  const modelHelp = el('p', { id: `${viewId}-model-help`, className: 'muted' },
+    'Type an exact model ID or choose a suggestion. Refresh updates suggestions without replacing your text.');
   const modelState = el('p', { className: 'muted' }, 'Use Refresh models to verify the saved selection. No model runs on refresh.');
   const base = el('output', { className: 'llm-provider-address' });
   const termKeys = el('textarea', { rows: 3, name: 'llm-term-keys', placeholder: 'One canonical term key per line' });
@@ -170,7 +176,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   settingsPage.append(el('h2', {}, 'Registered application agent'),
     el('p', { className: 'muted' }, 'LLM identity — does not change the Copilot coding model or symbolic agent.'),
     el('label', { className: 'field' }, 'Host-owned provider', base),
-    el('label', { className: 'field' }, 'Explicit model', model),
+    el('label', { className: 'field' }, 'Explicit model', model), modelSuggestions, modelHelp,
     button('Refresh models', refreshModels, 'button secondary'), modelState, budgets,
     button('Save agent settings', saveSettings, 'button secondary'),
     el('h2', {}, 'Selected context'),
@@ -529,13 +535,17 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     await action(async () => {
       modelState.textContent = 'Reading the actual provider model catalog…';
       const data = await api('llm/models', {}, { signal });
-      model.replaceChildren(...modelOptions(data.items, settings.model)
-        .map(item => el('option', { value: item.id, selected: item.id === settings.model }, item.label)));
+      modelSuggestions.replaceChildren(...modelOptions(data.items, model.value)
+        .map(item => el('option', { value: item.id }, item.label)));
       modelState.textContent = data.selectedAvailable ? `${data.items.length} models returned. No inference request was sent.`
         : `Saved model ${data.selected} is unavailable. It remains selected; choose another explicitly.`;
     });
   }
   async function saveSettings() {
+    if (!model.reportValidity()) {
+      feedback.textContent = 'Enter an exact model ID (1-200 printable ASCII characters, no whitespace).';
+      return;
+    }
     await action(async () => {
       settings = await request('settings/save', { revision: settings.revision, settings: {
         model: model.value, budgets: Object.fromEntries(Object.entries(budgetInputs).map(([key, input]) => [key, input.valueAsNumber])),
@@ -559,7 +569,8 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     if (disposed) return panel;
     settings = saved; base.textContent = saved.baseURL;
     connection = 'connected'; clientError = null;
-    model.replaceChildren(el('option', { value: saved.model, selected: true }, saved.model));
+    model.value = saved.model;
+    modelSuggestions.replaceChildren(el('option', { value: saved.model }, saved.model));
     for (const [key, input] of Object.entries(budgetInputs)) input.value = saved.budgets[key];
     prompt.value = document.content; promptRevision = document.revision;
     promptState.textContent = `Raw SHA-256: ${document.rawHash}`;

@@ -9,6 +9,7 @@ import { modelOptions, selectedKeys, canChat, teacherDrafts } from '../web/llm-k
 const here = dirname(fileURLToPath(import.meta.url));
 test('model choice never falls back and scope keys are concrete', () => {
   assert.deepEqual(modelOptions(['other'], 'missing').map(x => x.id), ['missing', 'other']);
+  assert.deepEqual(modelOptions(['other'], '').map(x => x.id), ['other']);
   assert.deepEqual(selectedKeys(' x_A \nx_A\n x_B\n'), ['x_A', 'x_B']);
   assert.equal(canChat({ conversation: { status: 'ready' }, text: 'Hi', approved: false }), false);
   assert.equal(canChat({ conversation: { status: 'running' }, text: 'Hi', approved: true }), false);
@@ -86,7 +87,8 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
       else result = settings;
     }
     else if (action === 'prompt') result = { content: 'Synthetic fixture prompt', revision: 'p1', rawHash: 'p1' };
-    else if (action === 'models') result = { items: ['gpt-5.6-sol', 'fixture-other'], selected: settings.model, selectedAvailable: true };
+    else if (action === 'models') result = { items: ['gpt-5.6-sol', 'fixture-other'], selected: settings.model,
+      selectedAvailable: ['gpt-5.6-sol', 'fixture-other'].includes(settings.model) };
     else if (action === 'settings/save') { settings = { ...settings, ...body.settings, revision: 'r2' }; result = settings; }
     else if (action === 'grounding/preview') result = { id: 'fixture-grant', hash: 'fixture-hash',
       binding: { ...body, model: settings.model, promptHash: 'p1', settingsRevision: settings.revision,
@@ -130,18 +132,33 @@ test('isolated browser: exact consent, model selection, drafts, history and loca
     await browser.wait(`document.querySelector('[name="llm-model"]')?.value==='gpt-5.6-sol'`);
     await browser.wait(`document.querySelector('.llm-history p').textContent.includes('0 of 0')`);
     assert.deepEqual(requests.map(r => r.action).sort(), ['conversations', 'prompt', 'settings']);
+    assert.equal(await browser.evaluate(`document.querySelector('[name="llm-model"]').tagName`), 'INPUT');
     await click('Refresh models');
-    await browser.wait(`document.querySelector('[name="llm-model"]').options.length===2`);
-    await browser.evaluate(`document.querySelector('[name="llm-model"]').value='fixture-other'`);
+    await browser.wait(`document.querySelector('[name="llm-model"]').list.options.length===2`);
+    await browser.evaluate(`document.querySelector('[name="llm-model"]').focus(); document.querySelector('[name="llm-model"]').select()`);
+    await browser.send('Input.insertText', { text: 'Fixture/Typed-Model.1' });
+    await click('Refresh models');
+    await browser.wait(`document.querySelector('[name="llm-model"]').list.options.length===3`);
+    assert.equal(await browser.evaluate(`document.querySelector('[name="llm-model"]').value`), 'Fixture/Typed-Model.1');
     await click('Save agent settings');
     await browser.wait(`document.body.textContent.includes('Agent settings saved')`);
-    assert.equal(settings.model, 'fixture-other');
+    assert.equal(settings.model, 'Fixture/Typed-Model.1');
+    assert.equal(requests.find(r => r.action === 'settings/save').body.settings.model, 'Fixture/Typed-Model.1');
+    const saves = requests.filter(r => r.action === 'settings/save').length;
+    for (const invalid of ['', 'model with spaces']) {
+      await browser.evaluate(`document.querySelector('[name="llm-model"]').value=${JSON.stringify(invalid)}`);
+      await click('Save agent settings');
+      assert.equal(await browser.evaluate(`document.querySelector('[name="llm-model"]').checkValidity()`), false);
+    }
+    assert.equal(requests.filter(r => r.action === 'settings/save').length, saves);
+    await browser.evaluate(`document.querySelector('[name="llm-model"]').value='Fixture/Typed-Model.1'`);
     assert.equal(requests.some(r => r.action === 'chat'), false);
     await browser.evaluate(`history.replaceState(null,'','/#/agent-chips?active=teacher')`);
     await browser.evaluate(`for(const [name,value] of [['llm-term-keys','x_Synthetic'],['llm-read-mts','x_FixtureMt']]) {
       const input=document.querySelector('[name="'+name+'"]');input.value=value;input.dispatchEvent(new Event('input'));}`);
     await click('Start new conversation');
     await browser.wait(`teacher.getState().conversationId==='c-fixture'`);
+    assert.equal(await browser.evaluate('teacher.getState().model'), 'Fixture/Typed-Model.1');
     await browser.wait(`document.querySelector('.llm-feedback').textContent.includes('Conversation started')`);
     assert.equal(await browser.evaluate('teacher.getState().sequence'), 0);
     assert.equal(await browser.evaluate('teacher.getState().error'), null);

@@ -6,8 +6,10 @@ delegate to them. General KB CRUD and saved comment writing remain unavailable.
 
 The default provider is exactly `http://127.0.0.1:8801/v1`, model
 `gpt-5.6-sol`. Refresh reads the provider's actual model catalog; only an
-explicit revision-checked selection changes it. An unavailable model stops the
-request. There is no application fallback. The provider retains payloads/logs,
+explicit revision-checked selection changes it. **Explicit model** accepts a
+typed model ID, with discovered models offered as suggestions. Refresh preserves
+the typed value; Save agent settings persists its exact spelling. An unavailable
+model stops the request. There is no application fallback. The provider retains payloads/logs,
 reuses contexts and may route externally: loopback is not a privacy guarantee.
 
 ## Container contract
