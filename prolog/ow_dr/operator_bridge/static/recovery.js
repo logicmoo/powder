@@ -57,6 +57,9 @@ function renderStatus(value) {
   else if (value.stopped) notice(value.canRestart ? 'Operator stopped. Start explicitly to resume its history; the other provider stays independent.' : 'Operator stopped explicitly. History remains available.');
   else if (!connected) notice('Reconnecting to the bridge. Output will replay; commands will not.', true);
   else notice(`${providerName} is independent of Prolog. Each native permission needs your explicit decision.`);
+  if (value.displayProjection?.permissionsOmitted) {
+    $('notice').textContent += ' Additional permission requests are outside this bounded view. No omitted request is approved; resolve visible requests or inspect standalone recovery.';
+  }
   const identity = $('identity'); identity.replaceChildren();
   for (const [label, item] of [['Workspace', value.workspace.root], ['Branch', value.workspace.branch],
     ['Conversation', value.conversationId], ['Native session / thread', value.nativeSessionId || 'Not started'],

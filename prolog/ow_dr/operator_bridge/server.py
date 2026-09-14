@@ -9,6 +9,7 @@ from aiohttp import WSMsgType, web
 
 from .security import Auth, COOKIE, HOST
 from .embed import EmbedAuth, EMBED_HEADER, DEFAULT_PARENT, parent_origin
+from .projection import encode_snapshot, encoded, project_status
 from .service import OperatorService
 from .hub import OperatorHub
 from .workspace import BridgeError
@@ -149,7 +150,10 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
         return value
 
     async def status(request):
-        return web.json_response(selected(request).status())
+        value = selected(request).status()
+        if request.path.startswith("/embed/api/"):
+            return web.Response(body=encoded(project_status(value)), content_type="application/json")
+        return web.json_response(value)
 
     async def operators(request):
         if isinstance(service, OperatorHub):
@@ -231,10 +235,9 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
                 if request.transport is None or request.transport.is_closing():
                     break
                 batch = operator.journal.events(cursor)
-                frame = {"type": "snapshot", "provider": operator.provider,
-                         "data": operator.status(), **batch}
-                await asyncio.wait_for(stream.write((json.dumps(frame) + "\n").encode()), 5)
-                cursor = batch["lastSequence"]
+                serialized, next_cursor = encode_snapshot(operator.provider, operator.status(), batch, cursor)
+                await asyncio.wait_for(stream.write(serialized), 5)
+                cursor = next_cursor
                 await asyncio.sleep(0.75)
         except (ConnectionError, TimeoutError, BridgeError):
             pass

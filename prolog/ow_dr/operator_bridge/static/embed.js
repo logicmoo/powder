@@ -6,6 +6,8 @@
   bootstrap.remove();
   const channel = 'powder.operator.embed.v1';
   const nonce = crypto.randomUUID();
+  const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+  let parentProbe;
   const prefix = `/embed/api/${provider}`;
   let bound = false, active = false, disposed = false, unread = 0, revision = 0;
   let connected = false, state = 'pairing', controller, lastSequence = null;
@@ -19,7 +21,8 @@
   function publish() {
     if (!bound || disposed) return;
     window.parent.postMessage({channel, type: 'state', nonce, provider,
-      revision: ++revision, status: state, connected, unread, conversationId, sequence, error}, parentOrigin);
+      revision: ++revision, status: state, connected, unread, conversationId, sequence, error,
+      probe: parentProbe}, parentOrigin);
   }
   function emitHello() {
     if (window.parent !== window && window.top === window.parent && !bound && !disposed)
@@ -32,9 +35,9 @@
   window.addEventListener('message', event => {
     if (event.source !== window.parent || event.origin !== parentOrigin || disposed) return;
     const message = event.data;
-    if (!exact(message, ['channel', 'type', 'nonce', 'provider', 'active'])
+    if (!exact(message, ['channel', 'type', 'nonce', 'provider', 'active', 'probe'])
         || message.channel !== channel || message.nonce !== nonce || message.provider !== provider
-        || typeof message.active !== 'boolean') return;
+        || typeof message.active !== 'boolean' || typeof message.probe !== 'string' || !uuid.test(message.probe)) return;
     if (!bound && message.type === 'bind') {
       bound = true;
       clearInterval(helloTimer); clearTimeout(handshakeTimer);
@@ -42,6 +45,7 @@
       $('parent-status').textContent = `Isolated ${provider} view · paired only with ${parentOrigin}`;
       resolveReady();
     } else if (!bound || message.type !== 'lifecycle') return;
+    parentProbe = message.probe;
     active = message.active;
     if (active) unread = 0;
     publish();
@@ -99,9 +103,9 @@
         const chunk = await reader.read();
         if (chunk.done) throw new Error('Operator output disconnected.');
         buffered += decoder.decode(chunk.value, {stream: true});
-        if (buffered.length > 2 * 1024 * 1024) throw new Error('Operator output exceeded the frame limit.');
         let lineEnd;
         while ((lineEnd = buffered.indexOf('\n')) >= 0) {
+          if (lineEnd > 2 * 1024 * 1024) throw new Error('Operator output exceeded the frame limit.');
           const value = JSON.parse(buffered.slice(0, lineEnd)); buffered = buffered.slice(lineEnd + 1);
           if (value.provider !== provider || value.type !== 'snapshot') throw new Error('Operator output identity mismatch.');
           if (!opened) { opened = true; connected = true; handlers.open(); }
@@ -124,6 +128,7 @@
           value.events.forEach(handlers.event);
           publish();
         }
+        if (buffered.length > 2 * 1024 * 1024) throw new Error('Operator output exceeded the frame limit.');
       }
     } catch {
       if (!disposed) disconnect('Output disconnected. Pair again to replay recorded output. No command is resent.');

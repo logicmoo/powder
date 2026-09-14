@@ -42,6 +42,38 @@ async function startFixture() {
   }};
 }
 
+async function attachFrame(browser, provider) {
+  const {send} = browser;
+  let target;
+  for (let i = 0; i < 100 && !target; i++) {
+    const targets = await send('Target.getTargets', {}, null);
+    target = targets.targetInfos.find(item => item.type === 'iframe' && item.url.endsWith(`provider=${provider}`));
+    if (!target) await pause(50);
+  }
+  assert.ok(target, `${provider} isolated frame target`);
+  const {sessionId} = await send('Target.attachToTarget', {targetId: target.targetId, flatten: true}, null);
+  const command = (method, params = {}) => send(method, params, sessionId);
+  const run = async expression => {
+    const result = await command('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true});
+    if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
+    return result.result.value;
+  };
+  const until = async expression => {
+    for (let i = 0; i < 200; i++) {
+      try { if (await run(expression)) return; } catch { /* Native form navigation replaces the context. */ }
+      await pause(50);
+    }
+    throw new Error(`Frame condition failed: ${expression}\n${await run('document.body.innerText')}`);
+  };
+  return {run, until, command};
+}
+
+async function pairFrame(child) {
+  await child.until('document.querySelector("#pair-submit")?.disabled === false');
+  await child.run(`document.getElementById('phrase').value = 'isolated fixture pairing phrase'; document.getElementById('pair-submit').click()`);
+  await child.until('document.querySelector("#bridge")?.textContent === "Online"');
+}
+
 test('cross-site embedded native adapters: pairing, typed handshake, isolation, permissions and replay', {
   timeout: 120000, skip: !existsSync(executable) || !existsSync(python),
 }, async () => {
@@ -49,34 +81,8 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
   const browser = await launchChromium(executable);
   const {send, evaluate, wait} = browser;
   const stats = async () => (await fetch(fixture.parentURL + '/fixture/stats')).json();
-  async function frame(provider) {
-    let target;
-    for (let i = 0; i < 100 && !target; i++) {
-      const targets = await send('Target.getTargets', {}, null);
-      target = targets.targetInfos.find(item => item.type === 'iframe' && item.url.endsWith(`provider=${provider}`));
-      if (!target) await pause(50);
-    }
-    assert.ok(target, `${provider} isolated frame target`);
-    const {sessionId} = await send('Target.attachToTarget', {targetId: target.targetId, flatten: true}, null);
-    const run = async expression => {
-      const result = await send('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true}, sessionId);
-      if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
-      return result.result.value;
-    };
-    const until = async expression => {
-      for (let i = 0; i < 200; i++) {
-        try { if (await run(expression)) return; } catch { /* Native form navigation replaces the context. */ }
-        await pause(50);
-      }
-      throw new Error(`Frame condition failed: ${expression}\n${await run('document.body.innerText')}`);
-    };
-    return {run, until};
-  }
-  async function pair(child) {
-    await child.until('document.querySelector("#pair-submit")?.disabled === false');
-    await child.run(`document.getElementById('phrase').value = 'isolated fixture pairing phrase'; document.getElementById('pair-submit').click()`);
-    await child.until('document.querySelector("#bridge")?.textContent === "Online"');
-  }
+  const frame = provider => attachFrame(browser, provider);
+  const pair = pairFrame;
   try {
     await send('Network.enable');
     await send('Network.setCookie', {name: 'powder_operator_session', value: 'synthetic-cookie-not-an-embed-capability',
@@ -123,11 +129,12 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
       const hello = messages.filter(m=>m.type==='hello' && m.provider==='copilot').at(-1);
       const sibling = document.createElement('iframe'); sibling.id='sibling';
       sibling.srcdoc = '<script>parent.document.querySelector(".operator-agent-frame").contentWindow.postMessage('
-        + JSON.stringify({...hello,type:'lifecycle',active:false}) + ', ${JSON.stringify(fixture.bridgeURL)})<\\/script>';
+        + JSON.stringify({...hello,type:'lifecycle',active:false,probe:messages.filter(m=>m.type==='state'&&m.provider==='copilot').at(-1).probe})
+        + ', ${JSON.stringify(fixture.bridgeURL)})<\\/script>';
       document.body.append(sibling);
     })()`);
     const before = await evaluate('framesByProvider.copilot.getState()');
-    const hello = await evaluate("messages.filter(m=>m.type==='hello' && m.provider==='copilot').at(-1)");
+    const hello = await evaluate("({...messages.filter(m=>m.type==='hello' && m.provider==='copilot').at(-1),probe:messages.filter(m=>m.type==='state'&&m.provider==='copilot').at(-1).probe})");
     await copilot.run(`window.dispatchEvent(new MessageEvent('message', {
       source:parent, origin:'http://attacker.invalid', data:${JSON.stringify({...hello, type:'lifecycle', active:false})}
     }))`);
@@ -195,7 +202,7 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
     const messages = await evaluate('window.messages');
     assert.ok(messages.every(message => message.channel === 'powder.operator.embed.v1'));
     assert.ok(messages.every(message => Object.keys(message).every(key =>
-      ['channel','type','provider','nonce','revision','status','connected','unread','conversationId','sequence','error'].includes(key))));
+      ['channel','type','provider','nonce','revision','status','connected','unread','conversationId','sequence','error','probe'].includes(key))));
     assert.ok(!JSON.stringify(messages).includes('fixture output'));
     assert.ok(!JSON.stringify(messages).includes('capability'));
     assert.ok(await copilot.run('document.documentElement.scrollWidth <= document.documentElement.clientWidth'));
@@ -248,5 +255,74 @@ test('cross-site embedded native adapters: pairing, typed handshake, isolation, 
   } finally {
     await browser.close();
     await fixture.close();
+  }
+});
+
+test('large valid Unicode journals replay and re-pair inside the bounded frame', {
+  timeout: 60000, skip: !existsSync(executable) || !existsSync(python),
+}, async () => {
+  const fixture = await startFixture();
+  const browser = await launchChromium(executable);
+  try {
+    const seeded = await (await fetch(fixture.parentURL + '/fixture/seed-unicode', {method:'POST'})).json();
+    assert.equal(seeded.seededEvents, 200);
+    await browser.send('Page.navigate', {url:fixture.parentURL});
+    await browser.wait('window.states?.copilot?.status === "pairing"');
+    const child = await attachFrame(browser, 'copilot');
+    await pairFrame(child);
+    await child.until('document.querySelectorAll("#transcript li").length === 200');
+    assert.ok(await child.run('document.getElementById("transcript").textContent.includes("漢".repeat(4096))'));
+    assert.equal(await browser.evaluate('framesByProvider.copilot.getState().sequence'), 200);
+    await child.run('document.getElementById("logout").click(); document.getElementById("pair-retry").click()');
+    await pairFrame(child);
+    await child.until('document.querySelectorAll("#transcript li").length === 200');
+    await pause(900);
+    assert.equal(await child.run('document.getElementById("bridge").textContent'), 'Online');
+    const stats = await (await fetch(fixture.parentURL + '/fixture/stats')).json();
+    assert.equal(stats.commands.copilot, 100);
+    assert.equal(stats.copilotStarts + stats.codexStarts + stats.copilotPrompts + stats.codexPrompts, 0);
+  } finally {
+    await browser.close(); await fixture.close();
+  }
+});
+
+test('failed native pairing navigation exposes host Retry and safely reconnects', {
+  timeout: 60000, skip: !existsSync(executable) || !existsSync(python),
+}, async () => {
+  const fixture = await startFixture();
+  const browser = await launchChromium(executable);
+  const conditions = offline => ({offline, latency:0, downloadThroughput:-1, uploadThroughput:-1});
+  try {
+    await browser.send('Page.navigate', {url:fixture.parentURL});
+    await browser.wait('window.states?.copilot?.status === "pairing"');
+    const child = await attachFrame(browser, 'copilot');
+    await child.until('document.getElementById("pair-submit").disabled === false');
+    const priorState = await browser.evaluate("messages.filter(m=>m.type==='state'&&m.provider==='copilot').at(-1)");
+    await browser.send('Network.enable');
+    await child.command('Network.enable');
+    await browser.send('Network.emulateNetworkConditions', conditions(true));
+    await child.command('Network.emulateNetworkConditions', conditions(true));
+    await child.run(`document.getElementById('phrase').value='isolated fixture pairing phrase'; document.getElementById('pair-submit').click()`);
+    await child.until('document.querySelector("#pair-form") === null');
+    await browser.send('Network.emulateNetworkConditions', conditions(false));
+    await child.command('Network.emulateNetworkConditions', conditions(false)).catch(() => {});
+    await browser.evaluate('document.getElementById("teacher").click(); document.getElementById("copilot").click()');
+    await browser.evaluate(`window.dispatchEvent(new MessageEvent('message', {
+      origin:'${fixture.bridgeURL}', source:document.querySelector('.operator-agent-frame').contentWindow,
+      data:${JSON.stringify({...priorState, revision:99999})}
+    }))`);
+    await pause(11000);
+    assert.equal(await browser.evaluate('document.querySelector(".operator-agent-retry").hidden'), false,
+      'the prior document handshake cannot mask a failed replacement navigation');
+    assert.equal(await browser.evaluate('document.querySelector(".operator-agent-connection").hidden'), false);
+    await browser.evaluate('document.querySelector(".operator-agent-retry").click()');
+    await browser.wait('framesByProvider.copilot.getState().status === "pairing"');
+    const recovered = await attachFrame(browser, 'copilot');
+    await pairFrame(recovered);
+    const stats = await (await fetch(fixture.parentURL + '/fixture/stats')).json();
+    assert.equal(stats.copilotStarts + stats.codexStarts + stats.copilotPrompts + stats.codexPrompts, 0);
+    assert.equal(stats.connections.copilot, 1);
+  } finally {
+    await browser.close(); await fixture.close();
   }
 });

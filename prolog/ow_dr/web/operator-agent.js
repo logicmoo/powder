@@ -33,12 +33,12 @@ export function createOperatorAgent(host, {
   iframe.referrerPolicy = 'no-referrer';
   iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms');
   iframe.setAttribute('allow', "camera 'none'; microphone 'none'; geolocation 'none'");
-  let nonce, revision = 0, destroyed = false, notified = false, loaded = false;
+  let nonce, probe, revision = 0, destroyed = false, notified = false, loaded = false;
   let state = Object.freeze({provider, status: 'not_loaded', conversationId: null,
     sequence: 0, error: null, connected: false, unread: 0});
   function send(type) {
     if (nonce && !destroyed)
-      iframe.contentWindow.postMessage({channel: CHANNEL, type, nonce, provider, active}, url.origin);
+      iframe.contentWindow.postMessage({channel: CHANNEL, type, nonce, provider, active, probe}, url.origin);
   }
   function setState(next) {
     if (notified && Object.keys(state).every(key => next[key] === state[key])) return;
@@ -53,14 +53,13 @@ export function createOperatorAgent(host, {
         || typeof message.nonce !== 'string' || !UUID.test(message.nonce)) return;
     if (message.type === 'hello' && exact(message, ['channel', 'type', 'nonce', 'provider'])) {
       if (message.nonce !== nonce) { nonce = message.nonce; revision = 0; }
-      clearTimeout(timeout);
-      status.hidden = true; retry.hidden = true;
-      send('bind');
+      checkDocument('bind');
       return;
     }
     if (message.type !== 'state' || message.nonce !== nonce
         || !exact(message, ['channel', 'type', 'nonce', 'provider', 'revision', 'status', 'connected', 'unread',
-          'conversationId', 'sequence', 'error'])
+          'conversationId', 'sequence', 'error', 'probe'])
+        || message.probe !== probe
         || !Number.isSafeInteger(message.revision) || message.revision <= revision
         || !STATES.has(message.status) || typeof message.connected !== 'boolean'
         || !(message.conversationId === null || (typeof message.conversationId === 'string' && UUID.test(message.conversationId)))
@@ -71,6 +70,8 @@ export function createOperatorAgent(host, {
     if (message.conversationId !== null && message.conversationId === state.conversationId
         && message.sequence < state.sequence) return;
     revision = message.revision;
+    clearTimeout(timeout);
+    status.hidden = true; retry.hidden = true;
     setState({provider, status: message.status, connected: message.connected, unread: message.unread,
       conversationId: message.conversationId ?? state.conversationId,
       sequence: message.conversationId === null ? state.sequence : message.sequence, error: message.error});
@@ -85,13 +86,14 @@ export function createOperatorAgent(host, {
     if (destroyed) return;
     active = true; element.hidden = false;
     if (!loaded) load();
-    else send('lifecycle');
+    else checkDocument();
   }
   function deactivate() { active = false; element.hidden = true; send('lifecycle'); }
   function destroy() {
     if (destroyed) return;
     destroyed = true; clearTimeout(timeout);
     window.removeEventListener('message', receive);
+    iframe.removeEventListener('load', observeDocument);
     signal?.removeEventListener('abort', destroy);
     iframe.src = 'about:blank'; element.remove();
   }
@@ -100,15 +102,24 @@ export function createOperatorAgent(host, {
     clearTimeout(timeout);
     timeout = setTimeout(() => {
       status.textContent = 'Operator bridge unavailable or embedding not configured. Ask the operator to start the bridge; this view never starts it.';
-      retry.hidden = false;
+      status.hidden = false; retry.hidden = false;
       setState({...state, status: 'disconnected', connected: false, error: status.textContent});
     }, 10000);
+  }
+  function checkDocument(type = 'lifecycle') {
+    probe = crypto.randomUUID();
+    armTimeout();
+    send(type);
+  }
+  function observeDocument() {
+    if (loaded && !destroyed) checkDocument();
   }
   retry.addEventListener('click', () => {
     if (destroyed) return;
     load();
   });
   window.addEventListener('message', receive);
+  iframe.addEventListener('load', observeDocument);
   element.append(status, retry, iframe); host.append(element);
   element.hidden = !active;
   signal?.addEventListener('abort', destroy, {once: true});

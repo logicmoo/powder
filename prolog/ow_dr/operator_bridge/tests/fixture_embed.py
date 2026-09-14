@@ -120,10 +120,18 @@ async def main():
         stopped.set()
         return web.json_response({"stopped": True})
 
+    async def seed_unicode(request):
+        # Journal-only synthetic history; never submitted through a native operator.
+        for index in range(100):
+            journal.submit(f"unicode-{index}", "prompt", "\u6f22" * 4096)
+            journal.state(f"unicode-{index}", "complete")
+        return web.json_response({"seededEvents": journal.latest()})
+
     parent.router.add_get("/", document)
     parent.router.add_get("/web/{name}", module)
     parent.router.add_get("/fixture/stats", stats)
     parent.router.add_post("/fixture/stop", stop)
+    parent.router.add_post("/fixture/seed-unicode", seed_unicode)
     runners = [web.AppRunner(app, access_log=None), web.AppRunner(parent, access_log=None)]
     try:
         for runner, sock in zip(runners, sockets):

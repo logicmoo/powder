@@ -252,17 +252,26 @@ All messages have `channel:"powder.operator.embed.v1"`, the fixed `provider`, an
 a random per-document `nonce` (a **public handshake challenge**, not authority).
 The frame sends `{type:"hello",nonce,provider,channel}` to the exact configured
 parent origin. The parent replies with those fields plus
-`type:"bind",active:boolean`. Later parent messages may use only
-`type:"lifecycle",active:boolean`. All keys and types must match exactly.
+`type:"bind",active:boolean,probe:UUID`. Later parent messages may use only
+`type:"lifecycle",active:boolean,probe:UUID`. All keys and types must match exactly.
+`probe` is another public liveness challenge, never a credential. It is refreshed
+on iframe document load and activation, and the child echoes it in status.
 
 Both directions check the exact Origin **and** source WindowProxy. The child
 requires its direct parent, not a sibling or nested owner. Parent status frames
-add only `type:"state",revision,status,connected,unread,conversationId,sequence,error`; revisions strictly
+add only `type:"state",revision,status,connected,unread,conversationId,sequence,error,probe`; revisions strictly
 increase for that document challenge. Unknown fields/types, stale revisions,
 other providers, windows and origins are ignored. Status values are bounded to
 `pairing`, `disconnected`, `offline`, `idle`, `busy`, `awaiting_permission`;
 unread is an integer from 0–999. Parent messages have no command, text, URL,
 permission, model, credential or arbitrary dispatch interface.
+
+A hello alone does not complete the host watchdog: a valid status must echo the
+current probe. A replacement document (including a failed native pairing POST)
+and reactivation re-arm the ten-second watchdog. If no matching response arrives,
+the parent shows **Retry view connection** again. A stale response from the prior
+document cannot hide this recovery action. Retry navigates only the descriptor's
+fixed `/embed` URL; it neither authenticates nor starts an operator.
 
 All Start/Send/Cancel/Stop/permission interactions are authored inside the
 operator-origin document. A new iframe, pairing, handshake, tab selection,
@@ -330,7 +339,24 @@ No CORS headers are provided, including to the allowed framing parent.
 
 The output-only `POST .../events` accepts `{since:N}` and streams NDJSON
 snapshots, never commands. Each snapshot contains the provider's status and
-bounded sequenced journal output inside the frame. Start/Send/Cancel/permissions
+bounded sequenced journal output inside the frame.
+
+The **complete UTF-8 serialized snapshot**, including JSON syntax, status,
+commands, permissions, event data and final newline, is capped at **1 MiB**.
+Unicode is not needlessly ASCII-escaped. The embedded status projection sends
+15 recent command identifiers/states without unused prompt previews, bounded
+display metadata (long scalar text is explicitly marked clipped), and at most
+16 **complete** permission requests within a 256 KiB permission budget.
+Omitted permissions are explicitly reported and never partially shown as
+approvable requests; resolving visible requests makes room for subsequent ones.
+Events are paged using the last event actually sent. An individually oversized
+transcript event gets an explicit display-only omission marker so replay can
+advance, while its full content stays in the journal. Journal history, command
+previews, idempotency digests and native permission data are never rewritten.
+The receiver checks each NDJSON line independently, including when network
+chunks contain multiple complete snapshots.
+
+Start/Send/Cancel/permissions
 use the same native service/adapters as standalone recovery. Revocation detaches
 the principal immediately; stream close/failure revokes and detaches when
 observed (normally within the 750 ms output heartbeat, bounded writes at 5 s).
@@ -509,6 +535,7 @@ are deliberately not sent to this pinned stable protocol.
 prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_embed prolog.ow_dr.operator_bridge.tests.test_service prolog.ow_dr.operator_bridge.tests.test_http prolog.ow_dr.operator_bridge.tests.test_providers prolog.ow_dr.operator_bridge.tests.test_native_adapters
 prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_pairing_input
 prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_pairing_file
+prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_projection
 node --test prolog\ow_dr\operator_bridge\tests\embed-browser.test.mjs
 ```
 
@@ -520,11 +547,15 @@ with third-party Strict cookies unavailable, zero native starts on pairing,
 wrong parent/window/origin/message rejection, safe status-only messages,
 provider-specific model settings/drafts/permissions, Start anyway, unpair/re-pair
 replay, unread state, destruction, mobile/desktop overflow and standalone
-HttpOnly Strict recovery pairing. Set `LOGOS_CHROME` if Chromium is not installed
+HttpOnly Strict recovery pairing. Additional real Chromium regressions seed
+100 completed 4096-character CJK prompts without native dispatch and verify
+re-pair/replay, and interrupt native pairing navigation offline to verify that
+the host's Retry returns and reconnects without native startup.
+Set `LOGOS_CHROME` if Chromium is not installed
 at the default Chrome path. Fixture files/profiles are removed on completion.
 
-**Validated 2026-09-14:** 71 selected Python tests and the real Chromium
-cross-site integration test passed. No production bridge activation, real model
+**Validated 2026-09-14:** the selected Python suites and three real Chromium
+cross-site integration scenarios passed. No production bridge activation, real model
 activity or live Prolog reload/restart was part of that validation.
 
 The broader pre-existing suite also includes an isolated Prolog lifecycle test;
