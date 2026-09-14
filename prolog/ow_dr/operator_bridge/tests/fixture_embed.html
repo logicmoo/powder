@@ -16,7 +16,7 @@ window.addEventListener('message', event => {
 for (const provider of ['copilot', 'codex']) {
   lifetimes[provider] = new AbortController();
   framesByProvider[provider] = createOperatorAgent(document.querySelector('#host'), {
-    provider, active: provider === 'copilot', bridgeURL: '{{BRIDGE}}/embed',
+    provider, active: provider === 'copilot', bridgeURL: '{{BRIDGE}}',
     signal: lifetimes[provider].signal,
     onStateChange: state => { states[provider] = state; },
   });

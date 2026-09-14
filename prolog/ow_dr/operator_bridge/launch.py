@@ -8,6 +8,8 @@ from pathlib import Path
 
 
 def main() -> None:
+    if "--pairing-stdin" in sys.argv[1:]:
+        raise SystemExit("Private-stdin pairing requires a trusted direct launcher with an explicit pipe; never forward a console handle.")
     root = Path(__file__).resolve().parents[3]
     command = [sys.executable, "-m", "prolog.ow_dr.operator_bridge", *sys.argv[1:]]
     options = {"cwd": root, "close_fds": True}

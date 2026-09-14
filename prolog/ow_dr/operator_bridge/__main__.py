@@ -2,12 +2,44 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
+import stat
+import sys
+import warnings
 from pathlib import Path
+
+
+def read_pairing_phrase(*, from_stdin: bool = False, stream=None) -> str:
+    """Only a private native prompt or explicit inherited UTF-8 pipe may supply it."""
+    if from_stdin:
+        if stream is None:
+            stream = sys.stdin.buffer
+            if not stat.S_ISFIFO(os.fstat(stream.fileno()).st_mode):
+                raise ValueError("Private-stdin pairing accepts an inherited pipe only, never a file or terminal.")
+        if stream.isatty():
+            raise ValueError("Private-stdin pairing requires a pipe, not an echoing terminal.")
+        line = stream.readline(4099)
+        if not line or len(line) > 4098 or not line.endswith(b"\n"):
+            raise ValueError("Supply one bounded UTF-8 pairing line through the private pipe.")
+        try:
+            phrase = line.removesuffix(b"\n").removesuffix(b"\r").decode("utf-8")
+        except UnicodeError:
+            raise ValueError("Pairing input must be UTF-8.") from None
+    else:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            try:
+                phrase = getpass.getpass("Local bridge pairing phrase (16+ characters; NOT provider credentials): ")
+            except (EOFError, OSError, getpass.GetPassWarning):
+                raise ValueError("A private native console is required, or explicitly supply --pairing-stdin.") from None
+    if not 16 <= len(phrase) <= 1024:
+        raise ValueError("The local pairing phrase must contain 16–1024 characters.")
+    return phrase
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="powder independent human operator/recovery bridge")
-    parser.add_argument("--port", type=int, default=8063)
+    parser.add_argument("--port", type=int, default=os.environ.get("POWDER_OPERATOR_PORT", "8063"))
     parser.add_argument("--parent-origin", default="http://localhost:3050",
                         help="Exact allowed main-workspace origin for isolated embedded views")
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[3])
@@ -18,6 +50,8 @@ def main() -> None:
     parser.add_argument("--copilot-model", help="Optional operator-only native Copilot model identifier")
     parser.add_argument("--codex-model", help="Optional operator-only native Codex model identifier")
     parser.add_argument("--offline", action="store_true", help="Recovery view only; disable both native adapters")
+    parser.add_argument("--pairing-stdin", action="store_true",
+                        help="Read the local phrase from an inherited private UTF-8 pipe; never argv/environment/files")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be between 1024 and 65535")
@@ -41,7 +75,10 @@ def main() -> None:
     private_directory(state)
     lock = InstanceLock(state)
     try:
-        phrase = getpass.getpass("Local bridge pairing phrase (16+ characters; NOT provider credentials): ")
+        try:
+            phrase = read_pairing_phrase(from_stdin=args.pairing_stdin)
+        except ValueError as error:
+            parser.error(str(error))
         auth = Auth(phrase)
         del phrase
         services = {}

@@ -13,8 +13,10 @@ export function createOperatorAgent(host, {
   if (typeof bridgeURL !== 'string') throw new TypeError('Supply the host-owned operator bridgeURL descriptor.');
   const url = new URL(bridgeURL);
   if (url.protocol !== 'http:' || url.hostname !== 'operator.localhost' || !url.port
-      || url.username || url.password || url.pathname !== '/embed' || url.search || url.hash)
-    throw new TypeError('Operator bridgeURL must be the fixed isolated-origin /embed URL.');
+      || Number(url.port) < 1024 || Number(url.port) > 65535
+      || url.username || url.password || !['/', '/embed'].includes(url.pathname) || url.search || url.hash)
+    throw new TypeError('Operator bridgeURL must be the trusted isolated origin or its /embed URL.');
+  url.pathname = '/embed';
   url.searchParams.set('provider', provider);
   const element = document.createElement('section');
   element.className = 'operator-agent';

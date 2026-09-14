@@ -44,6 +44,29 @@ do not modify system DNS/hosts or substitute the Prolog application's hostname.
 `python -m prolog.ow_dr.operator_bridge --help` is safe: no listener, CLI,
 authentication prompt or model task is started.
 
+### Noninteractive activation boundary
+
+Default activation still obtains the phrase from the bridge's private native
+console. A non-private `getpass` fallback now fails rather than echoing input.
+If the user is absent and no phrase has been securely provisioned, leave that
+console waiting; **do not claim the HTTP bridge is ready**, invent a known
+password, write a phrase to disk, or expose it in a tool log.
+
+An explicitly trusted OS launcher may instead launch
+`python -m prolog.ow_dr.operator_bridge --pairing-stdin` with a private inherited
+stdin pipe. Supply exactly one UTF-8 line containing a 16–1024 character local
+phrase, then close the pipe. TTY input, empty/unterminated input, invalid UTF-8,
+and oversized input fail closed. The phrase is not accepted in argv, environment
+variables, URLs or files, and is never printed. The launcher must obtain/retain it
+securely for the human; generating a secret nobody can recover does not complete
+pairing. Browser/main-Prolog code must never provide or receive that pipe.
+
+`launch.py` intentionally refuses `--pairing-stdin`: its console-only handle
+inheritance is not a secret pipe. A trusted direct launcher must explicitly own
+its pipe and process creation flags. Reading the phrase only permits bridge
+pairing; idle HTTP startup still creates **zero native sessions or prompts**.
+This option was validated with synthetic input only, not production activation.
+
 Optional CLI-only settings: `--copilot-bin=PATH`, `--codex-bin=PATH`,
 `--copilot-model=ID`, `--codex-model=ID`, and `--offline` for recovery-only mode.
 Models remain independent of the Teacher and one another; omission uses that
@@ -137,7 +160,7 @@ Load `web/operator-agent.css` and import `createOperatorAgent` from
 ```javascript
 const view = createOperatorAgent(host, {
   provider: 'copilot', active: true, signal,
-  bridgeURL: descriptor.bridgeURL, // e.g. http://operator.localhost:8063/embed
+  bridgeURL: descriptor.bridgeURL, // e.g. http://operator.localhost:8063
   onStateChange({status, conversationId, sequence, error, unread}) { /* update that chip only */ },
 });
 view.activate();   // first activation loads the frame; then visibility lifecycle only
@@ -146,7 +169,11 @@ view.getState();   // fields above, plus provider and connected
 view.destroy();    // closes/removes only this view and revokes its pairing
 ```
 
-`bridgeURL` is required and owned by the host descriptor. A controller created
+`bridgeURL` is required and owned by the host descriptor; the controller appends
+`/embed` to its exact trusted origin (an explicit `/embed` URL is also accepted).
+Ports must be 1024–65535. The bridge's default port also honors the deployment
+environment's `POWDER_OPERATOR_PORT`; explicit `--port` takes precedence.
+A controller created
 with `active:false` reports `status:"not_loaded"` and does not navigate the iframe
 until its first explicit `activate()`. The `signal` is the application/controller
 lifetime, never a route lifetime. Switching chips or routes retains the frame.
@@ -167,7 +194,7 @@ remain inside the privileged operator container/journal, not parent storage.
 Configure the bridge's `--parent-origin=http://localhost:3050` to the **exact**
 main-workspace origin (scheme, hostname, port; no path, wildcard or trailing
 slash). This is also the default. A host-owned main configuration endpoint may
-provide the fixed operator `/embed` URL; it must never proxy operator APIs or
+provide the fixed operator origin; it must never proxy operator APIs or
 receive pairing phrases, session cookies or frame capabilities. The iframe is
 sandboxed with only `allow-scripts allow-same-origin allow-forms`. Its CSP allows
 only the configured ancestor. No popups or top navigation are enabled.
@@ -433,6 +460,7 @@ are deliberately not sent to this pinned stable protocol.
 
 ```powershell
 prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_embed prolog.ow_dr.operator_bridge.tests.test_service prolog.ow_dr.operator_bridge.tests.test_http prolog.ow_dr.operator_bridge.tests.test_providers prolog.ow_dr.operator_bridge.tests.test_native_adapters
+prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_pairing_input
 node --test prolog\ow_dr\operator_bridge\tests\embed-browser.test.mjs
 ```
 
