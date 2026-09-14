@@ -422,7 +422,32 @@ route visit. `onStateChange` and `getState()` include `status`, `conversationId`
 event count per conversation; unchanged polling and older-page reads never
 increment it or unread. In-flight results arriving while hidden count only new
 events. Reactivation clears the view's unread count without resetting sequence.
-Storage keys are `powder.cyc.{settings,drafts,forms,history,pending}.v1`, separate from
+The default view is chat-first: the conversation selector contains **New
+conversation** and saved runs, followed by the transcript, composer, **Send** and
+**Say something**. **Settings** toggles the profile/state/proof/action/gap/TODO/audit
+inspector with `aria-expanded`/`aria-controls`; Escape closes it. Settings starts
+collapsed on controller creation and never navigates the main route. Pending
+typed forms, unavailable approval notices and applicable Continue/Interrupt/
+Resume/Stop controls remain in the chat view, not behind Settings.
+
+New is a local draft, not a durable run. Its first explicit Send creates the
+selected profile run and, only after a verified creation response, sends that
+message with the returned run identity and revision. There is no Resume detour.
+With no authored profile configured, the UI clearly selects the limited
+app-owned Cyc starter; the server still receives an explicit `profile` selector.
+**Say something** explicitly sends the text `hello` through the same interpreter,
+preserving an unsent composer draft. No greeting response is synthesized in the
+UI, and a custom profile's missing language remains a genuine gap. Merely loading
+the page, choosing New, selecting a profile or switching chips starts nothing.
+
+Choosing a previous conversation immediately opens its cached transcript/draft
+and reads its exact durable `{id,conversation}` identity. New has its own draft.
+The selected identity (including New) survives controller recreation. A switch
+cancels superseded read requests; selection epochs and response identity checks
+prevent late reads/inspectors from overwriting another conversation. Mutations
+pin the selector until the explicit operation settles.
+
+Storage keys are `powder.cyc.{settings,drafts,forms,history,pending,selection}.v1`, separate from
 Teacher and operators. Browser history is a bounded local index/cache (20 runs,
 200 events per view); authoritative history/state remains in KEE. There is no
 server-wide conversation enumeration. Losing the browser index does not delete
@@ -444,6 +469,10 @@ POST `revision` is the **run resource revision**, not the global ledger revision
 Every write takes a fresh call ID (up to 80 characters); repeated identical
 committed requests are read back, and changed payloads under the same identity
 conflict. Unknown browser responses retain the request identity for inspection.
+An uncertain Start never triggers its queued Send on recovery: receipt inspection
+only restores the created run and draft; sending again requires an explicit
+click. Stop/Interrupt retain prior uncertain request identities, with at most four
+outstanding local markers before inspection is required. No mutation is replayed.
 Responses contain `{run,events,eventTotal,offset,limit,replayed}`. `run` exposes
 the semantic wire state, fixed cumulative counters, source manifest, phase and
 typed pending request. Event deltas preserve input text and source assertion-ID
@@ -501,7 +530,9 @@ editable form and its revision, and never creates a dispatch claim.
 
 ## Explicit app-owned starter
 
-Select **Cyc starter — limited app-owned profile** in Knowledge, then **Start**.
+Choose **New conversation**, then Send or **Say something**. The default choice is
+clearly labeled as the limited app-owned Cyc starter. To choose another profile,
+open **Settings → Knowledge**; the advanced **Start** button is optional.
 Discovery/selection alone executes no program. The fixed file
 `profiles\cyc-starter.krf` is application code/data, not a corpus fixture:
 `kb_symbolic_agent_profiles.pl` reads it through the shared KRF reader and
@@ -565,7 +596,8 @@ Starter tests run the actual shipped KRF, actual HTTP host and actual durable
 TODO gateway under an isolated ledger, assert zero external calls and unchanged
 live source modules/generation, and exercise immutability and explicit selection.
 The Node suite also opens the actual Cyc controller against an ephemeral isolated
-SWI HTTP host: oversized title rejection/draft retention, corrected submission,
+SWI HTTP host: New/Previous identity and draft isolation, an actual knowledge-defined
+`hello` reply, missing authored-profile rejection, oversized title rejection/draft retention, corrected submission,
 Interrupt/Resume at both read and write boundaries, and one real audited TODO.
 That fixture uses a separate project-local ledger, traps external transports,
 checks unchanged native generation and cleans up its owned server/state.

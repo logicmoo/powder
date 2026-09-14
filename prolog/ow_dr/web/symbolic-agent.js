@@ -3,9 +3,11 @@
 // Inherit the existing surface/ink/line palette and typography. Start is always
 // deliberate; unavailable knowledge and uncertain outcomes stay visible.
 let instance = 0;
+const STARTER_PROFILE = 'cyc-starter-v1';
 export const SYMBOLIC_STORAGE = Object.freeze({
   settings: 'powder.cyc.settings.v1', draft: 'powder.cyc.drafts.v1',
   history: 'powder.cyc.history.v1', pending: 'powder.cyc.pending.v1', forms: 'powder.cyc.forms.v1',
+  selection: 'powder.cyc.selection.v1',
 });
 export function linkedMts(text) {
   return [...new Set(text.split(/\r?\n/u).map(value => value.trim()).filter(Boolean))];
@@ -18,8 +20,8 @@ export function controlAvailability(run, pending = false, unknown = false) {
     continue: !!run && !pending && !unknown && (['running', 'compensating'].includes(phase)
       || phase === 'awaiting_action' && run.pending?.stage === 'planned'),
     interrupt: !!run && !pending && !terminal && run.status !== 'created' && phase !== 'interrupted',
-    resume: !!run && !pending && !unknown && (run.status === 'created'
-      || phase === 'interrupted' && (run.pending?.kind !== 'action' || run.pending.stage === 'planned')),
+    resume: !!run && !pending && !unknown && phase === 'interrupted'
+      && (run.pending?.kind !== 'action' || run.pending.stage === 'planned'),
     stop: !!run && !pending && !terminal,
     form: !!run && !pending && !unknown && phase === 'awaiting_form',
   };
@@ -71,9 +73,12 @@ export function createSymbolicAgent(host, {
   if (!settings || typeof settings !== 'object') settings = {};
   if (!drafts || typeof drafts !== 'object' || Array.isArray(drafts)) drafts = {};
   history = history.filter(item => typeof item?.id === 'string' && typeof item?.conversation === 'string').slice(-20);
+  const selection = read(SYMBOLIC_STORAGE.selection, null);
+  const selected = history.find(item => item.id === selection?.id && item.conversation === selection?.conversation);
   let run = null, events = [], unknown = read(SYMBOLIC_STORAGE.pending, null);
-  let currentId = history.at(-1)?.id ?? null, currentConversation = history.at(-1)?.conversation ?? null;
+  let currentId = selected?.id ?? null, currentConversation = selected?.conversation ?? null;
   let inspection = 'State', eventTotal = 0, lastError = null, refreshWhenIdle = false;
+  let settingsOpen = false, operation = null, selectionEpoch = 0;
   let profileCatalog = [], profilesLoaded = false, profilesLoading = false;
   let formDrafts = read(SYMBOLIC_STORAGE.forms, {});
   if (!formDrafts || typeof formDrafts !== 'object' || Array.isArray(formDrafts)) formDrafts = {};
@@ -88,7 +93,7 @@ export function createSymbolicAgent(host, {
   const panel = el('section', { className: 'symbolic-agent', hidden: !active, 'data-agent': 'symbolic' },
     heading('Cyc', 'Knowledge-defined text dialogue and workflows. No model, network fallback or operator access.'));
   const feedback = el('p', { className: 'cyc-feedback', role: 'status', 'aria-live': 'polite' },
-    'Choose the limited app-owned starter, or configure an explicitly loaded definition, then Start.');
+    'Send a message or choose Say something. Nothing starts until you ask.');
   const identity = el('p', { className: 'cyc-identity' });
   const transcript = el('section', { className: 'cyc-transcript', 'aria-label': 'Cyc conversation history' });
   const picker = el('select', { 'aria-label': 'Cyc conversations', onchange: selectConversation });
@@ -101,16 +106,25 @@ export function createSymbolicAgent(host, {
   })) controls[action] = button(label, () => perform(action), action === 'send' ? 'button' : 'button secondary');
   const refresh = button('Refresh state', refreshState, 'button secondary');
   const recover = button('Inspect uncertain request', recoverRequest, 'button secondary');
+  const saySomething = button('Say something', () => perform('send', { text: 'hello' }), 'button secondary');
+  saySomething.title = 'Send “hello” through the selected symbolic interpreter; no model is used.';
+  const settingsToggle = button('Settings', () => showSettings(!settingsOpen), 'button secondary');
+  settingsToggle.setAttribute('aria-controls', `${viewId}-settings`);
+  settingsToggle.setAttribute('aria-expanded', 'false');
+  const profileSummary = el('p', { className: 'muted cyc-profile-summary' });
   const requests = el('section', { className: 'cyc-requests', 'aria-label': 'Cyc form or approval request' });
   const chat = el('section', { className: 'cyc-chat' },
-    el('div', { className: 'cyc-history-bar' }, el('label', {}, 'Conversation ', picker), refresh, recover),
+    el('div', { className: 'cyc-history-bar' }, el('label', {}, 'Conversation ', picker), settingsToggle, recover),
     identity, transcript, requests,
     el('form', { className: 'cyc-composer', onsubmit: event => { event.preventDefault(); perform('send'); } },
       el('label', { className: 'field' }, 'Message to Cyc', text),
-      el('div', { className: 'cyc-actions' }, controls.send, controls.continue, controls.interrupt, controls.resume, controls.stop),
-      el('p', { className: 'muted' }, 'Each request runs one bounded step. Continue explicitly dispatches a planned action or advances its continuation. Switching chips submits nothing.')),
+      el('div', { className: 'cyc-actions' }, controls.send, saySomething, controls.continue, controls.interrupt, controls.resume, controls.stop),
+      profileSummary),
     feedback);
-  const inspector = el('aside', { className: 'cyc-inspector', 'aria-label': 'Cyc inspector' });
+  const inspector = el('aside', { className: 'cyc-inspector', id: `${viewId}-settings`, hidden: true,
+    'aria-label': 'Cyc settings and inspection', onkeydown: event => {
+      if (event.key === 'Escape') { event.preventDefault(); showSettings(false); settingsToggle.focus(); }
+    } });
   const tabs = el('div', { className: 'cyc-tabs', role: 'tablist', 'aria-label': 'Symbolic inspection' });
   const pages = new Map(), tabButtons = new Map();
   for (const name of ['Knowledge', 'State', 'Proofs', 'Actions', 'Gaps', 'TODOs', 'Audit']) {
@@ -135,8 +149,10 @@ export function createSymbolicAgent(host, {
   const links = el('textarea', { name: 'cyc-linked-mts', rows: 6, value: settings.linkedMts ?? '',
     placeholder: 'One explicitly selected linked MT key per line' });
   const profile = el('select', { name: 'cyc-profile', onchange: saveSettings },
-    el('option', { value: '' }, 'Choose a profile'),
+    el('option', { value: '' }, 'Default: Cyc starter (limited, app-owned)'),
     el('option', { value: 'loaded' }, 'Loaded knowledge — explicit agent and MTs'));
+  if (settings.profile && settings.profile !== 'loaded')
+    profile.append(el('option', { value: settings.profile }, `Saved profile: ${settings.profile}`));
   profile.value = settings.profile ?? (settings.agent ? 'loaded' : '');
   const profileNotice = el('p', { className: 'muted' });
   for (const input of [agent, mt, links]) input.addEventListener('input', () => {
@@ -151,7 +167,7 @@ export function createSymbolicAgent(host, {
     el('p', { className: 'muted' }, 'A loaded definition needs (isa AGENT SymbolicTextAgent), symbolicStartCategory, symbolicInitialState and eight symbolicAgentContext roles. If you have no such authored program, choose the limited app-owned starter instead.'));
   pages.get('Knowledge').append(el('h2', {}, 'Explicit knowledge profile'),
     el('label', { className: 'field' }, 'Profile', profile), profileNotice, loadedConfig, controls.start,
-    el('p', { className: 'muted' }, 'Settings apply only to a new run. Stop ends a run; history remains. Application TODO changes are audited, not source-file edits.'),
+    el('p', { className: 'muted' }, 'Choose New conversation to use these settings. Send starts the selected profile; Start is optional. Stop ends a run, not its history. TODO changes are audited, not source-file edits.'),
     scope);
   const inspectContent = new Map();
   for (const name of ['TODOs', 'Audit']) {
@@ -160,21 +176,34 @@ export function createSymbolicAgent(host, {
       el('p', { className: 'muted' }, 'Read from the selected goals MT. These are real KEE records, not claimed task completion.'),
       button(`Refresh ${name}`, () => inspect(name), 'button secondary'), content);
   }
-  panel.append(el('div', { className: 'cyc-workspace' }, chat, inspector));
+  const workspace = el('div', { className: 'cyc-workspace' }, chat, inspector);
+  panel.append(workspace);
 
   function state() {
     return { agent: 'symbolic', identity: 'symbolic', label: 'Cyc', active, disposed,
-      conversationId: currentConversation, runId: currentId, status: run?.phase ?? 'not_started',
+      conversationId: currentConversation, runId: currentId,
+      status: run?.phase ?? (currentId ? lastError ? 'unavailable' : 'loading' : 'not_started'),
       sequence: sequences.get(currentConversation) ?? 0,
       error: lastError ?? (unknown ? { code: 'outcome_unknown', message: 'Request outcome requires durable receipt inspection.' } : null),
-      pending: busy, unknownOutcome: !!unknown, unread, draft: text.value, storageFailed };
+      pending: busy, unknownOutcome: !!unknown, unread, draft: text.value, storageFailed, settingsOpen };
   }
   function emit() { onStateChange?.(state()); }
   function recordError(error) {
     lastError = { code: error?.code ?? 'symbolic_request_failed', message: error?.message ?? String(error) };
   }
-  function settled() {
-    busy = false; update();
+  function beginOperation(kind) {
+    const next = { kind, epoch: selectionEpoch, abort: new AbortController() };
+    operation = next; busy = true; update(); return next;
+  }
+  function isCurrent(job) { return !disposed && operation === job && job.epoch === selectionEpoch; }
+  function operationSignal(job) { return AbortSignal.any([lifecycle.signal, job.abort.signal]); }
+  function cancelRead() {
+    if (operation?.kind === 'read') { operation.abort.abort(); operation = null; busy = false; }
+    refreshWhenIdle = false;
+  }
+  function settled(job) {
+    if (!isCurrent(job)) return;
+    operation = null; busy = false; update(); drawRequest();
     if (refreshWhenIdle && active && !disposed) {
       refreshWhenIdle = false; void refreshState();
     }
@@ -184,6 +213,14 @@ export function createSymbolicAgent(host, {
     const keys = Object.keys(drafts);
     for (const key of keys.slice(0, Math.max(0, keys.length - 21))) delete drafts[key];
     write(SYMBOLIC_STORAGE.draft, drafts);
+  }
+  function saveSelection() {
+    write(SYMBOLIC_STORAGE.selection, currentId ? { id: currentId, conversation: currentConversation } : null);
+  }
+  function showSettings(value) {
+    settingsOpen = !!value; inspector.hidden = !settingsOpen;
+    workspace.dataset.settingsOpen = String(settingsOpen);
+    settingsToggle.setAttribute('aria-expanded', String(settingsOpen)); emit();
   }
   function saveSettings() {
     settings = { profile: profile.value, agent: agent.value, definitionMt: mt.value, linkedMts: links.value };
@@ -202,26 +239,43 @@ export function createSymbolicAgent(host, {
     }
     formDraftKey = null; formInputs = new Map();
   }
+  function pendingCount() {
+    let count = 0;
+    for (let pending = unknown; pending && count < 4; pending = pending.previous) count++;
+    return count;
+  }
   function update() {
     const allowed = controlAvailability(run, busy, !!unknown);
     for (const [name, control] of Object.entries(controls)) control.disabled = !allowed[name];
-    controls.send.disabled ||= !text.value.trim();
-    const selectedProfile = profileCatalog.find(item => item.id === profile.value);
-    controls.start.disabled ||= profile.value === 'loaded' ? !agent.value.trim() || !mt.value.trim() : !selectedProfile;
+    const selectedProfile = profileCatalog.find(item => item.id === (profile.value || STARTER_PROFILE));
+    const profileReady = profile.value === 'loaded' ? !!agent.value.trim() && !!mt.value.trim() : !!selectedProfile;
+    const newReady = !currentId && profileReady && !busy && !unknown;
+    controls.start.disabled = !newReady;
+    controls.send.disabled = !(allowed.send || newReady) || !text.value.trim();
+    saySomething.disabled = !(allowed.send || newReady);
+    const visible = controlAvailability(run, false, !!unknown);
+    for (const name of ['continue', 'interrupt', 'resume', 'stop']) controls[name].hidden = !visible[name];
+    if (pendingCount() >= 4) { controls.stop.disabled = true; controls.interrupt.disabled = true; }
     loadedConfig.hidden = profile.value !== 'loaded';
     profileNotice.textContent = selectedProfile
       ? `${selectedProfile.description} Try: ${(selectedProfile.examples ?? []).join(', ')}. Read as an isolated program only after Start; never added to the live KB.`
       : profile.value === 'loaded' ? 'Reads only the current loaded generation. Missing definitions fail without loading any source.'
-        : 'Choose the finite starter for hello/help and typed TODOs, or an authored program already loaded into the KB.';
+        : 'The selected profile is unavailable. Choose a published profile or an authored program already loaded into the KB; no fallback is executed.';
     refresh.disabled = busy || !currentId;
     recover.hidden = !unknown; recover.disabled = busy;
-    picker.disabled = busy;
+    picker.disabled = operation?.kind === 'write';
+    for (const input of [profile, agent, mt, links]) input.disabled = operation?.kind === 'write';
     text.disabled = busy;
     for (const field of requests.querySelectorAll('input,textarea,button')) field.disabled = busy || !!unknown;
     identity.textContent = run
-      ? `${run.source?.knowledgeAgent ?? 'Cyc'} · ${run.phase} · ${run.steps}/128 steps · ${run.actions}/16 actions`
-      : 'Cyc · not started';
+      ? `Cyc · ${run.phase.replaceAll('_', ' ')}`
+      : currentId ? lastError ? 'Cyc · saved conversation unavailable' : 'Cyc · opening saved conversation' : 'New conversation';
     if (unknown) identity.textContent += ' · request outcome unknown — refresh and inspect; never automatically retried';
+    profileSummary.textContent = currentId
+      ? `Profile: ${run?.source?.knowledgeAgent ?? history.find(item => item.id === currentId)?.agent ?? 'loading'}. “Say something” sends “hello” through its knowledge; it never calls a model.`
+      : profile.value === 'loaded'
+        ? `New uses your loaded profile${agent.value.trim() ? ` ${agent.value.trim()}` : ''}. Configure its agent and MTs in Settings. Send starts it; selecting a conversation does not.`
+        : `New uses ${selectedProfile?.label ?? (profile.value ? `saved profile ${profile.value}` : 'the limited app-owned Cyc starter')}. Send or “Say something” starts it; nothing starts on selection.`;
     emit();
   }
   function selectTab(name) {
@@ -233,18 +287,18 @@ export function createSymbolicAgent(host, {
     }
   }
   function drawPicker() {
-    picker.replaceChildren(el('option', { value: '' }, 'Choose a saved conversation'));
+    picker.replaceChildren(el('option', { value: '' }, 'New conversation'));
     for (const item of [...history].reverse()) picker.append(el('option', { value: item.id },
-      `${item.agent ?? 'Cyc'} · ${item.status ?? 'saved'} · ${item.id.slice(-8)}`));
+      `${item.title ?? item.agent ?? 'Cyc'} · ${item.status ?? 'saved'} · ${item.id.slice(-8)}`));
     picker.value = currentId ?? '';
   }
   function draw() {
     if (disposed) return;
     transcript.replaceChildren();
     if (!events.length) transcript.append(el('div', { className: 'cyc-empty' },
-      el('h2', {}, run ? 'Ready for knowledge-defined input' : 'Start with explicit knowledge'),
-      el('p', {}, run ? 'Unknown language becomes an inspectable gap, never a model request.'
-        : 'Choose the limited starter in Knowledge, or configure an authored loaded program. Start verifies its bounded program before creating a run.')));
+      el('h2', {}, currentId ? 'Conversation' : 'What would you like to say?'),
+      el('p', {}, currentId ? 'Use the selected knowledge-defined language. Missing coverage is a gap, never a model fallback.'
+        : 'Write a message, or choose Say something to send “hello.” Change the profile and inspect evidence in Settings.')));
     for (const event of events) {
       const input = event.request?.input?.term;
       if (input?.type === 'compound' && input.functor === 'text' && input.args[0]?.type === 'string')
@@ -255,7 +309,8 @@ export function createSymbolicAgent(host, {
     if ((events.at(-1)?.sequence ?? 0) < eventTotal - 1)
       transcript.append(button('Return to latest events', refreshState, 'text-button'));
     pages.get('State').replaceChildren(el('h2', {}, 'Durable semantic state'), data(run?.state ? symbolicText(run.state) : 'No run.'),
-      data(run ? { revision: run.revision, phase: run.phase, turns: run.turns, knowledge: run.knowledge } : {}));
+      data(run ? { revision: run.revision, phase: run.phase, turns: run.turns,
+        steps: run.steps, actions: run.actions, knowledge: run.knowledge } : {}), refresh);
     pages.get('Proofs').replaceChildren(el('h2', {}, 'Source evidence and transitions'),
       ...events.filter(e => e.semantic).map(e => el('details', {},
         el('summary', {}, `Event ${e.sequence} · ${e.kind}`), data(symbolicText(e.semantic)))));
@@ -298,6 +353,11 @@ export function createSymbolicAgent(host, {
     const pending = run?.pending;
     if (pending?.kind === 'approval') {
       requests.append(el('h2', {}, 'Approval adapter unavailable'), el('p', {}, pending.message));
+    } else if (pending?.kind === 'action') {
+      requests.append(el('p', {}, pending.stage === 'planned'
+        ? `Planned action: ${pending.intent?.capability ?? 'knowledge-defined action'}. Continue dispatches it; Interrupt pauses it.`
+        : 'This action has an unresolved outcome. It cannot be resumed or replayed.'),
+      button('Inspect action', () => { showSettings(true); selectTab('Actions'); }, 'text-button'));
     } else if (pending?.kind === 'form' && run.phase === 'awaiting_form') {
       const fields = new Map(), form = el('form', { onsubmit: event => {
         event.preventDefault();
@@ -342,133 +402,188 @@ export function createSymbolicAgent(host, {
     }
   }
   function absorb(reply) {
+    const prior = history.find(item => item.id === reply.run.id && item.conversation === reply.run.conversation);
+    const same = currentId === reply.run.id && currentConversation === reply.run.conversation;
+    events = mergeEvents(same ? events : prior?.events ?? [], reply.events ?? []);
     run = reply.run; currentId = run.id; currentConversation = run.conversation;
-    events = mergeEvents(events, reply.events ?? []); eventTotal = reply.eventTotal ?? events.length;
+    eventTotal = reply.eventTotal ?? events.length;
     const previous = sequences.get(currentConversation) ?? 0;
     const observed = Number.isSafeInteger(reply.eventTotal) && reply.eventTotal >= 0 ? reply.eventTotal
       : Number.isSafeInteger(run.eventSequence) ? run.eventSequence + 1
         : Math.max(0, (events.at(-1)?.sequence ?? -1) + 1);
     const sequence = Math.max(previous, observed);
     sequences.set(currentConversation, sequence);
+    const firstText = events.find(event => event.request?.input?.term?.functor === 'text')?.request.input.term.args[0]?.value;
     const entry = { id: currentId, conversation: currentConversation, agent: run.source?.knowledgeAgent,
+      title: prior?.title ?? (typeof firstText === 'string' ? firstText.slice(0, 60) : undefined),
       status: run.phase, sequence, events };
     history = [...history.filter(item => item.id !== currentId), entry].slice(-20);
     write(SYMBOLIC_STORAGE.history, history);
+    saveSelection();
     if (!active) unread += sequence - previous;
     lastError = null;
     draw();
   }
+  function checkReply(reply, expected) {
+    if (typeof reply?.run?.id !== 'string' || reply.run.conversation !== expected.conversation
+      || expected.id && reply.run.id !== expected.id)
+      throw Object.assign(new Error('Conversation identity mismatch. The response was not applied.'), { code: 'symbolic_identity_mismatch' });
+  }
+  async function writeRequest(job, action, body) {
+    const previous = unknown;
+    unknown = { action, body, draftKey: currentId ?? 'new', formKey: action === 'form' ? formDraftKey : null,
+      ...(previous ? { previous } : {}) };
+    write(SYMBOLIC_STORAGE.pending, unknown); update();
+    const reply = await api(`symbolic/${action}`, {}, { method: 'POST', body, signal: operationSignal(job) });
+    if (!isCurrent(job)) return null;
+    checkReply(reply, body);
+    unknown = previous ?? null; write(SYMBOLIC_STORAGE.pending, unknown);
+    return reply;
+  }
+  function discardAcknowledgedForm(pending, reply) {
+    if (pending?.action !== 'form' || reply.run.phase === 'awaiting_form') return;
+    const key = pending.formKey ?? (pending.body.id === currentId ? formDraftKey : null);
+    if (!key) return;
+    delete formDrafts[key]; write(SYMBOLIC_STORAGE.forms, formDrafts);
+    if (key === formDraftKey) { formDraftKey = null; formInputs = new Map(); }
+  }
   async function perform(action, extra = {}) {
-    if (disposed || busy || !controlAvailability(run, busy, !!unknown)[action]) return;
-    if (action === 'send' && !text.value.trim()) return;
+    if (disposed || busy || unknown && !['stop', 'interrupt'].includes(action)) return;
+    if (pendingCount() >= 4) return;
+    const starting = !currentId && ['start', 'send'].includes(action);
+    if (starting ? controls.start.disabled : !controlAvailability(run, busy, !!unknown)[action]) return;
+    if (action === 'start' && currentId) return;
+    const messageText = extra.text ?? text.value, sendingDraft = action === 'send' && extra.text === undefined;
+    if (action === 'send' && !messageText.trim()) return;
     saveDraft();
-    const callId = crypto.randomUUID();
-    const body = action === 'start'
-      ? { ...(profile.value === 'loaded'
-        ? { agent: agent.value.trim(), definitionMt: mt.value.trim(), linkedMts: linkedMts(links.value) }
-        : { profile: profile.value }), conversation: crypto.randomUUID(), callId }
-      : { id: currentId, conversation: currentConversation, revision: run.revision, callId,
-        ...(action === 'send' ? { text: text.value } : {}), ...extra };
-    busy = true; unknown = { action, body }; write(SYMBOLIC_STORAGE.pending, unknown); update();
-    feedback.textContent = action === 'start' ? 'Verifying the selected knowledge program…' : 'Running one bounded step…';
+    const inheritedDraft = text.value, job = beginOperation('write');
+    feedback.textContent = starting ? 'Starting the selected knowledge profile…' : 'Running one bounded step…';
     try {
-      const reply = await api(`symbolic/${action}`, {}, { method: 'POST', body, signal: lifecycle.signal });
-      if (disposed) return;
-      unknown = null; write(SYMBOLIC_STORAGE.pending, null);
-      if (action === 'start') { events = []; text.value = ''; }
+      if (starting) {
+        const config = profile.value === 'loaded'
+          ? { agent: agent.value.trim(), definitionMt: mt.value.trim(), linkedMts: linkedMts(links.value) }
+          : { profile: profile.value || STARTER_PROFILE };
+        const created = await writeRequest(job, 'start', { ...config, conversation: crypto.randomUUID(), callId: crypto.randomUUID() });
+        if (!created) return;
+        drafts[created.run.id] = inheritedDraft; drafts.new = '';
+        write(SYMBOLIC_STORAGE.draft, drafts); absorb(created); text.value = inheritedDraft;
+        if (action === 'start') { feedback.textContent = 'Conversation ready. Send a message; no Resume is needed.'; return; }
+      }
+      const body = { id: currentId, conversation: currentConversation, revision: run.revision,
+        callId: crypto.randomUUID(), ...extra, ...(action === 'send' ? { text: messageText } : {}) };
+      const reply = await writeRequest(job, action, body);
+      if (!reply) return;
       if (action === 'form' && reply.run.phase !== 'awaiting_form') clearFormDraft();
       absorb(reply);
-      if (action === 'send') { text.value = ''; saveDraft(); }
+      if (sendingDraft) { text.value = ''; saveDraft(); }
       feedback.textContent = `Recorded ${run.phase}. ${run.pending?.kind === 'action' ? 'Inspect the planned action, then Continue.' : ''}`;
+      if (action === 'send' && run.phase === 'gap')
+        feedback.textContent = 'The selected profile has a knowledge gap for that message. Inspect Gaps in Settings; no model fallback was used.';
       if (action === 'form' && run.phase === 'awaiting_form')
         formFailure(null, 'The form was not accepted. Inspect its field values and proof events.');
     } catch (error) {
-      if (disposed) return;
+      if (!isCurrent(job)) return;
       recordError(error);
       // A structured rejection is known. A lost response is not evidence of no
       // effect; retain its identity and text without an automatic retry.
       if (error?.status >= 400 && error.status < 500) {
-        unknown = null; write(SYMBOLIC_STORAGE.pending, null);
+        unknown = unknown?.previous ?? null; write(SYMBOLIC_STORAGE.pending, unknown);
       }
       feedback.textContent = `${error.message ?? 'Request failed'}. ${unknown
         ? 'Outcome may be durable. Refresh/inspect before any manual retry.'
-        : 'Check Knowledge and refresh the current revision.'}`;
-    } finally { if (!disposed) { settled(); drawRequest(); } }
+        : 'Your draft is retained. Check Settings or refresh the saved state.'}`;
+    } finally { settled(job); }
   }
   async function refreshState() {
     if (disposed || busy || !currentId) return;
-    refreshWhenIdle = false; busy = true; update();
+    refreshWhenIdle = false;
+    const expected = { id: currentId, conversation: currentConversation }, job = beginOperation('read');
     try {
-      const reply = await api('symbolic/conversation', { id: currentId, conversation: currentConversation, limit: 100 }, { signal: lifecycle.signal });
-      if (disposed) return;
-      if (unknown && reply.events?.some(e => e.callId === `symbolic-http/${unknown.body.callId}`)) {
-        if (unknown.action === 'form' && reply.run.phase !== 'awaiting_form') clearFormDraft();
-        unknown = null; write(SYMBOLIC_STORAGE.pending, null);
+      const reply = await api('symbolic/conversation', { ...expected, limit: 100 }, { signal: operationSignal(job) });
+      if (!isCurrent(job)) return;
+      checkReply(reply, expected);
+      if (unknown?.body?.conversation === expected.conversation
+        && reply.events?.some(e => e.callId === `symbolic-http/${unknown.body.callId}`)) {
+        discardAcknowledgedForm(unknown, reply);
+        unknown = unknown.previous ?? null; write(SYMBOLIC_STORAGE.pending, unknown);
       }
       absorb(reply);
       feedback.textContent = unknown ? 'Request outcome still unknown. No action was replayed.' : 'Durable state refreshed; no execution requested.';
     } catch (error) {
-      if (!disposed) { recordError(error); feedback.textContent = `State unavailable: ${error.message}. History and draft retained.`; }
-    } finally { if (!disposed) settled(); }
+      if (isCurrent(job)) { recordError(error); feedback.textContent = `State unavailable: ${error.message}. History and draft retained.`; }
+    } finally { settled(job); }
   }
   async function recoverRequest() {
     if (disposed || busy || !unknown?.body) return;
-    busy = true; update();
+    const pending = unknown, job = beginOperation('read');
     try {
       const reply = await api('symbolic/request-status',
-        { conversation: unknown.body.conversation, callId: unknown.body.callId }, { signal: lifecycle.signal });
-      if (disposed) return;
+        { conversation: pending.body.conversation, callId: pending.body.callId }, { signal: operationSignal(job) });
+      if (!isCurrent(job)) return;
       if (reply.receipt?.status === 'committed') {
-        const restored = await api('symbolic/conversation', {
-          id: reply.receipt.commit.result.id, conversation: unknown.body.conversation, limit: 100,
-        }, { signal: lifecycle.signal });
-        if (disposed) return;
-        if (unknown.action === 'form' && restored.run.phase !== 'awaiting_form') clearFormDraft();
-        events = []; unknown = null; write(SYMBOLIC_STORAGE.pending, null); absorb(restored);
-        feedback.textContent = 'Committed request found. Restored state without replaying its action.';
+        const expected = { id: reply.receipt.commit.result.id, conversation: pending.body.conversation };
+        const restored = await api('symbolic/conversation', { ...expected, limit: 100 }, { signal: operationSignal(job) });
+        if (!isCurrent(job)) return;
+        checkReply(restored, expected); saveDraft(); saveFormDraft();
+        discardAcknowledgedForm(pending, restored);
+        if (currentId !== restored.run.id) {
+          text.value = drafts[restored.run.id] ?? (pending.action === 'start' ? drafts[pending.draftKey ?? 'new'] ?? '' : '');
+          drafts[restored.run.id] = text.value;
+          if (pending.action === 'start') drafts[pending.draftKey ?? 'new'] = '';
+          write(SYMBOLIC_STORAGE.draft, drafts);
+        }
+        unknown = pending.previous ?? null; write(SYMBOLIC_STORAGE.pending, unknown); absorb(restored);
+        feedback.textContent = unknown ? 'This request is resolved; an earlier request still needs inspection. No action was replayed.'
+          : 'Committed request found. Restored state without replaying its action.';
       } else feedback.textContent = 'No committed receipt found. Outcome remains unknown; no request was replayed.';
     } catch (error) {
-      if (!disposed) { recordError(error); feedback.textContent = `Receipt unavailable: ${error.message}`; }
-    } finally { if (!disposed) settled(); }
+      if (isCurrent(job)) { recordError(error); feedback.textContent = `Receipt unavailable: ${error.message}`; }
+    } finally { settled(job); }
   }
   async function selectConversation() {
-    saveDraft(); const saved = history.find(item => item.id === picker.value);
-    if (!saved || busy) return;
-    currentId = saved.id; currentConversation = saved.conversation; run = null; lastError = null; unread = 0;
-    events = saved.events ?? []; text.value = drafts[currentId] ?? '';
+    if (disposed) return;
+    if (operation?.kind === 'write') { picker.value = currentId ?? ''; return; }
+    const value = picker.value, saved = history.find(item => item.id === value);
+    if (value && !saved) { picker.value = currentId ?? ''; return; }
+    saveDraft(); saveFormDraft(); cancelRead(); selectionEpoch++;
+    currentId = saved?.id ?? null; currentConversation = saved?.conversation ?? null;
+    run = null; lastError = null; unread = 0;
+    events = saved?.events ?? []; eventTotal = saved?.sequence ?? 0; text.value = drafts[currentId ?? 'new'] ?? '';
+    saveSelection();
     for (const content of inspectContent.values()) content.replaceChildren();
-    draw(); await refreshState();
+    feedback.textContent = currentId ? 'Opening saved conversation…' : 'New conversation. Send starts the profile shown below.';
+    draw();
+    if (currentId) await refreshState();
   }
   async function loadEarlier() {
     if (busy || disposed || !run) return;
-    busy = true; update();
+    const expected = { id: currentId, conversation: currentConversation }, job = beginOperation('read');
     try {
       const offset = Math.max(0, (events[0]?.sequence ?? eventTotal) - 50);
-      const reply = await api('symbolic/conversation', { id: currentId, conversation: currentConversation, offset, limit: 50 }, { signal: lifecycle.signal });
-      if (!disposed) { events = events.slice(0, 150); absorb(reply); }
-    } catch (error) { if (!disposed) { recordError(error); feedback.textContent = error.message; } }
-    finally { if (!disposed) settled(); }
+      const reply = await api('symbolic/conversation', { ...expected, offset, limit: 50 }, { signal: operationSignal(job) });
+      if (isCurrent(job)) { checkReply(reply, expected); events = events.slice(0, 150); absorb(reply); }
+    } catch (error) { if (isCurrent(job)) { recordError(error); feedback.textContent = error.message; } }
+    finally { settled(job); }
   }
   async function inspect(name) {
     if (disposed || busy || !run) return;
-    busy = true; update();
+    const expected = { id: currentId, conversation: currentConversation }, job = beginOperation('read');
     try {
       const reply = await api(`symbolic/${name === 'TODOs' ? 'todos' : 'audit'}`,
-        { id: currentId, conversation: currentConversation, limit: 50 }, { signal: lifecycle.signal });
-      if (!disposed) { lastError = null; inspectContent.get(name).replaceChildren(data(reply.result)); }
+        { ...expected, limit: 50 }, { signal: operationSignal(job) });
+      if (isCurrent(job)) { lastError = null; inspectContent.get(name).replaceChildren(data(reply.result)); }
     } catch (error) {
-      if (!disposed) { recordError(error); inspectContent.get(name).replaceChildren(el('p', { role: 'alert' }, error.message)); }
-    } finally { if (!disposed) settled(); }
+      if (isCurrent(job)) { recordError(error); inspectContent.get(name).replaceChildren(el('p', { role: 'alert' }, error.message)); }
+    } finally { settled(job); }
   }
   async function inspectReceipt() {
     if (disposed || busy || !run?.pending?.callId) return;
-    busy = true; update();
+    const args = { id: currentId, conversation: currentConversation, actionCallId: run.pending.callId }, job = beginOperation('read');
     try {
-      const reply = await api('symbolic/receipt', { id: currentId, conversation: currentConversation,
-        actionCallId: run.pending.callId }, { signal: lifecycle.signal });
-      if (!disposed) { lastError = null; pages.get('Actions').append(data(reply.receipt)); }
-    } catch (error) { if (!disposed) { recordError(error); feedback.textContent = error.message; } }
-    finally { if (!disposed) settled(); }
+      const reply = await api('symbolic/receipt', args, { signal: operationSignal(job) });
+      if (isCurrent(job)) { lastError = null; pages.get('Actions').append(data(reply.receipt)); }
+    } catch (error) { if (isCurrent(job)) { recordError(error); feedback.textContent = error.message; } }
+    finally { settled(job); }
   }
   async function loadProfiles() {
     if (disposed || profilesLoaded || profilesLoading) return;
@@ -478,7 +593,11 @@ export function createSymbolicAgent(host, {
       if (disposed) return;
       profileCatalog = Array.isArray(result.profiles) ? result.profiles : [];
       const selected = settings.profile ?? profile.value;
-      for (const item of profileCatalog) profile.append(el('option', { value: item.id }, item.label));
+      for (const item of profileCatalog) {
+        const existing = [...profile.options].find(option => option.value === item.id);
+        if (existing) existing.textContent = item.label;
+        else profile.append(el('option', { value: item.id }, item.label));
+      }
       profile.value = selected; profilesLoaded = true; update();
     } catch (error) {
       if (!disposed) { recordError(error); feedback.textContent = `Profile discovery unavailable: ${error.message}. Loaded-profile configuration remains available.`; update(); }
@@ -504,7 +623,7 @@ export function createSymbolicAgent(host, {
   if (signal?.aborted) destroy();
   else signal?.addEventListener('abort', destroy, { once: true });
   events = history.find(item => item.id === currentId)?.events ?? [];
-  selectTab(currentId ? inspection : 'Knowledge'); draw();
+  selectTab(currentId ? inspection : 'Knowledge'); draw(); showSettings(false);
   if (active && !disposed) void loadProfiles();
   if (active && currentId && !disposed) void refreshState();
   return { element: panel, activate: () => setActive(true), deactivate: () => setActive(false),

@@ -23,6 +23,8 @@ test('explicit MT selection, cumulative state and unresolved actions', () => {
   assert.equal(controlAvailability({ phase: 'awaiting_input' }, false, true).send, false);
   assert.equal(controlAvailability({ phase: 'awaiting_input' }, false, true).stop, true);
   assert.equal(controlAvailability({ phase: 'stopped' }).resume, false);
+  assert.equal(controlAvailability({ phase: 'awaiting_input', status: 'created' }).send, true);
+  assert.equal(controlAvailability({ phase: 'awaiting_input', status: 'created' }).resume, false);
   assert.ok(Object.values(SYMBOLIC_STORAGE).every(key => key.startsWith('powder.cyc.')));
 });
 test('wire rendering never evaluates markup and preserves structured variables', () => {
@@ -32,7 +34,7 @@ test('wire rendering never evaluates markup and preserves structured variables',
   assert.deepEqual(mergeEvents([{ sequence: 2 }, { sequence: 1 }], [{ sequence: 2, updated: true }]),
     [{ sequence: 1 }, { sequence: 2, updated: true }]);
 });
-test('real isolated host: constrained form and undispatched read/write resume', {
+test('real isolated host: chat-first New/Previous, symbolic greeting, forms and safe resume', {
   skip: !process.env.LOGOS_CHROME, timeout: 90000,
 }, async () => {
   const child = spawn('swipl', ['-q', '-s', join(here, 'symbolic-agent-browser-fixture.pl'),
@@ -56,13 +58,37 @@ test('real isolated host: constrained form and undispatched read/write resume', 
     const click = label => browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
     const fill = (name, value) => browser.evaluate(`{const n=document.querySelector('[name="${name}"]');n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('input',{bubbles:true}))}`);
     const phase = expected => browser.wait(`cyc.getState().status===${JSON.stringify(expected)}&&!cyc.getState().pending`);
+    const choose = id => browser.evaluate(`{const p=document.querySelector('[aria-label="Cyc conversations"]');p.value=${JSON.stringify(id)};p.dispatchEvent(new Event('change'))}`);
     await browser.send('Page.navigate', { url: `http://127.0.0.1:${port}/` });
     await browser.wait(`!!window.cyc&&document.querySelector('[name="cyc-profile"]').options.length===3`);
     assert.deepEqual(await browser.evaluate(`fixtureRequests.map(r=>r.path)`), ['symbolic/status']);
-    await browser.evaluate(`{const p=document.querySelector('[name="cyc-profile"]');p.value='cyc-starter-v1';p.dispatchEvent(new Event('change'))}`);
-    await click('Start'); await phase('awaiting_input');
+    assert.equal(await browser.evaluate(`document.querySelector('.cyc-inspector').hidden`), true);
+    assert.equal(await browser.evaluate(`document.querySelector('[aria-label="Cyc conversations"]').options[0].text`), 'New conversation');
+    await fill('cyc-message', 'Keep this unsent draft');
+    await click('Say something'); await phase('awaiting_input');
+    const first = await browser.evaluate(`({id:cyc.getState().runId,conversation:cyc.getState().conversationId})`);
+    assert.deepEqual(await browser.evaluate(`fixtureRequests.map(r=>r.path)`), ['symbolic/status', 'symbolic/start', 'symbolic/send']);
+    assert.equal(await browser.evaluate(`fixtureRequests.at(-1).body.text`), 'hello');
+    assert.match(await browser.evaluate(`document.querySelector('.cyc-transcript').textContent`), /Hello\. I am Cyc's limited declarative starter/u);
+    assert.equal(await browser.evaluate(`cyc.getState().draft`), 'Keep this unsent draft');
+    const beforeNew = await browser.evaluate(`fixtureRequests.length`);
+    await choose('');
+    assert.equal(await browser.evaluate(`fixtureRequests.length`), beforeNew);
+    assert.equal(await browser.evaluate(`cyc.getState().conversationId`), null);
+    await fill('cyc-message', 'help');
+    await choose(first.id); await phase('awaiting_input');
+    assert.equal(await browser.evaluate(`cyc.getState().conversationId`), first.conversation);
+    assert.equal(await browser.evaluate(`cyc.getState().draft`), 'Keep this unsent draft');
+    await choose('');
+    assert.equal(await browser.evaluate(`cyc.getState().draft`), 'help');
+    await click('Send'); await phase('awaiting_input');
+    assert.notEqual(await browser.evaluate(`cyc.getState().runId`), first.id);
+    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('.cyc-message')].filter(n=>n.querySelector('h3').textContent==='You → Cyc').map(n=>n.querySelector('pre').textContent)`), ['help']);
+    await choose(first.id); await phase('awaiting_input');
     await fill('cyc-message', 'new todo'); await click('Send'); await phase('awaiting_form');
     assert.equal(await browser.evaluate(`document.querySelector('[name="title"]').maxLength`), 256);
+    assert.equal(await browser.evaluate(`document.querySelector('[name="title"]').checkVisibility()`), true);
+    assert.equal(await browser.evaluate(`document.querySelector('.cyc-inspector').hidden`), true);
     await fill('title', 'A'.repeat(257));
     await browser.evaluate(`document.querySelector('.cyc-requests form').requestSubmit()`);
     assert.equal(await browser.evaluate(`fixtureRequests.filter(r=>r.path==='symbolic/form').length`), 0);
@@ -77,7 +103,7 @@ test('real isolated host: constrained form and undispatched read/write resume', 
       return {status:response.status,body:await response.json()};
     })()`);
     assert.equal(rejection.status, 422); assert.equal(rejection.body.error.code, 'symbolic_form_invalid');
-    await click('Refresh state'); await phase('awaiting_form');
+    await browser.evaluate(`cyc.deactivate();cyc.activate()`); await phase('awaiting_form');
     assert.equal(await browser.evaluate(`document.querySelector('[name="title"]').value.length`), 257);
     await fill('title', 'A'.repeat(256));
     await browser.evaluate(`document.querySelector('.cyc-requests form').requestSubmit()`); await phase('running');
@@ -94,11 +120,21 @@ test('real isolated host: constrained form and undispatched read/write resume', 
     await click('Resume'); await phase('awaiting_action');
     await click('Continue'); await phase('running');
     await click('Continue'); await phase('awaiting_input');
-    await click('TODOs'); await click('Refresh TODOs'); await browser.wait(`!cyc.getState().pending`);
+    await click('Settings'); await click('TODOs'); await click('Refresh TODOs'); await browser.wait(`!cyc.getState().pending`);
     assert.equal(await browser.evaluate(`fixtureLatest.result.total`), 1);
     assert.equal(await browser.evaluate(`fixtureLatest.result.items[0].data.title`), 'A'.repeat(256));
     assert.equal(await browser.evaluate(`fixtureLatest.result.items[0].data.status`), 'open');
     assert.equal(await browser.evaluate(`cyc.getState().unknownOutcome`), false);
+    await choose(''); await click('Knowledge');
+    await browser.evaluate(`{const p=document.querySelector('[name="cyc-profile"]');p.value='loaded';p.dispatchEvent(new Event('change'))}`);
+    await fill('cyc-agent', 'x_NoAuthoredAgent'); await fill('cyc-definition-mt', 'x_NoAuthoredMt');
+    await fill('cyc-message', 'Custom draft stays here');
+    await click('Settings'); await click('Say something');
+    await browser.wait(`!cyc.getState().pending&&!!cyc.getState().error`);
+    assert.equal(await browser.evaluate(`cyc.getState().runId`), null);
+    assert.equal(await browser.evaluate(`cyc.getState().draft`), 'Custom draft stays here');
+    assert.equal(await browser.evaluate(`fixtureRequests.at(-1).body.agent`), 'x_NoAuthoredAgent');
+    assert.equal(await browser.evaluate(`document.querySelectorAll('.cyc-message').length`), 0);
     assert.deepEqual(browser.exceptions, []);
   } finally {
     if (browser) await browser.close();
@@ -112,7 +148,7 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
   skip: !process.env.LOGOS_CHROME, timeout: 90000,
 }, async () => {
   const requests = [], runs = new Map(), receipts = new Map();
-  let latest, dropResponse = false, holdNextRead = false, releaseRead;
+  let latest, dropResponse = false, holdNextRead = false, releaseRead, holdNextWrite = false, releaseWrite, wrongNextRead = false;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (url.pathname === '/') {
@@ -149,6 +185,7 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     else if (action === 'conversation') {
       if (holdNextRead) { holdNextRead = false; await new Promise(resolve => { releaseRead = resolve; }); }
       reply = runs.get(url.searchParams.get('id'));
+      if (wrongNextRead) { wrongNextRead = false; reply = structuredClone(reply); reply.run.conversation = 'wrong-response-conversation'; }
     }
     else if (action === 'todos' || action === 'audit') reply = { result: { items: [{ title: 'Actual fixture application record' }], total: 1 } };
     else if (action === 'receipt') reply = { receipt: { status: 'unknown', commit: null } };
@@ -176,19 +213,30 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     if (dropResponse && body) {
       dropResponse = false; res.setHeader('Content-Type', 'application/json'); res.end('['); return;
     }
+    if (holdNextWrite && body) { holdNextWrite = false; await new Promise(resolve => { releaseWrite = resolve; }); }
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(reply));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const browser = await launchChromium(process.env.LOGOS_CHROME);
   const click = label => browser.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
   const fill = (name, value) => browser.evaluate(`{const n=document.querySelector('[name="${name}"]');n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('input',{bubbles:true}))}`);
+  const choose = id => browser.evaluate(`{const p=document.querySelector('[aria-label="Cyc conversations"]');p.value=${JSON.stringify(id)};p.dispatchEvent(new Event('change'))}`);
   try {
+    await browser.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
     await browser.send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
     await browser.wait(`!!window.cyc`);
     await browser.wait(`document.querySelector('[name="cyc-profile"]').options.length===3`);
     assert.deepEqual(requests.map(r => r.action), ['status'], 'mount may discover profiles but must not start or load knowledge');
     assert.deepEqual(await browser.evaluate(`({sequence:cyc.getState().sequence,error:cyc.getState().error,conversationId:cyc.getState().conversationId})`),
       { sequence: 0, error: null, conversationId: null });
+    assert.equal(await browser.evaluate(`cyc.getState().settingsOpen`), false);
+    assert.equal(await browser.evaluate(`document.querySelector('.cyc-chat').getBoundingClientRect().width/document.querySelector('.cyc-workspace').getBoundingClientRect().width>0.98`), true);
+    await click('Settings'); assert.equal(await browser.evaluate(`cyc.getState().settingsOpen`), true);
+    assert.equal(await browser.evaluate(`getComputedStyle(document.querySelector('.cyc-workspace')).gridTemplateColumns.split(' ').length`), 2);
+    await browser.evaluate(`document.querySelector('.cyc-inspector').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
+    assert.equal(await browser.evaluate(`document.activeElement.textContent`), 'Settings');
+    assert.equal(await browser.evaluate(`document.activeElement.getAttribute('aria-expanded')`), 'false');
+    await click('Settings');
     await browser.evaluate(`{const p=document.querySelector('[name="cyc-profile"]');p.value='loaded';p.dispatchEvent(new Event('change'))}`);
     await fill('cyc-agent', 'x_Unavailable'); await fill('cyc-definition-mt', 'x_DefMt');
     await fill('cyc-linked-mts', 'x_GrammarMt\nx_GrammarMt');
@@ -244,20 +292,26 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     await click('Interrupt'); await browser.wait(`cyc.getState().status==='interrupted'&&!cyc.getState().pending`);
     await click('Resume'); await browser.wait(`cyc.getState().status==='awaiting_input'&&!cyc.getState().pending`);
     await fill('cyc-message', 'unsent first');
+    await choose('');
+    assert.equal(await browser.evaluate(`cyc.getState().sequence`), 0);
+    assert.equal(await browser.evaluate(`cyc.getState().runId`), null);
     await click('Knowledge'); await click('Start');
     await browser.wait(`cyc.getState().runId==='run:2'&&!cyc.getState().pending`);
     assert.equal(await browser.evaluate(`cyc.getState().sequence`), 0, 'sequence belongs to this conversation, not the controller lifetime');
     await fill('cyc-message', 'second draft');
-    await browser.evaluate(`const p=document.querySelector('[aria-label="Cyc conversations"]');p.value='run:1';p.dispatchEvent(new Event('change'))`);
+    await choose('run:1');
     await browser.wait(`cyc.getState().runId==='run:1'&&!cyc.getState().pending`);
     assert.ok(await browser.evaluate(`cyc.getState().sequence`) >= observed + 1);
     assert.equal(await browser.evaluate(`document.querySelector('[name="cyc-message"]').value`), 'unsent first');
     dropResponse = true;
     await click('Send'); await browser.wait(`cyc.getState().unknownOutcome&&!cyc.getState().pending`);
     const sendCount = requests.filter(r => r.action === 'send').length;
+    await click('Stop'); await browser.wait(`cyc.getState().status==='stopped'&&!cyc.getState().pending`);
+    assert.equal(await browser.evaluate(`cyc.getState().unknownOutcome`), true, 'Stop must retain the earlier uncertain request');
+    assert.equal(await browser.evaluate(`JSON.parse(localStorage.getItem('powder.cyc.pending.v1')).action`), 'send');
     await click('Inspect uncertain request'); await browser.wait(`!cyc.getState().unknownOutcome&&!cyc.getState().pending`);
     assert.equal(requests.filter(r => r.action === 'send').length, sendCount, 'recovery must inspect, never replay');
-    await click('Stop'); await browser.wait(`cyc.getState().status==='stopped'&&!cyc.getState().pending`);
+    await choose('');
     await click('Knowledge');
     const beforeProfileStart = requests.length;
     await browser.evaluate(`{const p=document.querySelector('[name="cyc-profile"]');p.value='cyc-starter-v1';p.dispatchEvent(new Event('change'))}`);
@@ -266,11 +320,57 @@ test('isolated browser lifecycle, separate drafts, forms, evidence and uncertain
     const starterRequest = requests.filter(r => r.action === 'start').at(-1).body;
     assert.equal(starterRequest.profile, 'cyc-starter-v1');
     assert.equal('agent' in starterRequest || 'linkedMts' in starterRequest, false);
+    await fill('cyc-message', 'third draft');
+    holdNextRead = true; releaseRead = null;
+    await click('State'); await click('Refresh state'); await browser.wait(`cyc.getState().pending`);
+    for (let i = 0; !releaseRead && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(typeof releaseRead, 'function');
+    await choose('');
+    assert.equal(await browser.evaluate(`cyc.getState().runId`), null);
+    await fill('cyc-message', 'new draft during stale read');
+    await choose('run:2'); await browser.wait(`cyc.getState().runId==='run:2'&&!cyc.getState().pending`);
+    releaseRead();
+    await browser.evaluate(`new Promise(resolve=>setTimeout(resolve,100))`);
+    assert.equal(await browser.evaluate(`cyc.getState().runId`), 'run:2');
+    assert.equal(await browser.evaluate(`cyc.getState().draft`), 'second draft');
+    const secondConversation = await browser.evaluate(`cyc.getState().conversationId`);
+    wrongNextRead = true; await click('Refresh state');
+    await browser.wait(`!cyc.getState().pending&&cyc.getState().error?.code==='symbolic_identity_mismatch'`);
+    assert.equal(await browser.evaluate(`cyc.getState().conversationId`), secondConversation);
+    assert.equal(await browser.evaluate(`cyc.getState().draft`), 'second draft');
+    await click('Refresh state'); await browser.wait(`!cyc.getState().pending&&!cyc.getState().error`);
+    holdNextWrite = true; releaseWrite = null;
+    await click('Send'); await browser.wait(`cyc.getState().pending`);
+    for (let i = 0; !releaseWrite && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(typeof releaseWrite, 'function');
+    await choose('');
+    assert.equal(await browser.evaluate(`cyc.getState().runId`), 'run:2', 'a write pins its conversation identity');
+    releaseWrite(); await browser.wait(`!cyc.getState().pending`);
+    await choose('');
+    assert.equal(await browser.evaluate(`cyc.getState().draft`), 'new draft during stale read');
+    dropResponse = true;
+    const beforeLostStartSends = requests.filter(r => r.action === 'send').length;
+    await click('Send'); await browser.wait(`cyc.getState().unknownOutcome&&!cyc.getState().pending`);
+    assert.equal(requests.filter(r => r.action === 'send').length, beforeLostStartSends, 'lost Start must not send the queued text');
+    assert.equal(await browser.evaluate(`cyc.getState().runId`), null);
+    await click('Inspect uncertain request'); await browser.wait(`!cyc.getState().unknownOutcome&&!cyc.getState().pending`);
+    assert.equal(requests.filter(r => r.action === 'send').length, beforeLostStartSends, 'recovery never resumes the Start/Send chain');
+    assert.equal(await browser.evaluate(`cyc.getState().runId`), 'run:4');
+    assert.equal(await browser.evaluate(`cyc.getState().draft`), 'new draft during stale read');
+    await click('Send'); await browser.wait(`!cyc.getState().pending`);
+    assert.equal(requests.filter(r => r.action === 'send').length, beforeLostStartSends + 1);
     await browser.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     assert.equal(await browser.evaluate(`document.documentElement.scrollWidth<=innerWidth`), true);
+    await click('Settings');
+    assert.equal(await browser.evaluate(`document.documentElement.scrollWidth<=innerWidth`), true);
+    await choose(''); await fill('cyc-message', 'Persisted New conversation draft');
     await browser.evaluate(`cyc.destroy();window.cyc=make({active:false});document.querySelector('main').append(cyc.element)`);
     assert.equal(await browser.evaluate(`cyc.getState().active`), false);
     assert.equal(await browser.evaluate(`document.querySelectorAll('.symbolic-agent').length`), 1);
+    assert.equal(await browser.evaluate(`cyc.getState().runId`), null);
+    assert.equal(await browser.evaluate(`cyc.getState().draft`), 'Persisted New conversation draft');
+    assert.equal(await browser.evaluate(`cyc.getState().settingsOpen`), false);
+    assert.equal(await browser.evaluate(`location.hash`), '', 'conversation and Settings choices do not navigate the shell');
     assert.equal(await browser.evaluate(`states.every((s,index)=>Number.isSafeInteger(s.sequence)&&s.sequence>=0&&typeof s.status==='string'
       &&(s.conversationId===null||typeof s.conversationId==='string')&&('error'in s)
       &&states.slice(0,index).filter(p=>p.conversationId===s.conversationId).every(p=>p.sequence<=s.sequence))`), true);
