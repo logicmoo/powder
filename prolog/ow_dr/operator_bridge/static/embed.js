@@ -62,7 +62,7 @@
   async function api(path, body) {
     await ready;
     const route = path === '/api/operator/stop' ? '/stop'
-      : path === '/api/draft' && body === undefined ? '/draft/read' : path.slice(4);
+      : ['/api/draft', '/api/settings'].includes(path) && body === undefined ? path.slice(4) + '/read' : path.slice(4);
     const response = await request(route, body);
     if (response.status === 401) disconnect('Pairing expired. Pair this frame again; no command was retried.');
     const value = await response.json();
@@ -125,7 +125,7 @@
             previousStatus = statusKey;
             handlers.status(value.data);
           }
-          value.events.forEach(handlers.event);
+          value.events.forEach(item => handlers.event(item, value.data.conversationId, value.data.selectionRevision));
           publish();
         }
         if (buffered.length > 2 * 1024 * 1024) throw new Error('Operator output exceeded the frame limit.');

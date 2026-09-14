@@ -42,7 +42,8 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
         return self.ws
 
     async def post(self, path, body):
-        return await self.client.post(self.base + path, headers=self.paired, json=body)
+        return await self.client.post(self.base + path, headers=self.paired,
+            json={"conversationId": self.service.journal.get("conversation_id"), **body})
 
     async def test_auth_and_origin_checked_before_malformed_input(self):
         response = await self.client.post(self.base + "/api/commands", headers=self.headers,

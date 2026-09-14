@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import socket
+import uuid
 import unittest
 
 from aiohttp import ClientSession, web
@@ -53,6 +54,8 @@ class EmbedTests(unittest.IsolatedAsyncioTestCase):
         return {**self.headers, EMBED_HEADER: token}
 
     async def post(self, provider, suffix, headers, data=None):
+        if data is not None and suffix not in ("/events", "/logout", "/draft/read", "/status"):
+            data = {"conversationId": self.hub.get(provider).journal.get("conversation_id"), **data}
         return await self.client.post(f"{self.base}/embed/api/{provider}{suffix}",
                                       headers=headers, json={} if data is None else data)
 
@@ -62,6 +65,51 @@ class EmbedTests(unittest.IsolatedAsyncioTestCase):
         self.streams.append(stream)
         await stream.content.readline()
         return stream
+
+    async def test_all_mutations_require_selected_conversation_and_stream_resets(self):
+        paired = await self.pair()
+        stream = await self.stream("copilot", paired)
+        operator = self.hub.get("copilot")
+        original = operator.journal.get("conversation_id")
+        operator.journal.event("assistant.output", {"text": "original fixture transcript"})
+        operator.draft("original fixture draft")
+        next_id = str(uuid.uuid4())
+        created = await self.post("copilot", "/conversations/new", paired,
+                                  {"conversationId": original, "id": next_id})
+        self.assertEqual(created.status, 200)
+        self.assertIsNone(operator.native_session_id())
+        self.assertEqual(operator.draft()["text"], "")
+        stale = [
+            ("/commands", {"id": "stale", "kind": "prompt", "text": "never dispatch", "startIfNeeded": True}),
+            ("/commands/stale/cancel", {}),
+            ("/permissions/stale", {"decision": "allow"}),
+            ("/stop", {"confirmation": "STOP OPERATOR"}),
+            ("/draft", {"text": "must not overwrite"}),
+            ("/settings", {"model": "must-not-change"}),
+            ("/conversations/new", {"id": str(uuid.uuid4())}),
+            ("/conversations/select", {"id": original}),
+        ]
+        for route, body in stale:
+            for expected in (original, self.hub.get("codex").journal.get("conversation_id"), None):
+                result = await self.post("copilot", route, paired, {**body, "conversationId": expected})
+                self.assertEqual(result.status, 409, (route, await result.text()))
+        self.assertEqual(operator.journal.commands(), [])
+        self.assertEqual(operator.draft()["text"], "")
+        self.assertEqual(len(operator.conversations()["items"]), 2)
+        async with asyncio.timeout(3):
+            while True:
+                import json
+                snapshot = json.loads(await stream.content.readline())
+                if snapshot["data"]["conversationId"] == next_id:
+                    self.assertEqual(snapshot["lastSequence"], 0)
+                    self.assertEqual(snapshot["events"], [])
+                    break
+        selected = await self.post("copilot", "/conversations/select", paired,
+                                   {"conversationId": next_id, "id": original})
+        self.assertEqual(selected.status, 200)
+        self.assertEqual(operator.draft()["text"], "original fixture draft")
+        self.assertFalse(operator.adapter.starts)
+        self.assertFalse(operator.adapter.sent)
 
     async def test_only_embed_document_allows_one_configured_ancestor(self):
         for route in ("/", "/api/status", "/embed", "/embed?provider=codex"):

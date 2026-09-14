@@ -34,6 +34,7 @@ class CopilotAdapter:
         self.stopping = False
         self.uncertain = False
         self.unsubscribe = None
+        self.callback_identity = None
         self.lifecycle = asyncio.Lock()
 
     def _new_client(self, cwd: str):
@@ -100,8 +101,19 @@ class CopilotAdapter:
         else:
             self.journal.set("native_creation", {"id": session_id, "state": "requested"})
         self.session_id = session_id
-        options = dict(on_permission_request=self._permission, working_directory=cwd,
-                       streaming=False, on_event=self._event, enable_file_hooks=False,
+        conversation = self.journal.get("conversation_id")
+        callback_identity = self.callback_identity = object()
+        def current_event(event):
+            if (self.callback_identity is callback_identity
+                    and self.journal.get("conversation_id") == conversation and self.session_id == session_id):
+                self._event(event)
+        async def current_permission(request, invocation):
+            if self.callback_identity is not callback_identity:
+                from copilot.generated.rpc import PermissionDecisionReject
+                return PermissionDecisionReject(feedback="This native session binding is no longer active.")
+            return await self._permission(request, invocation)
+        options = dict(on_permission_request=current_permission, working_directory=cwd,
+                       streaming=False, on_event=current_event, enable_file_hooks=False,
                        enable_host_git_operations=False, manage_schedule_enabled=False,
                        enable_mcp_apps=False, include_sub_agent_streaming_events=False)
         if self.model:
@@ -205,6 +217,7 @@ class CopilotAdapter:
 
     async def stop(self) -> None:
         self.stopping = True
+        self.callback_identity = None
         async with self.lifecycle:
             try:
                 if self.session:
@@ -216,6 +229,18 @@ class CopilotAdapter:
                 if self.terminal and not self.terminal.done():
                     self.terminal.set_result("cancelled")
             self.session = None
+
+    async def select_conversation(self, journal, model):
+        async with self.lifecycle:
+            if self.uncertain or self.events is not None or self.permission_handler is not None:
+                raise BridgeError("native_work_unsettled", "Resolve native work before switching conversations.")
+            self.callback_identity = None
+            if self.session:
+                await asyncio.wait_for(self.session.disconnect(), 15)
+            self.session = None
+            self.session_id = None
+            self.terminal = None
+            self.journal, self.model = journal, model
 
     def status(self) -> dict:
         return {"name": self.name, "provider": self.provider, "available": True,

@@ -114,7 +114,7 @@ An authorized unattended start is possible only after valid private provisioning
 Authentication/native availability must still be observed, never inferred.
 No operator/model Start is performed by this mode.
 
-Optional CLI-only settings: `--copilot-bin=PATH`, `--codex-bin=PATH`,
+Optional host settings: `--copilot-bin=PATH`, `--codex-bin=PATH`,
 `--copilot-model=ID`, `--codex-model=ID`, and `--offline` for recovery-only mode.
 Models remain independent of the Teacher and one another; omission uses that
 provider's native default. No SDK-bundled CLI, global installer, automatic
@@ -136,6 +136,100 @@ open another provider's journal or be assigned its native adapter. Native
 authentication is provider-owned: there is no sharing of Copilot credentials,
 models or protocol assumptions with Codex. The common local pairing cookie
 authenticates the **human to the bridge**, not either native provider account.
+
+### Chat-first, multiple durable conversations
+
+Both embedded and standalone views have a **Conversation** dropdown with **New
+conversation…** and previous conversations, a composer with **Send**, a **Say
+something** text starter, and a **Settings** toggle. Say something only fills an
+editable greeting instructing the model not to use tools or inspect files; it
+does not submit it. Tests never press this button. Settings contains model
+selection, explicit native Start/resume, status/identity, command controls,
+recorded events and Stop. Pending native permissions remain visible **outside**
+collapsed Settings. The main transcript shows human/assistant messages and
+failed/unknown/cancelled outcomes, not routine native bookkeeping.
+
+Each provider's original SQLite journal remains at its original path, retaining
+its UUID, history, draft and native identity. An additive `conversation_catalog`
+table and selected-ID/revision metadata live in that journal. New conversation
+journals are created exclusively under
+`.state\conversations\<provider>\<conversation-UUID>.sqlite3` (relative to the
+configured state directory). No journal is moved, deleted or reset. Up to 500
+conversations per provider are retained. New conversations inherit the selected
+conversation's model setting, but have independent transcripts, drafts,
+commands, permissions and native session/thread identifiers. Titles default to
+numbered conversation labels, never private prompt previews.
+
+New/Previous changes only app selection and, when necessary, detaches an idle
+Copilot SDK session. Codex's previous durable idle thread stays on its native
+server: no speculative unsubscribe RPC is sent. The native runtime may remain
+idle and owned. Opening history never creates/resumes a native session and never
+replays a command. Explicit **Send** may start/resume the selected native
+conversation and then send that one prompt. Explicit Start only starts/resumes.
+Copilot resume retains `continue_pending_work=False`; Codex validates
+`thread/read` before `thread/resume`. Duplicate native IDs across conversations
+are rejected before any prompt is dispatched. Provider-native account login is
+still independent; configured models do not imply access.
+
+Selection/settings changes are serialized with command admission, cancel and
+Stop. Queued/running work, pending permissions and unresolved native outcomes
+gate switching with `409 conversation_busy`. Finish/cancel the command or
+explicitly stop a confirmed owned native runtime first. Interrupted journals
+remain unknown after restart; an explicit verified resume can establish a safe
+idle session without replaying work. An unconfirmed creation or unowned unknown
+native process may require host inspection; the bridge does not invent a
+replacement thread or assert that a no-op Stop resolved external work.
+
+#### Conversation API (operator origin only)
+
+Use `/api/operators/{provider}` with the existing standalone cookie, or
+`/embed/api/{provider}` with the existing frame-only capability. The parent
+iframe protocol and `createOperatorAgent` interface are unchanged.
+
+| Suffix | Standalone method | Payload / result |
+|---|---|---|
+| `/conversations` | GET | `{provider,conversationId,selectionRevision,items:[{id,title,created}]}` |
+| `/conversations/new` | POST | `{conversationId,id:<fresh UUID>,title?}`; creates and selects without native work |
+| `/conversations/select` | POST | `{conversationId,id:<existing UUID>}` |
+| `/settings` | GET / POST | Read settings; write `{conversationId,model:<native ID or null>}` |
+| `/draft` | GET / POST | Read draft; write `{conversationId,text}` |
+
+Embedded reads remain own-origin POSTs: `/conversations`, `/settings/read`,
+`/draft/read`, `/status`. Every mutating conversation request—including commands,
+permissions, cancellation, Stop and drafts—**requires `conversationId` matching
+the selected app conversation**, never a native session ID. Missing/stale/foreign
+IDs return `409 conversation_changed` without dispatch. Logout revokes the
+pairing, not a conversation. Command IDs are idempotent within
+`(provider,conversationId,id)`; the same identifier in another conversation
+cannot route an old request there. Explicit Send uses
+`{conversationId,id,kind:"prompt",text,startIfNeeded:true}`. The existing
+two-provider warning applies to this startup path too: explicit **Start anyway**
+resubmits the same identifier with `startAnyway:true`, never grants permissions.
+
+Selection revisions prevent delayed read/stream responses from replacing a
+newer conversation in the UI. Event cursors reset only when the selected
+conversation changes; durable event watermarks remain per conversation.
+Complete embedded snapshots retain their 1 MiB serialized budget. Catalog reads
+are separate, bounded by the 500-conversation/120-character-title limits.
+Unflushed drafts also remain in frame-local memory by conversation when another
+view changes selection; they never become a draft in the newly selected chat.
+Explicit selection flushes the current draft before switching. Interrupted
+exclusive creation files are retained, not overwritten or automatically deleted.
+
+**Publication:** this revision requires an authorized Python bridge restart and
+fresh pairing inside the operator view. Old clients without conversation IDs
+fail closed. A browser refresh cannot reload Python modules. Do not restart a
+live bridge with active work just to publish UI files; the coordinator owns
+publication. This work did not inspect a production pairing file, restart the
+existing 8063 bridge, or perform real native/model turns.
+
+Validation for this stage: native SDK/stdio fixture tests exercise distinct
+native IDs, New/Previous, restart/resume, draft/model persistence, idempotency,
+cancel/permission routing and cancelled detach. Six real Chromium scenarios
+cover standalone and embedded chat, stale/delayed responses, Unicode replay,
+permissions outside Settings, origin/window isolation and liveness recovery.
+These are synthetic conversations, not evidence of a logged-in account or
+successful real model inference.
 
 Executable discovery is passive. Windows npm CMD/PowerShell shims are resolved
 through the installed official package metadata to their native `.exe`; shims
@@ -382,17 +476,17 @@ All standalone `/api/*` paths below require the cookie; POSTs also require the e
 | `GET /` | Independent pairing or recovery HTML |
 | `POST /login` | Native form pairing; rate-limited, returns cookie/303 |
 | `GET /api/status` | Operator/bridge/workspace/session/command/permission state |
-| `POST /api/commands` | `{id,kind:"start_session"|"prompt",text?}` |
+| `POST /api/commands` | `{conversationId,id,kind:"start_session"|"prompt",text?,startIfNeeded?}` |
 | `GET /api/commands/{id}` | Inspect a possibly interrupted command; never rerun it |
-| `POST /api/commands/{id}/cancel` | Explicit cancellation request, `{}` |
-| `POST /api/permissions/{id}` | `{decision:"allow"|"deny"}` for one live request |
-| `GET /api/draft`, `POST /api/draft` | Operator-only persistent draft, `{text}` |
-| `POST /api/operator/stop` | `{confirmation:"STOP OPERATOR"}`; explicit adapter stop |
+| `POST /api/commands/{id}/cancel` | Explicit cancellation request, `{conversationId}` |
+| `POST /api/permissions/{id}` | `{conversationId,decision:"allow"|"deny"}` for one live request |
+| `GET /api/draft`, `POST /api/draft` | Operator-only persistent draft, `{conversationId,text}` |
+| `POST /api/operator/stop` | `{conversationId,confirmation:"STOP OPERATOR"}`; explicit adapter stop |
 | `POST /api/logout` | Revoke this browser's capability, `{}` |
 | `WS /events?since=N` | Authenticated **output-only** sequenced replay |
 
 WebSocket messages are `{type:"status",data:...}` and
-`{type:"events",events:[{sequence,created,kind,data}],lastSequence,latestSequence}`.
+`{type:"events",conversationId,selectionRevision,events:[{sequence,created,kind,data}],lastSequence,latestSequence}`.
 Incoming WS text/binary frames close the connection with code 1008. There is no
 WebSocket shell, command replay, or model-send-on-connect.
 
@@ -536,6 +630,7 @@ prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.o
 prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_pairing_input
 prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_pairing_file
 prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_projection
+prolog\ow_dr\operator_bridge\.venv\Scripts\python.exe -m unittest prolog.ow_dr.operator_bridge.tests.test_conversations
 node --test prolog\ow_dr\operator_bridge\tests\embed-browser.test.mjs
 ```
 

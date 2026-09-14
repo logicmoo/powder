@@ -163,6 +163,7 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
     async def command(request):
         operator = selected(request)
         body = await payload(request)
+        operator.require_conversation(body.get("conversationId"))
         if isinstance(service, OperatorHub):
             result = await service.submit(operator.provider, request[PRINCIPAL], body)
         else:
@@ -174,16 +175,21 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
 
     async def permission(request):
         data = await payload(request)
+        selected(request).require_conversation(data.get("conversationId"))
         return web.json_response(await selected(request).decide(request[PRINCIPAL], request.match_info["id"],
-                                                     data.get("decision")))
+                                                     data.get("decision"), expected=data["conversationId"]))
 
     async def cancel(request):
-        await payload(request)
-        return web.json_response(await selected(request).cancel(request[PRINCIPAL], request.match_info["id"]))
+        data = await payload(request)
+        selected(request).require_conversation(data.get("conversationId"))
+        return web.json_response(await selected(request).cancel(request[PRINCIPAL], request.match_info["id"],
+                                                               expected=data["conversationId"]))
 
     async def stop(request):
         data = await payload(request)
-        return web.json_response(await selected(request).stop_operator(request[PRINCIPAL], data.get("confirmation")))
+        selected(request).require_conversation(data.get("conversationId"))
+        return web.json_response(await selected(request).stop_operator(request[PRINCIPAL], data.get("confirmation"),
+                                                                      expected=data["conversationId"]))
 
     async def logout(request):
         await payload(request)
@@ -195,6 +201,7 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
     async def draft(request):
         if request.method == "POST":
             data = await payload(request)
+            selected(request).require_conversation(data.get("conversationId"))
             if "text" not in data or not isinstance(data["text"], str):
                 raise BridgeError("invalid_draft", "Draft text is required.", 400)
             return web.json_response(selected(request).draft(data["text"]))
@@ -203,6 +210,28 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
     async def embedded_draft_read(request):
         await payload(request)
         return web.json_response(selected(request).draft())
+
+    async def conversations(request):
+        return web.json_response(selected(request).conversations())
+
+    async def conversation_change(request):
+        data = await payload(request)
+        if set(data) - {"conversationId", "id", "title"}:
+            raise BridgeError("unsupported_fields", "Use conversation identifiers, not native IDs or paths.", 400)
+        operator = selected(request)
+        return web.json_response(await operator.select_conversation(
+            request[PRINCIPAL], data.get("conversationId"), data.get("id"),
+            create=request.path.endswith("/new"), title=data.get("title")))
+
+    async def settings(request):
+        operator = selected(request)
+        if request.method == "GET" or request.path.endswith("/read"):
+            return web.json_response(operator.settings())
+        data = await payload(request)
+        if set(data) != {"conversationId", "model"}:
+            raise BridgeError("invalid_settings", "Supply conversationId and model (null for native default).", 400)
+        operator.require_conversation(data["conversationId"])
+        return web.json_response(await operator.save_settings(request[PRINCIPAL], data["conversationId"], data["model"]))
 
     async def embedded_logout(request):
         await payload(request)
@@ -228,12 +257,16 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
         task = asyncio.current_task()
         embedded_streams.add(task)
         operator.attach(principal)
+        conversation = operator.journal.get("conversation_id")
         try:
             await stream.prepare(request)
             while True:
                 embed_auth.require(token, operator.provider)
                 if request.transport is None or request.transport.is_closing():
                     break
+                current = operator.journal.get("conversation_id")
+                if current != conversation:
+                    conversation, cursor = current, 0
                 batch = operator.journal.events(cursor)
                 serialized, next_cursor = encode_snapshot(operator.provider, operator.status(), batch, cursor)
                 await asyncio.wait_for(stream.write(serialized), 5)
@@ -261,12 +294,21 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
 
         async def output_events():
             nonlocal cursor
-            await ws.send_json({"type": "status", "provider": operator.provider, "data": operator.status()})
+            conversation = None
             while not ws.closed:
                 auth.require(request.cookies.get(COOKIE))
+                current = operator.journal.get("conversation_id")
+                if current != conversation:
+                    if conversation is not None:
+                        cursor = 0
+                    conversation = current
+                status_data = operator.status()
                 batch = operator.journal.events(cursor)
+                await ws.send_json({"type": "status", "provider": operator.provider, "data": status_data})
                 if batch["events"]:
-                    await asyncio.wait_for(ws.send_json({"type": "events", "provider": operator.provider, **batch}), timeout=5)
+                    await asyncio.wait_for(ws.send_json({"type": "events", "provider": operator.provider,
+                                                        "conversationId": current,
+                                                        "selectionRevision": status_data["selectionRevision"], **batch}), timeout=5)
                     cursor = batch["lastSequence"]
                 else:
                     async with operator.changed:
@@ -325,6 +367,8 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
         ("/commands/{id}/cancel", cancel), ("/permissions/{id}", permission),
         ("/stop", stop), ("/logout", embedded_logout), ("/draft", draft),
         ("/draft/read", embedded_draft_read), ("/events", embedded_events),
+        ("/conversations", conversations), ("/conversations/new", conversation_change),
+        ("/conversations/select", conversation_change), ("/settings", settings), ("/settings/read", settings),
     ):
         app.router.add_post(embedded_prefix + suffix, handler)
     app.router.add_get("/api/status", status)
@@ -346,6 +390,11 @@ def create_app(service: OperatorService | OperatorHub, auth: Auth, port: int,
     app.router.add_post("/api/operators/{provider}/stop", stop)
     app.router.add_get("/api/operators/{provider}/draft", draft)
     app.router.add_post("/api/operators/{provider}/draft", draft)
+    app.router.add_get("/api/operators/{provider}/conversations", conversations)
+    app.router.add_post("/api/operators/{provider}/conversations/new", conversation_change)
+    app.router.add_post("/api/operators/{provider}/conversations/select", conversation_change)
+    app.router.add_get("/api/operators/{provider}/settings", settings)
+    app.router.add_post("/api/operators/{provider}/settings", settings)
     app.router.add_get("/events/{provider}", websocket)
     app.on_startup.append(start)
     app.on_cleanup.append(close)

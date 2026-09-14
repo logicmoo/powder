@@ -212,7 +212,8 @@ class ProviderHttpTests(unittest.IsolatedAsyncioTestCase):
 
     async def post(self, provider, path, value):
         return await self.client.post(self.base + "/api/operators/" + provider + path,
-                                      headers=self.headers, json=value)
+                                      headers=self.headers, json={
+                                          "conversationId": self.hub.get(provider).journal.get("conversation_id"), **value})
 
     async def test_http_warning_can_be_acknowledged_and_permissions_stay_separate(self):
         response = await self.post("copilot", "/commands", {"id": "start", "kind": "start_session"})

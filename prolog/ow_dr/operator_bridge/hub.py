@@ -49,8 +49,7 @@ class OperatorHub:
                 continue
             native = operator.adapter.status()
             queued_start = operator.journal.db.execute(
-                "SELECT 1 FROM commands WHERE kind='start_session' "
-                "AND state IN ('queued','running','awaiting_permission') LIMIT 1").fetchone()
+                "SELECT 1 FROM commands WHERE state IN ('queued','running','awaiting_permission') LIMIT 1").fetchone()
             if (operator.connected and operator.stop_outcome != "confirmed") or native.get("ownedPids") or queued_start:
                 conflicts.append(provider)
         return conflicts
@@ -59,10 +58,12 @@ class OperatorHub:
         operator = self.get(provider)
         operator.human(principal)
         kind, text = operator.validate_payload(payload)
-        if kind != "start_session":
+        if kind != "start_session" and not payload.get("startIfNeeded"):
             return await operator.submit(principal, payload)
         # Serialize admission only, not native sessions or edits.
         async with self.start_gate:
+            if "conversationId" in payload:
+                operator.require_conversation(payload["conversationId"])
             existing = operator.journal.existing(payload.get("id"), kind, text)
             if existing is not None or operator.connected:
                 return await operator.submit(principal, payload)

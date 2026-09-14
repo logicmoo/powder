@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {existsSync} from 'node:fs';
+import {existsSync, writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {launchChromium} from '../../tests/chromium.mjs';
 
@@ -73,6 +73,151 @@ async function pairFrame(child) {
   await child.run(`document.getElementById('phrase').value = 'isolated fixture pairing phrase'; document.getElementById('pair-submit').click()`);
   await child.until('document.querySelector("#bridge")?.textContent === "Online"');
 }
+
+test('standalone recovery offers the same chat-first history and native controls', {
+  timeout: 60000, skip: !existsSync(executable) || !existsSync(python),
+}, async () => {
+  const fixture = await startFixture(), browser = await launchChromium(executable);
+  const {send, evaluate, wait} = browser;
+  try {
+    await send('Page.navigate', {url: fixture.bridgeURL});
+    await wait('document.querySelector("#phrase")');
+    await evaluate('document.querySelector("#phrase").value="isolated fixture pairing phrase"; document.querySelector("form").requestSubmit()');
+    await wait('document.querySelector("#send")?.disabled === false');
+    assert.equal(await evaluate('document.querySelector("#inspector").hidden'), true);
+    const original = await evaluate('document.querySelector("#conversation-select").value');
+    await evaluate('document.querySelector("#prompt").value="standalone original draft"; document.querySelector("#prompt").dispatchEvent(new Event("input"))');
+    await evaluate('document.querySelector("#conversation-select").value="__new__"; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))');
+    await wait(`document.querySelector("#conversation-select").value !== ${JSON.stringify(original)} && document.querySelector("#conversation-select").value !== "__new__" && !document.querySelector("#send").disabled`);
+    const second = await evaluate('document.querySelector("#conversation-select").value');
+    assert.equal(await evaluate('document.querySelector("#prompt").value'), '');
+    await evaluate('document.querySelector("#prompt").value="standalone synthetic fixture"; document.querySelector("#composer").requestSubmit()');
+    await wait('document.querySelector("#transcript").textContent.includes("fixture output")');
+    await evaluate(`document.querySelector("#conversation-select").value=${JSON.stringify(original)}; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))`);
+    await wait('document.querySelector("#prompt").value === "standalone original draft"');
+    assert.equal(await evaluate('document.querySelector("#transcript").textContent.includes("fixture output")'), false);
+    await evaluate(`document.querySelector("#conversation-select").value=${JSON.stringify(second)}; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))`);
+    await wait('document.querySelector("#transcript").textContent.includes("fixture output")');
+    for (const [name, width, height, mobile] of [['desktop',1200,900,false], ['mobile',390,844,true]]) {
+      await send('Emulation.setDeviceMetricsOverride', {width,height,deviceScaleFactor:1,mobile});
+      assert.ok(await evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'));
+      const image = await send('Page.captureScreenshot', {format:'png'});
+      writeFileSync(fileURLToPath(new URL(`./.artifacts/chat-${name}.png`, import.meta.url)), Buffer.from(image.data, 'base64'));
+    }
+    const count = await (await fetch(fixture.parentURL + '/fixture/stats')).json();
+    assert.equal(count.copilotCreates, 1);
+    assert.equal(count.copilotPrompts, 1, 'native turns came only from explicit Send, never New or Previous');
+    assert.equal(count.codexStarts, 0);
+  } finally { await browser.close(); await fixture.close(); }
+});
+
+test('chat-first operators keep real native conversations, drafts, settings and stale requests separate', {
+  timeout: 120000, skip: !existsSync(executable) || !existsSync(python),
+}, async () => {
+  const fixture = await startFixture(), browser = await launchChromium(executable);
+  const {send, evaluate, wait} = browser;
+  const stats = async () => (await fetch(fixture.parentURL + '/fixture/stats')).json();
+  let lastChild;
+  try {
+    await send('Page.navigate', {url: fixture.parentURL});
+    await wait('window.states?.copilot?.status === "pairing"');
+    for (const provider of ['copilot', 'codex']) {
+      await evaluate(`document.getElementById('${provider}').click()`);
+      const child = await attachFrame(browser, provider);
+      lastChild = child;
+      await pairFrame(child);
+      await child.until('!document.querySelector("#send").disabled');
+      assert.equal(await child.run('document.querySelector("#inspector").hidden'), true);
+      assert.equal(await child.run('document.querySelector("#say-something").textContent'), 'Say something');
+      const original = await child.run('operatorEmbed.api("/api/status")');
+      const before = await stats();
+      assert.equal(original.nativeSessionId, null);
+      await child.run('document.querySelector("#settings-toggle").click(); document.querySelector("#model").value="fixture-original-model"; document.querySelector("#settings-form").requestSubmit()');
+      await child.until('document.querySelector("#notice").textContent.includes("Settings saved")');
+      await child.run('document.querySelector("#settings-toggle").click(); document.querySelector("#prompt").value="original fixture message"; document.querySelector("#composer").requestSubmit()');
+      if (provider === 'codex') {
+        await child.until('!document.querySelector("#conflict").hidden');
+        assert.equal((await stats()).codexStarts, before.codexStarts);
+        await child.run('document.querySelector("#start-anyway").click()');
+      }
+      await child.until('document.querySelector("#transcript").textContent.includes("fixture output")');
+      const started = await child.run('operatorEmbed.api("/api/status")');
+      const originalNative = started.nativeSessionId;
+      await child.run('document.querySelector("#prompt").value="original retained draft"; document.querySelector("#prompt").dispatchEvent(new Event("input"))');
+      await pause(550);
+      const afterOriginal = await stats();
+      await child.run(`window.fixtureFetch = window.fetch; window.delayStatus = true;
+        window.fetch = async (...args) => {
+          const response = await fixtureFetch(...args);
+          if (delayStatus && String(args[0]).endsWith('/status')) {
+            delayStatus = false;
+            await new Promise(resolve => { window.releaseOldStatus = resolve; });
+          }
+          return response;
+        };
+        document.querySelector("#settings-form").requestSubmit()`);
+      await child.until('typeof window.releaseOldStatus === "function"');
+      await child.run('document.querySelector("#conversation-select").value="__new__"; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))');
+      await child.until(`document.querySelector("#conversation-select").value !== ${JSON.stringify(original.conversationId)} && document.querySelector("#conversation-select").value !== "__new__" && !document.querySelector("#send").disabled`);
+      const second = await child.run('operatorEmbed.api("/api/status")');
+      await child.run('window.releaseOldStatus(); window.fetch = window.fixtureFetch');
+      await pause(100);
+      assert.equal(await child.run('document.querySelector("#conversation-select").value'), second.conversationId,
+        'a delayed old status response cannot restore the old conversation');
+      assert.notEqual(second.conversationId, original.conversationId);
+      assert.equal(second.nativeSessionId, null);
+      assert.equal(await child.run('document.querySelector("#prompt").value'), '');
+      assert.equal(await child.run('document.querySelector("#transcript").textContent'), '');
+      assert.equal((await stats())[provider + 'Prompts'], afterOriginal[provider + 'Prompts'], 'New dispatches no model turn');
+      assert.equal((await stats())[provider + 'Starts'], afterOriginal[provider + 'Starts']);
+      for (const [path, body] of [
+        ['/api/draft', {text:'stale draft'}],
+        ['/api/commands', {id:'stale-native-request',kind:'prompt',text:'must not execute',startIfNeeded:true}],
+        ['/api/settings', {model:'stale-model'}],
+        ['/api/permissions/stale', {decision:'allow'}],
+        ['/api/commands/stale/cancel', {}],
+      ]) {
+        assert.equal(await child.run(`operatorEmbed.api(${JSON.stringify(path)}, ${JSON.stringify({...body, conversationId:original.conversationId})}).then(()=>false,e=>e.code)`), 'conversation_changed');
+      }
+      await child.run('document.querySelector("#settings-toggle").click(); document.querySelector("#model").value="fixture-second-model"; document.querySelector("#settings-form").requestSubmit()');
+      await child.until('document.querySelector("#notice").textContent.includes("Settings saved")');
+      await child.run('document.querySelector("#settings-toggle").click(); document.querySelector("#prompt").value="permission"; document.querySelector("#composer").requestSubmit()');
+      if (provider === 'codex') {
+        await child.until('!document.querySelector("#conflict").hidden');
+        await child.run('document.querySelector("#start-anyway").click()');
+      }
+      await child.until('document.querySelectorAll("#permissions button").length === 2');
+      assert.equal(await child.run('document.querySelector("#inspector").hidden'), true);
+      assert.equal(await child.run('document.querySelector("#permission-section").hidden'), false, 'permissions stay visible outside Settings');
+      await child.run(`document.querySelector("#conversation-select").value=${JSON.stringify(original.conversationId)}; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))`);
+      await child.until('document.querySelector("#notice").textContent.includes("switch paused")');
+      assert.equal((await child.run('operatorEmbed.api("/api/status")')).conversationId, second.conversationId);
+      await child.run('document.querySelector("#permissions button").click()');
+      await child.until('document.querySelector("#transcript").textContent.includes("permission ") && document.querySelector("#permission-section").hidden');
+      const secondNative = (await child.run('operatorEmbed.api("/api/status")')).nativeSessionId;
+      assert.notEqual(secondNative, originalNative);
+      await child.run('document.querySelector("#prompt").value="second retained draft"; document.querySelector("#prompt").dispatchEvent(new Event("input"))');
+      await pause(550);
+      const afterSecond = await stats();
+      await child.run(`document.querySelector("#conversation-select").value=${JSON.stringify(original.conversationId)}; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))`);
+      await child.until('document.querySelector("#prompt").value === "original retained draft"');
+      await child.until('document.querySelector("#transcript").textContent.includes("original fixture message")');
+      assert.equal(await child.run('document.querySelector("#transcript").textContent.includes("permission ")'), false);
+      assert.equal(await child.run('document.querySelector("#model").value'), 'fixture-original-model');
+      assert.equal((await stats())[provider + 'Prompts'], afterSecond[provider + 'Prompts'], 'opening Previous only replays output');
+      await child.run(`document.querySelector("#conversation-select").value=${JSON.stringify(second.conversationId)}; document.querySelector("#conversation-select").dispatchEvent(new Event("change"))`);
+      await child.until('document.querySelector("#prompt").value === "second retained draft"');
+      await child.run('document.querySelector("#logout").click(); document.querySelector("#pair-retry").click()');
+      await pairFrame(child);
+      await child.until('document.querySelector("#prompt").value === "second retained draft"');
+      assert.equal(await child.run('document.querySelector("#model").value'), 'fixture-second-model');
+      assert.equal((await stats())[provider + 'Prompts'], afterSecond[provider + 'Prompts'], 're-pair never replays a command');
+      assert.equal((await child.run('operatorEmbed.api("/api/status")')).nativeSessionId, secondNative);
+    }
+    await send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
+    assert.ok(await lastChild.run('document.documentElement.scrollWidth <= document.documentElement.clientWidth'));
+  } finally { await browser.close(); await fixture.close(); }
+});
 
 test('cross-site embedded native adapters: pairing, typed handshake, isolation, permissions and replay', {
   timeout: 120000, skip: !existsSync(executable) || !existsSync(python),
@@ -270,12 +415,12 @@ test('large valid Unicode journals replay and re-pair inside the bounded frame',
     await browser.wait('window.states?.copilot?.status === "pairing"');
     const child = await attachFrame(browser, 'copilot');
     await pairFrame(child);
-    await child.until('document.querySelectorAll("#transcript li").length === 200');
+    await child.until('document.querySelectorAll("#transcript li").length === 100 && document.querySelectorAll("#event-journal li").length === 200');
     assert.ok(await child.run('document.getElementById("transcript").textContent.includes("漢".repeat(4096))'));
     assert.equal(await browser.evaluate('framesByProvider.copilot.getState().sequence'), 200);
     await child.run('document.getElementById("logout").click(); document.getElementById("pair-retry").click()');
     await pairFrame(child);
-    await child.until('document.querySelectorAll("#transcript li").length === 200');
+    await child.until('document.querySelectorAll("#transcript li").length === 100 && document.querySelectorAll("#event-journal li").length === 200');
     await pause(900);
     assert.equal(await child.run('document.getElementById("bridge").textContent'), 'Online');
     const stats = await (await fetch(fixture.parentURL + '/fixture/stats')).json();

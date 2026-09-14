@@ -30,10 +30,13 @@ FORM: Narrow extension of the recovery surface; the parent owns navigation, neve
 <div><h1 id="title">Operator conversation</h1><p>Independent of Teacher and Symbolic. Your transcript and draft stay with this provider.</p></div>
 <button id="logout" type="button">Unpair this frame</button>
 </section>
-<dl class="connections"><div><dt>Bridge</dt><dd id="bridge">Connecting</dd></div>
-<div><dt id="native-label">Native operator</dt><dd id="copilot">Not connected</dd></div>
-<div><dt>Prolog</dt><dd id="prolog">Not registered</dd></div></dl>
 <p id="notice" class="notice" role="status">Loading recorded output only…</p>
+<div class="chat-toolbar"><label for="conversation-select">Conversation</label>
+<select id="conversation-select" disabled><option>Loading conversations…</option></select>
+<button id="conversation-retry" class="secondary" type="button" hidden>Retry history</button>
+<button id="settings-toggle" class="secondary" type="button" aria-expanded="false" aria-controls="inspector">Settings</button></div>
+<section id="permission-section" hidden aria-labelledby="permission-title"><h2 id="permission-title">Your permission is needed</h2>
+<p class="muted">Only an explicit decision here can approve a native request.</p><div id="permissions"></div></section>
 <section id="conflict" class="notice" hidden aria-labelledby="conflict-title">
 <h2 id="conflict-title">Another operator is active in this checkout</h2>
 <p id="conflict-message"></p>
@@ -42,22 +45,31 @@ FORM: Narrow extension of the recovery surface; the parent owns navigation, neve
 <button id="dismiss-conflict" type="button">Do not start</button>
 </section>
 <section class="conversation" aria-labelledby="transcript-title">
-<div class="section-heading"><h2 id="transcript-title">Operator transcript</h2><button id="start" type="button" disabled>Start / resume session</button></div>
+<h2 id="transcript-title" class="visually-hidden">Operator transcript</h2>
 <p id="empty" class="muted empty">No recorded operator messages. Nothing is sent automatically.</p>
 <ol id="transcript" tabindex="0" aria-label="Sequenced operator events"></ol>
 <form id="composer">
 <label id="prompt-label" for="prompt">Message to selected operator</label>
 <textarea id="prompt" rows="4" maxlength="65536" placeholder="Describe the action for this operator to consider." disabled></textarea>
 <div class="compose-actions"><span class="muted">Output replay never repeats a command. Do not paste credentials.</span>
-<button id="send" type="submit" disabled>Send to operator</button></div>
+<button id="say-something" type="button" class="secondary" disabled>Say something</button>
+<button id="send" type="submit" disabled>Send</button></div>
 </form>
 </section>
-<details id="inspector"><summary>Permissions, native identity and command inspector</summary>
-<section><h2>Permissions</h2><p class="muted">Only an explicit decision in this frame can approve a native request.</p><div id="permissions"></div></section>
+<div id="inspector" hidden>
+<dl class="connections"><div><dt>Bridge</dt><dd id="bridge">Connecting</dd></div>
+<div><dt id="native-label">Native operator</dt><dd id="copilot">Not connected</dd></div>
+<div><dt>Prolog</dt><dd id="prolog">Not registered</dd></div></dl>
+<section><h2>Conversation settings</h2><form id="settings-form"><label for="model">Native model ID</label>
+<input id="model" maxlength="160" placeholder="Provider-native default" autocomplete="off">
+<p class="muted">Saved per conversation. Provider authentication stays native-owned. Model access is not verified until an explicit request.</p>
+<button type="submit">Save settings</button></form>
+<button id="start" type="button" disabled>Start / resume session</button></section>
 <section><h2>Session identity</h2><dl id="identity"></dl></section>
 <section><h2>Recent commands</h2><ul id="commands"></ul></section>
+<details><summary>Recorded events</summary><ol id="event-journal"></ol></details>
 <section><h2>Stop this operator</h2><label for="confirmation">Type STOP OPERATOR to confirm</label>
 <input id="confirmation" autocomplete="off"><button id="stop" type="button" class="danger">Stop operator session</button></section>
-</details>
+</div>
 </div>
 </main></body></html>

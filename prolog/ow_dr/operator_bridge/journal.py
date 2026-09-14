@@ -18,6 +18,7 @@ UNFINISHED = ("queued", "running", "awaiting_permission")
 
 class Journal:
     def __init__(self, path: Path, workspace: Workspace, *, provider: str = "copilot"):
+        self.path = Path(path)
         provider_label(provider)
         self.provider = provider
         self.db = sqlite3.connect(path)
@@ -57,6 +58,8 @@ class Journal:
             for command_id in interrupted:
                 self._event("command.state", {"id": command_id, "state": "unknown",
                     "message": "Bridge restarted. Outcome unknown; this command will not be replayed."})
+        if interrupted:
+            self.set("unsettled_native", True)
 
     def get(self, key: str):
         row = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()

@@ -9,6 +9,8 @@ const prefix = `/api/operators/${provider}`;
 let socket, sequence = 0, connected = false, state, reconnect, refreshTimer, draftTimer, pendingSend;
 let draftLoaded = false, draftWrites = Promise.resolve();
 let permissionsKey, commandsKey;
+let switching = false, draftConversation, catalogKey, manualNotice;
+const localDrafts = new Map();
 $(`${provider}-chip`)?.setAttribute('aria-current', 'page');
 $('native-label').textContent = providerName;
 $('prompt-label').textContent = `Message to ${providerName}`;
@@ -18,13 +20,23 @@ function text(tag, value, className) {
   return node;
 }
 function notice(message, error = false) {
+  manualNotice = {conversationId: state?.conversationId, message, error};
   $('notice').textContent = message; $('notice').classList.toggle('error', error);
 }
-function saveDraft(value) {
-  draftWrites = draftWrites.catch(() => {}).then(() => api('/api/draft', {text: value}));
+function statusNotice(message, error = false) {
+  const saved = manualNotice?.conversationId === state?.conversationId ? manualNotice : {message, error};
+  $('notice').textContent = saved.message; $('notice').classList.toggle('error', saved.error);
+}
+function saveDraft(value, conversationId = draftConversation) {
+  draftWrites = draftWrites.catch(() => {}).then(() => api('/api/draft', {text: value, conversationId})).then(result => {
+    const local = localDrafts.get(conversationId);
+    if (local?.text === value) local.dirty = false;
+    return result;
+  });
   return draftWrites;
 }
 async function api(path, body) {
+  if (body !== undefined && path !== '/api/logout') body = {conversationId: state?.conversationId, ...body};
   if (embed) return embed.api(path, body);
   const scopedPath = path === '/api/logout' ? path
     : path === '/api/operator/stop' ? `${prefix}/stop` : prefix + path.slice(4);
@@ -40,23 +52,35 @@ async function api(path, body) {
   return value;
 }
 function renderStatus(value) {
-  if (state && state.conversationId !== value.conversationId) {
+  if (state && value.selectionRevision < state.selectionRevision) return;
+  const changed = !state || state.conversationId !== value.conversationId;
+  if (changed) {
+    manualNotice = null;
+    clearTimeout(draftTimer); draftLoaded = false; draftConversation = value.conversationId;
     sequence = 0; $('transcript').replaceChildren(); $('empty').hidden = false;
+    $('event-journal').replaceChildren();
+    $('prompt').value = ''; pendingSend = null; permissionsKey = commandsKey = null;
+    $('conflict').hidden = true;
+    $('model').value = value.settings?.model || '';
   }
   state = value;
-  $('title').textContent = value.role;
+  $('title').textContent = providerName;
   $('bridge').textContent = connected ? 'Online' : 'Reconnecting';
   $('copilot').textContent = value.state.replaceAll('_', ' ');
   $('prolog').textContent = value.application.configured ? (value.application.online ? 'Online' : 'Offline') : 'Not registered';
   const available = connected && value.adapter.available;
   $('start').disabled = !available || (value.stopped && !value.canRestart) || value.state !== 'offline';
-  $('prompt').disabled = !connected;
-  $('send').disabled = !available || value.stopped || value.state === 'offline';
-  if (!value.adapter.available) notice(value.adapter.reason || `${providerName} adapter is not configured. Executable discovery does not mean a live session or authenticated account.`);
-  else if (value.stopOutcome === 'unknown') notice('Native stop outcome is unknown. Inspect the owned CLI session; no automatic retry will occur.', true);
-  else if (value.stopped) notice(value.canRestart ? 'Operator stopped. Start explicitly to resume its history; the other provider stays independent.' : 'Operator stopped explicitly. History remains available.');
-  else if (!connected) notice('Reconnecting to the bridge. Output will replay; commands will not.', true);
-  else notice(`${providerName} is independent of Prolog. Each native permission needs your explicit decision.`);
+  $('prompt').disabled = !connected || !draftLoaded || switching;
+  $('send').disabled = !available || !draftLoaded || switching || (value.stopped && !value.canRestart);
+  $('say-something').disabled = !connected || !draftLoaded || switching;
+  $('conversation-select').disabled = !connected || switching;
+  $('permission-section').hidden = !value.permissions.length;
+  if (changed) loadConversation(value.conversationId);
+  if (!value.adapter.available) statusNotice(value.adapter.reason || `${providerName} adapter is not configured. Executable discovery does not mean a live session or authenticated account.`);
+  else if (value.stopOutcome === 'unknown') statusNotice('Native stop outcome is unknown. Inspect the owned CLI session; no automatic retry will occur.', true);
+  else if (value.stopped) statusNotice(value.canRestart ? 'Operator stopped. Start explicitly to resume its history; the other provider stays independent.' : 'Operator stopped explicitly. History remains available.');
+  else if (!connected) statusNotice('Reconnecting to the bridge. Output will replay; commands will not.', true);
+  else statusNotice(`${providerName} is independent of Prolog. Each native permission needs your explicit decision.`);
   if (value.displayProjection?.permissionsOmitted) {
     $('notice').textContent += ' Additional permission requests are outside this bounded view. No omitted request is approved; resolve visible requests or inspect standalone recovery.';
   }
@@ -74,7 +98,6 @@ function renderStatus(value) {
   if (permissionsKey !== nextPermissionsKey) {
     permissionsKey = nextPermissionsKey;
     const permissions = $('permissions'); permissions.replaceChildren();
-    if (embed && value.permissions.length) $('inspector').open = true;
     if (!value.permissions.length) permissions.append(text('p', 'No pending permission requests.', 'muted'));
     for (const request of value.permissions) {
       const article = document.createElement('article');
@@ -83,8 +106,9 @@ function renderStatus(value) {
         const button = text('button', decision === 'allow' ? 'Allow this request' : 'Deny');
         button.type = 'button'; button.disabled = !connected;
         button.addEventListener('click', async () => {
+          manualNotice = null;
           article.querySelectorAll('button').forEach(b => { b.disabled = true; });
-          try { await api(`/api/permissions/${encodeURIComponent(request.id)}`, {decision}); await refresh(); }
+          try { await api(`/api/permissions/${encodeURIComponent(request.id)}`, {decision, conversationId: value.conversationId}); await refresh(); }
           catch (error) { permissionsKey = null; notice(error.message, true); await refresh(); }
         });
         article.append(button);
@@ -102,8 +126,9 @@ function renderStatus(value) {
         const cancel = text('button', 'Cancel this command');
         cancel.type = 'button'; cancel.disabled = !connected;
         cancel.addEventListener('click', async () => {
+          manualNotice = null;
           cancel.disabled = true;
-          try { await api(`/api/commands/${encodeURIComponent(command.id)}/cancel`, {}); await refresh(); }
+          try { await api(`/api/commands/${encodeURIComponent(command.id)}/cancel`, {conversationId: value.conversationId}); await refresh(); }
           catch (error) { commandsKey = null; notice(error.message, true); await refresh(); }
         });
         item.append(cancel);
@@ -112,19 +137,53 @@ function renderStatus(value) {
     }
   }
 }
+async function loadConversation(identifier) {
+  const revision = state.selectionRevision;
+  try {
+    const [draft, catalog] = await Promise.all([api('/api/draft'), api('/api/conversations')]);
+    if (state?.conversationId !== identifier || draft.conversationId !== identifier || catalog.conversationId !== identifier
+        || state.selectionRevision !== revision || draft.selectionRevision !== revision || catalog.selectionRevision !== revision) return;
+    const local = localDrafts.get(identifier);
+    $('prompt').value = local?.dirty ? local.text : draft.text;
+    localDrafts.set(identifier, {text: $('prompt').value, dirty: Boolean(local?.dirty)});
+    draftLoaded = true; draftConversation = identifier;
+    $('conversation-retry').hidden = true;
+    const key = JSON.stringify(catalog);
+    if (key !== catalogKey) {
+      catalogKey = key;
+      const options = [new Option('New conversation…', '__new__'), ...catalog.items.map(item => new Option(item.title, item.id))];
+      $('conversation-select').replaceChildren(...options);
+    }
+    $('conversation-select').value = identifier;
+    renderStatus(state);
+  } catch (error) {
+    $('conversation-retry').hidden = false;
+    notice(`Conversation could not be loaded: ${error.message}`, true);
+  }
+}
 async function refresh() {
   try { renderStatus(await api('/api/status')); }
   catch (error) { notice(error.message, true); }
 }
-function event(item) {
+function event(item, conversationId = state?.conversationId, revision = state?.selectionRevision) {
+  if (conversationId !== state?.conversationId || revision !== state?.selectionRevision) return;
   if (item.sequence <= sequence) return;
   sequence = item.sequence;
-  $('empty').hidden = true;
   const node = document.createElement('li');
   node.append(text('div', `${provider} · ${item.sequence} · ${item.kind}`, 'event-label'));
   node.append(text('pre', item.data.text || item.data.message || item.data.title ||
     [item.data.id, item.data.state || item.data.decision || item.data.sessionId].filter(Boolean).join(' · ')));
-  $('transcript').append(node);
+  $('event-journal').append(node);
+  while ($('event-journal').children.length > 1000) $('event-journal').firstElementChild.remove();
+  const userMessage = item.kind === 'command.accepted' && item.data.kind === 'prompt';
+  const assistantMessage = item.kind === 'assistant.output';
+  const outcome = item.kind === 'command.state' && ['failed', 'unknown', 'cancelled'].includes(item.data.state);
+  if (!userMessage && !assistantMessage && !outcome) return;
+  $('empty').hidden = true;
+  const message = document.createElement('li');
+  message.append(text('div', userMessage ? 'You' : assistantMessage ? providerName : 'Command outcome', 'event-label'));
+  message.append(text('pre', item.data.text || item.data.message || item.data.state));
+  $('transcript').append(message);
   while ($('transcript').children.length > 1000) $('transcript').firstElementChild.remove();
 }
 function connect() {
@@ -143,8 +202,8 @@ function connect() {
     const value = JSON.parse(message.data);
     if (value.provider !== provider) return;
     if (value.type === 'status') renderStatus(value.data);
-    if (value.type === 'events') {
-      value.events.forEach(event);
+    if (value.type === 'events' && value.conversationId === state?.conversationId) {
+      value.events.forEach(item => event(item, value.conversationId, value.selectionRevision));
       clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 100);
     }
   });
@@ -156,20 +215,26 @@ function connect() {
 }
 async function submit(kind, content = '', startAnyway = false) {
   if (pendingSend?.sending) return;
+  manualNotice = null;
   const id = pendingSend && pendingSend.kind === kind && pendingSend.text === content
     ? pendingSend.id : crypto.randomUUID();
-  pendingSend = {id, kind, text: content, sending: true};
+  const conversationId = state.conversationId;
+  pendingSend = {id, kind, text: content, conversationId, sending: true};
   try {
-    const body = {id, kind, text: content};
-    if (kind === 'start_session' && startAnyway) body.startAnyway = true;
+    const body = {id, kind, text: content, conversationId};
+    if (kind === 'prompt') body.startIfNeeded = true;
+    if (startAnyway) body.startAnyway = true;
     await api('/api/commands', body);
     $('conflict').hidden = true;
+    if (state.conversationId !== conversationId) return;
     if (kind === 'prompt' && $('prompt').value === content) {
-      clearTimeout(draftTimer); $('prompt').value = ''; await saveDraft('');
+      clearTimeout(draftTimer); $('prompt').value = '';
+      localDrafts.set(conversationId, {text:'', dirty:true}); await saveDraft('', conversationId);
     }
     pendingSend = null;
     await refresh();
   } catch (error) {
+    if (pendingSend?.conversationId !== conversationId) return;
     pendingSend.sending = false;
     if (error.code === 'operator_conflict') {
       $('conflict-message').textContent = `${error.message} Active: ${error.details.conflicts.join(', ')}.`;
@@ -178,6 +243,7 @@ async function submit(kind, content = '', startAnyway = false) {
     // Query only: a timeout is not permission to repeat a model/tool request.
     try {
       const command = await api(`/api/commands/${encodeURIComponent(id)}`);
+      if (state?.conversationId !== conversationId) return;
       notice(`Command ${id}: ${command.state}. It was not resent. Inspect Recent commands.`, true);
     } catch {
       notice(`${error.message} Command ${id}: outcome unknown. Any manual retry of unchanged input keeps this same identifier.`, true);
@@ -187,12 +253,14 @@ async function submit(kind, content = '', startAnyway = false) {
 $('composer').addEventListener('submit', event => { event.preventDefault(); submit('prompt', $('prompt').value); });
 $('prompt').addEventListener('input', () => {
   clearTimeout(draftTimer);
-  draftTimer = setTimeout(() => saveDraft($('prompt').value)
+  const conversationId = draftConversation, value = $('prompt').value;
+  localDrafts.set(conversationId, {text:value, dirty:true});
+  draftTimer = setTimeout(() => saveDraft(value, conversationId)
     .catch(error => notice(`Draft not saved: ${error.message}`, true)), 400);
 });
 $('start').addEventListener('click', () => submit('start_session'));
 $('start-anyway').addEventListener('click', () => {
-  if (pendingSend?.kind === 'start_session') submit('start_session', pendingSend.text, true);
+  if (pendingSend) submit(pendingSend.kind, pendingSend.text, true);
 });
 $('dismiss-conflict').addEventListener('click', () => {
   $('conflict').hidden = true; pendingSend = null;
@@ -206,6 +274,48 @@ $('logout').addEventListener('click', async () => {
   try { await api('/api/logout', {}); location.assign('/'); }
   catch (error) { notice(error.message, true); }
 });
+$('settings-toggle').addEventListener('click', () => {
+  $('inspector').hidden = !$('inspector').hidden;
+  $('settings-toggle').setAttribute('aria-expanded', String(!$('inspector').hidden));
+});
+$('conversation-retry').addEventListener('click', () => {
+  $('conversation-retry').hidden = true; loadConversation(state.conversationId);
+});
+$('settings-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  manualNotice = null;
+  const conversationId = state?.conversationId;
+  try {
+    await api('/api/settings', {conversationId, model: $('model').value.trim() || null});
+    await refresh();
+    if (state?.conversationId === conversationId) notice('Settings saved for this conversation. The next explicit Send resumes with these settings.');
+  } catch (error) { notice(error.message, true); }
+});
+$('say-something').addEventListener('click', () => {
+  $('prompt').value = 'Say hello briefly. Do not use tools or inspect files.';
+  $('prompt').dispatchEvent(new Event('input')); $('prompt').focus();
+});
+$('conversation-select').addEventListener('change', async () => {
+  if (switching || !draftLoaded) return;
+  manualNotice = null;
+  const previous = state.conversationId, choice = $('conversation-select').value;
+  switching = true; clearTimeout(draftTimer); renderStatus(state);
+  try {
+    await saveDraft($('prompt').value, previous);
+    await api(choice === '__new__' ? '/api/conversations/new' : '/api/conversations/select',
+      {conversationId: previous, id: choice === '__new__' ? crypto.randomUUID() : choice});
+    await refresh();
+  } catch (error) {
+    $('conversation-select').value = state.conversationId;
+    notice(`Conversation switch paused: ${error.message}`, true);
+  } finally {
+    switching = false;
+    $('conversation-select').disabled = !connected;
+    $('prompt').disabled = !connected || !draftLoaded;
+    $('send').disabled = !connected || !draftLoaded || !state.adapter.available || (state.stopped && !state.canRestart);
+    $('say-something').disabled = !connected || !draftLoaded;
+  }
+});
 document.querySelectorAll('.provider-chip').forEach(link => {
   link.addEventListener('click', async event => {
     event.preventDefault(); clearTimeout(draftTimer);
@@ -216,8 +326,6 @@ document.querySelectorAll('.provider-chip').forEach(link => {
   });
 });
 if (!embed || embed.paired) {
-  api('/api/draft').then(value => { $('prompt').value = value.text; draftLoaded = true; })
-    .catch(error => notice(error.message, true));
   connect();
 }
 })();

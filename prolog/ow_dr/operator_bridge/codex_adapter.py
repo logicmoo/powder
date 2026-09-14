@@ -254,6 +254,16 @@ class CodexAdapter:
                 self.terminal.set_result("cancelled")
             self.session_id = None
 
+    async def select_conversation(self, journal, model):
+        async with self.lifecycle:
+            if self.uncertain or self.events is not None or self.permission_handler is not None:
+                raise BridgeError("native_work_unsettled", "Resolve native work before switching conversations.")
+            # An idle durable Codex thread stays on the native server; no guessed unsubscribe RPC.
+            # The next explicit Start/Send uses thread/read + thread/resume for this journal.
+            self.session_id = self.turn_id = self.terminal = None
+            self.items.clear()
+            self.journal, self.model = journal, model
+
     def status(self) -> dict:
         return {"name": self.name, "provider": self.provider, "available": True,
                 "connected": self.session_id is not None and not self.stopping and not self.uncertain,

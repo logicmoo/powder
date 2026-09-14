@@ -39,10 +39,21 @@ class BrowserSession(FakeSession):
 
 
 class BrowserClient(FakeClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sessions = []
+
     async def create_session(self, *, session_id, **options):
         await super().create_session(session_id=session_id, **options)
         self.cwd = options["working_directory"]
         self.session = BrowserSession(self, session_id, options)
+        self.sessions.append(self.session)
+        return self.session
+
+    async def resume_session(self, session_id, **options):
+        await super().resume_session(session_id, **options)
+        self.session = BrowserSession(self, session_id, options)
+        self.sessions.append(self.session)
         return self.session
 
 
@@ -59,6 +70,7 @@ async def main():
     first.adapter = CopilotAdapter(NativeCommand("copilot", Path(sys.executable)), journal,
         model="fixture-copilot-model", client_factory=client_factory,
         version_probe=fake_version, tree_factory=FakeTree)
+    journal.set("conversation_settings", {"model": "fixture-copilot-model"})
 
     def rpc_factory(_argv, cwd, notification, request):
         rpc = StdioRpc([sys.executable, str(Path(__file__).with_name("fixture_codex_stdio.py"))],
@@ -108,7 +120,10 @@ async def main():
     async def stats(request):
         return web.json_response({
             "copilotStarts": sum(client.starts for client in clients),
-            "copilotPrompts": sum(len(client.session.sent) for client in clients if client.session),
+            "copilotPrompts": sum(len(session.sent) for client in clients for session in client.sessions),
+            "copilotCreates": sum(client.creates for client in clients),
+            "copilotResumes": sum(client.resumes for client in clients),
+            "codexResumes": rpc_calls.count("thread/resume"),
             "codexStarts": rpc_calls.count("thread/start"),
             "codexPrompts": rpc_calls.count("turn/start"),
             "embedCookiesReceived": any(cookies),

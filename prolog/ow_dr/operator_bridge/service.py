@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+import inspect
+import re
 import uuid
 from collections.abc import Callable
 from pathlib import Path
 
 from .adapter import OperatorAdapter
 from .journal import Journal
+from .conversations import ConversationCatalog
 from .security import public_text
 from .providers import provider_label
 from .native import NativeOutcome
@@ -23,6 +26,14 @@ class OperatorService:
             raise BridgeError("adapter_provider_mismatch", "Native adapters, authentication and sessions cannot cross providers.")
         self.verify = verify or workspace.verify
         self.adapter_factory = adapter_factory
+        self.catalog = ConversationCatalog(journal, workspace)
+        self.journal = self.catalog.open(self.catalog.selected())
+        if self.journal.get("conversation_settings") is None:
+            self.journal.set("conversation_settings", {"model": getattr(adapter, "model", None)})
+        if hasattr(adapter, "journal"):
+            adapter.journal = self.journal
+        if hasattr(adapter, "model"):
+            adapter.model = self.settings()["model"]
         self.instance_id = str(uuid.uuid4())
         self.connections: dict[str, int] = {}
         self.waiters: dict[str, asyncio.Future] = {}
@@ -64,8 +75,113 @@ class OperatorService:
         if not self.connections.get(principal):
             raise BridgeError("browser_disconnected", "Connect the operator view before sending input.")
 
+    def require_conversation(self, expected):
+        if expected != self.journal.get("conversation_id"):
+            raise BridgeError("conversation_changed", "The selected conversation changed. Refresh before acting.", 409)
+
+    def _gate_selection(self):
+        pending = self.journal.db.execute(
+            "SELECT 1 FROM commands WHERE state IN ('queued','running','awaiting_permission') LIMIT 1").fetchone()
+        if (self.active or self.waiters or not self.queue.empty() or pending
+                or self.journal.get("unsettled_native")
+                or (getattr(self.adapter, "uncertain", False) and self.stop_outcome != "confirmed")):
+            raise BridgeError("conversation_busy", "Finish/cancel work and resolve permissions or unknown outcomes before switching.", 409)
+        if self.stop_outcome == "unknown":
+            raise BridgeError("conversation_busy", "Native stop outcome is unknown; switching is blocked.", 409)
+
+    def settings(self):
+        return {"conversationId": self.journal.get("conversation_id"),
+                **(self.journal.get("conversation_settings") or {"model": None})}
+
+    def conversations(self):
+        return {"provider": self.provider, "conversationId": self.journal.get("conversation_id"),
+                "selectionRevision": self.catalog.revision(),
+                "items": self.catalog.entries()}
+
+    def _replacement_adapter(self, journal):
+        if not self.adapter_factory:
+            raise BridgeError("adapter_unavailable", "Restart this bridge to replace a stopped native adapter.", 409)
+        parameters = inspect.signature(self.adapter_factory).parameters
+        replacement = (self.adapter_factory(journal=journal, model=journal.get("conversation_settings")["model"])
+                       if "journal" in parameters else self.adapter_factory())
+        if replacement.provider != self.provider:
+            raise BridgeError("adapter_provider_mismatch", "Native provider identity changed.")
+        if hasattr(replacement, "journal"):
+            replacement.journal = journal
+        if hasattr(replacement, "model"):
+            replacement.model = journal.get("conversation_settings")["model"]
+        return replacement
+
+    async def _bind_journal(self, journal):
+        model = journal.get("conversation_settings")["model"]
+        if self.stopped:
+            self.adapter = self._replacement_adapter(journal)
+        elif hasattr(self.adapter, "select_conversation"):
+            try:
+                await self.adapter.select_conversation(journal, model)
+            except BaseException as error:
+                self.connected = False
+                self.adapter.uncertain = True
+                if isinstance(error, asyncio.CancelledError):
+                    raise
+                raise BridgeError("conversation_detach_failed", "Native detach was not confirmed. Selection is unchanged.") from None
+        elif self.connected:
+            raise BridgeError("conversation_switch_unsupported", "This adapter cannot safely detach a live session.")
+        previous = self.journal
+        try:
+            self.catalog.select(journal.get("conversation_id"))
+        except BaseException:
+            self.connected = False
+            if hasattr(self.adapter, "select_conversation"):
+                await self.adapter.select_conversation(previous, previous.get("conversation_settings")["model"])
+            raise
+        self.journal = journal
+        self.connected = self.stopped = False
+        self.stop_outcome = None
+        if previous is not journal and previous is not self.catalog.legacy:
+            previous.close()
+
+    async def select_conversation(self, principal, expected, identifier, *, create=False, title=None):
+        async with self.control_lock:
+            self.human(principal)
+            if create and identifier == self.journal.get("conversation_id"):
+                return self.conversations()
+            self.require_conversation(expected)
+            self._gate_selection()
+            if identifier == expected:
+                return self.conversations()
+            target = (self.catalog.create(identifier, title, {"model": self.settings()["model"]})
+                      if create else self.catalog.open(identifier))
+            if target.get("conversation_settings") is None:
+                target.set("conversation_settings", {"model": None})
+            try:
+                await self._bind_journal(target)
+            except BaseException:
+                if target is not self.catalog.legacy and target is not self.journal:
+                    target.close()
+                raise
+            await self.notify()
+            return self.conversations()
+
+    async def save_settings(self, principal, expected, model):
+        async with self.control_lock:
+            self.human(principal)
+            self.require_conversation(expected)
+            self._gate_selection()
+            if model is not None and (not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/:+-]{0,159}", model)):
+                raise BridgeError("invalid_model", "Use a provider model ID or null for its native default.", 400)
+            previous = self.journal.get("conversation_settings")
+            self.journal.set("conversation_settings", {"model": model})
+            try:
+                await self._bind_journal(self.journal)
+            except BaseException:
+                self.journal.set("conversation_settings", previous)
+                raise
+            await self.notify()
+            return self.settings()
+
     def validate_payload(self, payload: dict) -> tuple[str, str]:
-        if set(payload) - {"id", "kind", "text", "startAnyway"}:
+        if set(payload) - {"id", "kind", "text", "startAnyway", "startIfNeeded", "conversationId"}:
             raise BridgeError("unsupported_fields", "Provider, process and thread working directories are server-owned.", 400)
         kind = payload.get("kind")
         if kind not in ("start_session", "prompt"):
@@ -73,19 +189,28 @@ class OperatorService:
         text = payload.get("text", "")
         if not isinstance(text, str) or len(text) > 65536 or (kind == "prompt" and not text.strip()):
             raise BridgeError("invalid_prompt", "Supply 1–65536 characters.", 400)
-        if "startAnyway" in payload and (kind != "start_session" or type(payload["startAnyway"]) is not bool):
+        if "startIfNeeded" in payload and (kind != "prompt" or type(payload["startIfNeeded"]) is not bool):
+            raise BridgeError("invalid_start_confirmation", "startIfNeeded is a boolean explicit-Send option.", 400)
+        if "startAnyway" in payload and ((kind != "start_session" and not payload.get("startIfNeeded"))
+                                        or type(payload["startAnyway"]) is not bool):
             raise BridgeError("invalid_start_confirmation", "Start anyway is a boolean session-start acknowledgement only.", 400)
         return kind, text
 
     async def submit(self, principal: str, payload: dict) -> dict:
+        async with self.control_lock:
+            return await self._submit(principal, payload)
+
+    async def _submit(self, principal: str, payload: dict) -> dict:
         self.human(principal)
+        if "conversationId" in payload:
+            self.require_conversation(payload["conversationId"])
         kind, text = self.validate_payload(payload)
         self.verify()
         previous = self.journal.existing(payload.get("id"), kind, text)
         if previous is not None:
             return previous
-        if self.stopped and kind == "start_session" and self.stop_outcome == "confirmed" and self.adapter_factory:
-            replacement = self.adapter_factory()
+        if self.stopped and (kind == "start_session" or payload.get("startIfNeeded")) and self.stop_outcome == "confirmed" and self.adapter_factory:
+            replacement = self._replacement_adapter(self.journal)
             if replacement.provider != self.provider or not replacement.available:
                 raise BridgeError("adapter_unavailable", "The selected native provider cannot be restarted.", 503)
             self.adapter = replacement
@@ -96,13 +221,13 @@ class OperatorService:
             raise BridgeError("adapter_unavailable", f"No live {self.provider} adapter is connected.", 503)
         command, created = self.journal.submit(payload.get("id"), kind, text)
         if created:
-            self.queue.put_nowait((command["id"], kind, text, principal))
+            self.queue.put_nowait((command["id"], kind, text, principal, payload.get("startIfNeeded", False)))
             await self.notify()
         return command
 
     async def _worker(self) -> None:
         while True:
-            command_id, kind, text, principal = await self.queue.get()
+            command_id, kind, text, principal, start_if_needed = await self.queue.get()
             dispatched = False
             try:
                 if self.journal.command(command_id)["state"] != "queued":
@@ -115,7 +240,7 @@ class OperatorService:
                 self.journal.state(command_id, "running")
                 await self.notify()
                 self.human(principal)
-                if kind == "start_session":
+                if kind == "start_session" or (start_if_needed and not self.connected):
                     if self.connected:
                         session = {"sessionId": self.native_session_id(),
                                    "cwd": self.workspace.root, "processCwd": self.workspace.root}
@@ -132,12 +257,15 @@ class OperatorService:
                     session_id = session.get("sessionId")
                     if not isinstance(session_id, str) or not session_id:
                         raise BridgeError("invalid_session", "Adapter did not return a documented session identifier.")
+                    self.catalog.claim_native(self.journal.get("conversation_id"), session_id)
                     self.journal.set("native_session_id", session_id)
                     if self.provider == "copilot":
                         self.journal.set("sdk_session_id", session_id)
                     self.connected = True
+                    self.journal.set("unsettled_native", False)
                     self.journal.event("session.connected", {"sessionId": session_id, "adapter": self.adapter.name})
-                else:
+                if kind == "prompt":
+                    self.human(principal)
                     if not self.connected:
                         raise BridgeError("session_not_started", "Start or explicitly resume the operator session first.")
                     dispatched = True
@@ -152,14 +280,17 @@ class OperatorService:
                 self.journal.state(command_id, outcome.state, outcome.message)
                 if outcome.state == "unknown":
                     self.connected = False
+                    self.journal.set("unsettled_native", True)
             except BridgeError as error:
                 self.journal.state(command_id, "unknown" if dispatched else "failed", error.message)
                 if dispatched:
                     self.connected = False
+                    self.journal.set("unsettled_native", True)
             except Exception:
                 # Do not serialize arbitrary SDK exceptions: they may contain credentials.
                 self.journal.state(command_id, "unknown", "Adapter outcome is unknown. Inspect the native session; do not resend.")
                 self.connected = False
+                self.journal.set("unsettled_native", True)
             finally:
                 self._expire_permissions()
                 self.active = None
@@ -200,7 +331,9 @@ class OperatorService:
             if not future.done():
                 future.set_result(False)
 
-    async def decide(self, principal: str, request_id: str, decision: str) -> dict:
+    async def decide(self, principal: str, request_id: str, decision: str, *, expected=None) -> dict:
+        if expected is not None:
+            self.require_conversation(expected)
         self.human(principal)
         self.verify()
         if decision not in ("allow", "deny"):
@@ -220,8 +353,10 @@ class OperatorService:
         await self.notify()
         return {"id": request_id, "decision": decision}
 
-    async def cancel(self, principal: str, command_id: str) -> dict:
+    async def cancel(self, principal: str, command_id: str, *, expected=None) -> dict:
         async with self.control_lock:
+            if expected is not None:
+                self.require_conversation(expected)
             return await self._cancel(principal, command_id)
 
     async def _cancel(self, principal: str, command_id: str) -> dict:
@@ -244,8 +379,10 @@ class OperatorService:
         await self.notify()
         return self.journal.command(command_id)
 
-    async def stop_operator(self, principal: str, confirmation: str) -> dict:
+    async def stop_operator(self, principal: str, confirmation: str, *, expected=None) -> dict:
         async with self.control_lock:
+            if expected is not None:
+                self.require_conversation(expected)
             return await self._stop_operator(principal, confirmation)
 
     async def _stop_operator(self, principal: str, confirmation: str) -> dict:
@@ -264,6 +401,7 @@ class OperatorService:
                 self.journal.decide(request_id, "deny")
                 future.set_result(False)
         try:
+            had_native = bool(self.adapter.status().get("ownedPids"))
             await self.adapter.stop()
         except Exception:
             self.stop_outcome = "unknown"
@@ -272,6 +410,8 @@ class OperatorService:
             await self.notify()
             return self.status()
         self.stop_outcome = "confirmed"
+        if had_native:
+            self.journal.set("unsettled_native", False)
         self.connected = False
         self.journal.event("operator.stopped", {"message": "Operator stopped explicitly. Bridge recovery view remains available."})
         await self.notify()
@@ -290,11 +430,13 @@ class OperatorService:
                 "canRestart": self.stopped and self.stop_outcome == "confirmed" and self.adapter_factory is not None,
                 "bridge": {"online": True, "pid": os.getpid(), "instanceId": self.instance_id},
                 "workspace": self.workspace.json(), "conversationId": self.journal.get("conversation_id"),
+                "selectionRevision": self.catalog.revision(),
                 "nativeSessionId": self.native_session_id(),
                 "sdkSessionId": self.native_session_id() if self.provider == "copilot" else None,
                 "adapter": adapter,
                 "application": self.app, "lastSequence": self.journal.latest(),
-                "permissions": self.journal.pending(), "commands": self.journal.commands()}
+                "permissions": self.journal.pending(), "commands": self.journal.commands(),
+                "settings": self.settings()}
 
     async def update_application(self, state: dict) -> None:
         self.app = state
@@ -306,7 +448,8 @@ class OperatorService:
             if not isinstance(text, str) or len(text) > 65536:
                 raise BridgeError("invalid_draft", "Draft is too long.", 400)
             self.journal.set("operator_draft", public_text(text))
-        return {"text": self.journal.get("operator_draft") or ""}
+        return {"conversationId": self.journal.get("conversation_id"), "selectionRevision": self.catalog.revision(),
+                "text": self.journal.get("operator_draft") or ""}
 
     async def close(self) -> None:
         # Transport/bridge cleanup is NOT permission to stop the independent native CLI.
@@ -321,3 +464,5 @@ class OperatorService:
                 pass
         self.closed = True
         self.journal.close()
+        if self.journal is not self.catalog.legacy:
+            self.catalog.legacy.close()

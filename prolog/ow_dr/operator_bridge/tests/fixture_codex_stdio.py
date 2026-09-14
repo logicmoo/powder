@@ -2,6 +2,9 @@
 import json
 import os
 import sys
+import uuid
+
+thread_id = None
 
 
 def output(value):
@@ -12,13 +15,14 @@ def notice(method, **params):
     output({"method": method, "params": params})
 
 
-def thread(identifier="fixture-thread"):
+def thread(identifier=None):
+    identifier = identifier or thread_id
     return {"id": identifier, "cwd": os.getcwd(), "status": {"type": "idle"},
             "ephemeral": False, "gitInfo": {"branch": "master"}}
 
 
 def complete(status="completed"):
-    notice("turn/completed", threadId="fixture-thread",
+    notice("turn/completed", threadId=thread_id,
            turn={"id": "fixture-turn", "status": status, "items": []})
 
 
@@ -30,7 +34,7 @@ for line in sys.stdin:
     if "method" not in message:
         if message.get("id") == "approval-1":
             decision = (message.get("result") or {}).get("decision", "decline")
-            notice("item/completed", threadId="fixture-thread", turnId="fixture-turn",
+            notice("item/completed", threadId=thread_id, turnId="fixture-turn",
                    item={"type": "agentMessage", "id": "answer", "text": "permission " + decision})
             complete()
         continue
@@ -44,6 +48,7 @@ for line in sys.stdin:
         output({"id": message["id"], "error": {"code": -1, "message": "initialized required"}})
         continue
     elif method in ("thread/start", "thread/resume"):
+        thread_id = params["threadId"] if method == "thread/resume" else "fixture-" + str(uuid.uuid4())
         result = {"thread": thread(), "cwd": params["cwd"], "approvalPolicy": "untrusted",
                   "approvalsReviewer": "user", "sandbox": {"type": "readOnly", "networkAccess": False}}
     elif method == "thread/read":
@@ -58,11 +63,11 @@ for line in sys.stdin:
     output({"id": message["id"], "result": result})
     if method == "turn/start":
         text = params["input"][0]["text"]
-        notice("turn/started", threadId="fixture-thread",
+        notice("turn/started", threadId=thread_id,
                turn={"id": "fixture-turn", "status": "inProgress", "items": []})
         if text == "permission":
             output({"id": "approval-1", "method": "item/commandExecution/requestApproval",
-                    "params": {"threadId": "fixture-thread", "turnId": "fixture-turn",
+                    "params": {"threadId": thread_id, "turnId": "fixture-turn",
                                "itemId": "command-1", "startedAtMs": 0,
                                "command": "fixture-only, never executed", "cwd": os.getcwd()}})
         elif text == "hang":
@@ -72,7 +77,7 @@ for line in sys.stdin:
         else:
             notice("item/completed", threadId="another-thread", turnId="fixture-turn",
                    item={"type": "agentMessage", "id": "foreign", "text": "must not leak"})
-            notice("item/completed", threadId="fixture-thread", turnId="fixture-turn",
+            notice("item/completed", threadId=thread_id, turnId="fixture-turn",
                    item={"type": "agentMessage", "id": "answer", "text": "fixture output"})
             complete("failed" if text == "fail" else "completed")
     elif method == "turn/interrupt":

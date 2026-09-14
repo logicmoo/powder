@@ -97,9 +97,9 @@ def main() -> None:
         services = {}
         for provider, filename in (("copilot", "operator.sqlite3"), ("codex", "codex.sqlite3")):
             journal = Journal(state / filename, workspace, provider=provider)
-            def adapter_factory(provider=provider, journal=journal):
+            def adapter_factory(provider=provider, journal=journal, model=getattr(args, provider + "_model")):
                 return configured_adapter(provider, journal, executable=getattr(args, provider + "_bin"),
-                                          model=getattr(args, provider + "_model"), offline=args.offline)
+                                          model=model, offline=args.offline)
             services[provider] = OperatorService(journal, workspace, adapter_factory(),
                                                  adapter_factory=adapter_factory)
         service = OperatorHub(services)
