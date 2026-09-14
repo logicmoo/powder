@@ -135,7 +135,8 @@ export function createAgentWorkspace(host, {
         const controller = await loaders[id](host, {
           signal: lifetime.signal, active: active && selected === id, storage,
           provider: id, bridgeURL: config.operatorBridge.origin,
-          route: { params: new URLSearchParams() },
+          route: { params: new URLSearchParams(id === 'teacher' && typeof observations.get(id)?.conversationId === 'string'
+            ? { conversation: observations.get(id).conversationId } : {}) },
           onStateChange: value => report(id, value),
           onConversationChange: value => report(id, {
             ...controllers.get(id)?.getState(), conversationId: value.id,
@@ -202,6 +203,10 @@ export function createAgentWorkspace(host, {
       for (const controller of controllers.values()) controller.deactivate();
     },
     getState: () => ({ active, selected, agents: Object.fromEntries(observations) }),
+    hasActiveWork: () => [...controllers].some(([id, controller]) => {
+      const state = controller.getState();
+      return state?.pending || id !== 'cyc' && ['running', 'busy', 'awaiting_permission'].includes(state?.status);
+    }),
     destroy() {
       disposed = true; lifetime.abort();
       document.removeEventListener('visibilitychange', visibility);

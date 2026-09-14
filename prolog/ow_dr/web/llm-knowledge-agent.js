@@ -138,6 +138,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   el('option', { value: 'write' }, 'Allow audited edits to this conversation’s TODOs'));
   const start = button('Start new conversation', startConversation, 'button secondary');
   const interrupt = button('Interrupt', () => control('interrupt'), 'button secondary');
+  const reconnectNow = button('Reconnect', reconnect, 'button secondary');
   const stop = button('Stop conversation', () => control('stop'), 'button secondary');
   const previewTurn = button('Preview this turn locally', previewGrounding, 'button secondary');
   const advancedActions = el('div', { className: 'llm-knowledge-actions', hidden: true },
@@ -150,7 +151,7 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
   queuePanel.append(el('h3', {}, 'Queued messages'), queueItems, resumeQueue, clearQueue);
   const composer = el('form', { className: 'llm-composer', onsubmit: event => { event.preventDefault(); sendChat(); } },
     el('label', { className: 'field' }, 'Message (text only)', text),
-    advancedActions, el('div', { className: 'form-actions' }, send, firstReply, interrupt),
+    advancedActions, el('div', { className: 'form-actions' }, send, firstReply, interrupt, reconnectNow),
     sendHint, queuePanel,
     el('p', { className: 'muted' }, 'Responses arrive after completion, not incrementally. Interrupt is best effort; provider logs and processing may remain.'));
   const historyPicker = el('select', { 'aria-label': 'Teacher conversation history', name: 'llm-history',
@@ -347,6 +348,8 @@ export async function renderLLMKnowledgeAgent(host, route, signal) {
     disabled(start, pending || !settings, 'Wait for agent settings or the current request.');
     disabled(historyPicker, pending, 'Wait for the current request before switching conversations.');
     disabled(interrupt, !conversation || !['running', 'outcome_unknown'].includes(conversation.status), 'No active turn to interrupt.');
+    reconnectNow.hidden = connection === 'connected';
+    disabled(reconnectNow, pending, 'Wait for the current request.');
     disabled(stop, !conversation || conversation.status === 'closed', 'No open conversation to stop.');
     allowTodos.disabled = mode.value === 'generate_comment';
     queuePanel.hidden = !queued.length;

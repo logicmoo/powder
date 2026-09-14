@@ -2243,8 +2243,10 @@ function startLiveReload() {
         pendingInterfaceReload = true;
       }
       if (pendingInterfaceReload) {
-        if (!sourceEditor?.hasDirty()) { location.reload(); return; }
-        target.textContent = 'Interface update waiting for source edits to be saved or discarded.';
+        if (!sourceEditor?.hasDirty() && !agentWorkspace?.hasActiveWork()) { location.reload(); return; }
+        target.textContent = agentWorkspace?.hasActiveWork()
+          ? 'Interface update ready; keeping the active agent turn connected.'
+          : 'Interface update waiting for source edits to be saved or discarded.';
       }
       if (pendingJobs.size) {
         const completed = [];
